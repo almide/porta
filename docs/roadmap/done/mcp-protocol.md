@@ -1,4 +1,5 @@
 <!-- description: MCP protocol implementation over JSON-RPC 2.0 stdio -->
+<!-- done: 2026-04-07 -->
 # MCP Protocol Implementation
 
 JSON-RPC 2.0 / stdio transport implementing MCP spec (2025-03-26).

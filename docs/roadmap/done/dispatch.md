@@ -1,4 +1,5 @@
 <!-- description: Instance lifecycle, state machine, and tool call dispatch -->
+<!-- done: 2026-04-07 -->
 
 # Instance Lifecycle & Dispatch
 

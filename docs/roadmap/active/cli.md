@@ -109,6 +109,25 @@ Internal implementation uses WASI pre-opens, but the user-facing API follows mou
 | Named volume | `--mount type=volume,name=db,dst=/var/data` | Persistent named volume |
 | Scratch | `--mount type=scratch,dst=/tmp` | Ephemeral, discarded on exit |
 
+## Current Status
+
+Core implemented in `mod.almd`:
+- Subcommands: `run`, `serve`, `inspect`, `validate`, `help`, `version`
+- Flag parser: `--entry`, `--step-limit`, `--max-memory`, `--restart`, `--profile`, `--manifest`
+- Subcommand-specific help (`porta help run`, etc.)
+
+### Remaining
+
+- Lifecycle commands: `ps`, `stop`, `kill`, `rm`, `wait`, `events` (requires instance registry / daemon)
+- Mount flags: `-v`, `--mount` (requires mount infrastructure)
+- Env/secret flags: `--env`, `--env-file`, `--secret` (requires config-and-secrets)
+- Network flags: `-p`, `--allow-net`, `--deny-net`, `--allow-inbound` (requires networking)
+- `--detach` background execution
+- `--record` execution tracing
+- Snapshot & replay commands
+- Build & registry commands
+- Compose commands
+
 ## Module
 
-- `main.almd` — Argument parsing, subcommand dispatch
+- `mod.almd` — Argument parsing, subcommand dispatch

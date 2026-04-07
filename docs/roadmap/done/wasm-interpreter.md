@@ -1,4 +1,5 @@
 <!-- description: WASM interpreter for Almide-compiled agent binaries -->
+<!-- done: 2026-03-25 -->
 # WASM Interpreter
 
 Pure Almide implementation of a WASM interpreter. Only needs to support the instruction subset that Almide's `--target wasm` codegen emits.

@@ -72,6 +72,22 @@ An instance cannot grant itself more permissions than the policy allows. Policy 
 
 Validated against WASI imports at module load time. The category system is the bridge between human-readable profiles and raw WASI import validation.
 
+## Current Status
+
+Core implemented in `sandbox.almd`:
+- 8 capability types (IO, FS, FSWrite, Process, Env, Clock, Random, Net)
+- Deny-by-default enforcement at import validation and runtime WASI dispatch
+- 3 built-in profiles (ai-agent, worker, full)
+- manifest.json capabilities → CapabilitySet parsing
+
+### Remaining
+
+- Network permission allowlist (`--allow-net`, `--deny-net`, `--allow-inbound`)
+- Custom profiles in `almide.toml`
+- Organization-level policy engine (capability ceilings)
+- Mount scoping and validation
+- Tool call whitelist in serve mode
+
 ## Module
 
 - `sandbox.almd` — Capability enforcement, profile evaluation, policy engine, network permission checks
