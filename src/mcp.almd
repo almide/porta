@@ -1,0 +1,106 @@
+// MCP Protocol State Machine
+
+import json
+import self.jsonrpc
+import self.manifest
+
+type McpState =
+  | Initializing
+  | Ready
+  | Closed
+
+type McpServer = {
+  state: McpState,
+  manifest: manifest.Manifest,
+}
+
+fn new_server(m: manifest.Manifest) -> McpServer =
+  {state: Initializing, manifest: m}
+
+// --- Handle a single request ---
+
+effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] =
+  match req.method {
+    "initialize" => handle_initialize(server, req),
+    "notifications/initialized" => ok({server: {...server, state: Ready}, response: none}),
+    "tools/list" => handle_tools_list(server, req),
+    "tools/call" => handle_tools_call(server, req),
+    "ping" => ok({server: server, response: some(jsonrpc.make_response(req.id, json.object([])))}),
+    _ => ok({server: server, response: some(jsonrpc.make_error_response(req.id, -32601, "Method not found: ${req.method}"))}),
+  }
+
+effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let result = json.object([
+    ("protocolVersion", json.from_string("2025-03-26")),
+    ("serverInfo", json.object([
+      ("name", json.from_string("porta/${server.manifest.name}")),
+      ("version", json.from_string(server.manifest.version)),
+    ])),
+    ("capabilities", json.object([
+      ("tools", json.object([
+        ("listChanged", json.from_bool(false)),
+      ])),
+    ])),
+  ])
+  ok({server: {...server, state: Initializing}, response: some(jsonrpc.make_response(req.id, result))})
+}
+
+effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let tools_json = server.manifest.tools |> list.map((tool) =>
+    json.object([
+      ("name", json.from_string(tool.name)),
+      ("description", json.from_string(tool.description)),
+      ("inputSchema", tool.input_schema),
+    ])
+  )
+  let result = json.object([
+    ("tools", json.array(tools_json)),
+  ])
+  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+}
+
+effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let tool_name = json.get_string(req.params, "name") ?? ""
+  let _arguments = json.get(req.params, "arguments") ?? json.object([])
+
+  // Check tool exists
+  let tool = server.manifest.tools |> list.find((t) => t.name == tool_name)
+  match tool {
+    none => {
+      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown tool: '${tool_name}'")
+      ok({server: server, response: some(resp)})
+    },
+    some(_t) => {
+      // TODO: dispatch to WASM agent
+      let result = json.object([
+        ("content", json.array([
+          json.object([
+            ("type", json.from_string("text")),
+            ("text", json.from_string("tool '${tool_name}' called (dispatch not yet implemented)")),
+          ]),
+        ])),
+        ("isError", json.from_bool(false)),
+      ])
+      ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+    },
+  }
+}
+
+// --- Main loop ---
+
+effect fn serve_loop(server: McpServer) -> Result[Unit, String] = {
+  let msg = jsonrpc.read_message()!
+  match msg {
+    none => ok(()),
+    some(req) => {
+      let result = handle_request(server, req)!
+      match result.response {
+        some(resp) => {
+          jsonrpc.write_message(resp)!
+          serve_loop(result.server)
+        },
+        none => serve_loop(result.server),
+      }
+    },
+  }
+}

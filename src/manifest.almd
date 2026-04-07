@@ -1,0 +1,64 @@
+// Manifest parser for porta agent packages
+
+import json
+import fs
+
+type ToolDef = {
+  name: String,
+  description: String,
+  input_schema: Value,
+}
+
+type Manifest = {
+  schema_version: String,
+  name: String,
+  version: String,
+  description: String,
+  capabilities: List[String],
+  tools: List[ToolDef],
+  wasi_imports: List[String],
+  entry: String,
+}
+
+effect fn load_manifest(path: String) -> Result[Manifest, String] = {
+  let content = fs.read_text(path)!
+  let v = json.parse(content)!
+  parse_manifest(v)
+}
+
+effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
+  let schema_version = json.get_string(v, "schema_version") ?? "1.0"
+  let name = json.get_string(v, "name") ?? "unknown"
+  let version = json.get_string(v, "version") ?? "0.0.0"
+  let description = json.get_string(v, "description") ?? ""
+  let entry = json.get_string(v, "entry") ?? "_start"
+
+  let caps = json.get_array(v, "capabilities") ?? []
+  let capabilities = caps
+    |> list.filter_map((c) => json.as_string(c))
+
+  let wasi_arr = json.get_array(v, "wasi_imports") ?? []
+  let wasi_imports = wasi_arr
+    |> list.filter_map((w) => json.as_string(w))
+
+  let tools_arr = json.get_array(v, "tools") ?? []
+  let tools = tools_arr |> list.map((t) => parse_tool(t))
+
+  ok({
+    schema_version: schema_version,
+    name: name,
+    version: version,
+    description: description,
+    capabilities: capabilities,
+    tools: tools,
+    wasi_imports: wasi_imports,
+    entry: entry,
+  })
+}
+
+fn parse_tool(t: Value) -> ToolDef = {
+  let name = json.get_string(t, "name") ?? ""
+  let description = json.get_string(t, "description") ?? ""
+  let input_schema = json.get(t, "inputSchema") ?? json.object([])
+  {name: name, description: description, input_schema: input_schema}
+}

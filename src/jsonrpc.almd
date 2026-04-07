@@ -1,0 +1,79 @@
+// JSON-RPC 2.0 over stdio with Content-Length framing
+
+import json
+import io
+
+type JsonRpcRequest = {
+  id: Value,
+  method: String,
+  params: Value,
+}
+
+fn make_response(id: Value, result: Value) -> String = {
+  let resp = json.object([
+    ("jsonrpc", json.from_string("2.0")),
+    ("id", id),
+    ("result", result),
+  ])
+  json.stringify(resp)
+}
+
+fn make_error_response(id: Value, code: Int, message: String) -> String = {
+  let resp = json.object([
+    ("jsonrpc", json.from_string("2.0")),
+    ("id", id),
+    ("error", json.object([
+      ("code", json.from_int(code)),
+      ("message", json.from_string(message)),
+    ])),
+  ])
+  json.stringify(resp)
+}
+
+effect fn write_message(msg: String) -> Result[Unit, String] = {
+  let header = "Content-Length: ${int.to_string(string.len(msg))}\r\n\r\n"
+  io.print(header + msg)
+  ok(())
+}
+
+effect fn read_message() -> Result[Option[JsonRpcRequest], String] = {
+  let line = io.read_line()
+  if string.len(line) == 0 then ok(none)
+  else {
+    let trimmed = string.trim(line)
+    if string.starts_with(trimmed, "Content-Length:") then {
+      skip_headers()
+      let body = io.read_line()
+      if string.len(body) == 0 then ok(none)
+      else {
+        let parsed = json.parse(string.trim(body))!
+        let id = json.get(parsed, "id") ?? json.null()
+        let method = json.get_string(parsed, "method") ?? ""
+        let params = json.get(parsed, "params") ?? json.object([])
+        ok(some({id: id, method: method, params: params}))
+      }
+    }
+    else if string.starts_with(trimmed, "{") then {
+      let parsed = json.parse(trimmed)!
+      let id = json.get(parsed, "id") ?? json.null()
+      let method = json.get_string(parsed, "method") ?? ""
+      let params = json.get(parsed, "params") ?? json.object([])
+      ok(some({id: id, method: method, params: params}))
+    }
+    else read_message()
+  }
+}
+
+effect fn skip_headers() -> Unit = {
+  let line = io.read_line()
+  if string.len(string.trim(line)) == 0 then ()
+  else skip_headers()
+}
+
+effect fn parse_and_wrap(body: String) -> Result[Option[JsonRpcRequest], String] = {
+  let parsed = json.parse(body)!
+  let id = json.get(parsed, "id") ?? json.null()
+  let method = json.get_string(parsed, "method") ?? ""
+  let params = json.get(parsed, "params") ?? json.object([])
+  ok(some({id: id, method: method, params: params}))
+}
