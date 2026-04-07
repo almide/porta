@@ -150,6 +150,7 @@ type WasiState = {
   step_limit: Int,
   capabilities: sandbox.CapabilitySet,
   env_vars: List[EnvVar],
+  memory_pages: Int,
   exit_code: Option[Int],
 }
 
@@ -158,7 +159,7 @@ fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar
   stdin_data: [], stdin_pos: 0,
   steps: 0, step_limit: step_limit,
   capabilities: caps, env_vars: env,
-  exit_code: none,
+  memory_pages: 0, exit_code: none,
 }
 
 fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> WasiState = {
@@ -166,7 +167,7 @@ fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet
   stdin_data: data, stdin_pos: 0,
   steps: 0, step_limit: step_limit,
   capabilities: caps, env_vars: env,
-  exit_code: none,
+  memory_pages: 0, exit_code: none,
 }
 
 // --- Unary helpers (avoid let-in) ---
@@ -793,9 +794,11 @@ effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, c
     none => 0,
   }
   let result = exec_call(m, ws, start_idx)!
+  let mem_pages = exec_result_memory_pages(result.r)
+  let ws2 = {...result.ws, memory_pages: mem_pages}
   match result.r {
     Trap(msg) => err("trap: ${msg}"),
-    _ => ok(result.ws),
+    _ => ok(ws2),
   }
 }
 
@@ -818,11 +821,21 @@ effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String
     none => 0,
   }
   let result = exec_call(m, ws, start_idx)!
+  let mem_pages = exec_result_memory_pages(result.r)
+  let ws2 = {...result.ws, memory_pages: mem_pages}
   match result.r {
     Trap(msg) => err("trap: ${msg}"),
-    _ => ok(result.ws),
+    _ => ok(ws2),
   }
 }
+
+fn exec_result_memory_pages(r: ExecResult) -> Int =
+  match r {
+    Continue(m) => memory.ms_size(m.mem, 0),
+    Branch(_, m) => memory.ms_size(m.mem, 0),
+    ReturnFrom(m) => memory.ms_size(m.mem, 0),
+    Trap(_) => 0,
+  }
 
 effect fn wasi_fd_read(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
   let nread_ptr = pop_i32(m)

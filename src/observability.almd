@@ -1,0 +1,29 @@
+// Observability — Metrics collection and diagnostic logging
+
+type Metrics = {
+  steps: Int,
+  memory_pages: Int,
+  tool_calls: Int,
+  total_tool_steps: Int,
+  restarts: Int,
+}
+
+fn empty_metrics() -> Metrics = {
+  steps: 0, memory_pages: 0, tool_calls: 0, total_tool_steps: 0, restarts: 0,
+}
+
+fn merge_tool_call(m: Metrics, steps: Int, memory_pages: Int) -> Metrics = {
+  ...m,
+  tool_calls: m.tool_calls + 1,
+  total_tool_steps: m.total_tool_steps + steps,
+  steps: steps,
+  memory_pages: memory_pages,
+}
+
+fn format_summary(m: Metrics) -> String =
+  "steps: ${int.to_string(m.steps)}, memory: ${int.to_string(m.memory_pages)} pages" +
+  (if m.restarts > 0 then ", restarts: ${int.to_string(m.restarts)}" else "") +
+  (if m.tool_calls > 0 then ", tool_calls: ${int.to_string(m.tool_calls)}, total_steps: ${int.to_string(m.total_tool_steps)}" else "")
+
+fn format_tool_log(tool_name: String, steps: Int, memory_pages: Int, success: Bool) -> String =
+  "[porta] tool=${tool_name} steps=${int.to_string(steps)} memory=${int.to_string(memory_pages)} ${if success then "ok" else "error"}"

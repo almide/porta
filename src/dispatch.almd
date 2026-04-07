@@ -3,6 +3,7 @@
 import self.wasm.binary
 import self.wasm.interp
 import self.sandbox
+import self.observability
 
 type InstanceState =
   | Created
@@ -32,6 +33,7 @@ type ToolResult = {
   stdout: String,
   stderr: String,
   exit_code: Option[Int],
+  metrics: observability.Metrics,
 }
 
 type RunResult = {
@@ -39,6 +41,7 @@ type RunResult = {
   stdout: String,
   stderr: String,
   restarts: Int,
+  metrics: observability.Metrics,
 }
 
 fn parse_restart_policy(s: String) -> RestartPolicy =
@@ -66,10 +69,13 @@ effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: St
   sandbox.validate_imports(config.wasm.imports, config.capabilities)!
   let env = config.env_vars + config.secrets
   let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env)!
+  let m = observability.empty_metrics()
+  let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages}
   ok({
     stdout: ws.stdout_buf,
     stderr: ws.stderr_buf,
     exit_code: ws.exit_code,
+    metrics: metrics,
   })
 }
 
@@ -89,5 +95,9 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
     Always => exit_code != 0 and restarts < config.max_restarts,
   }
   if should_restart then run_with_restarts(config, restarts + 1)
-  else ok({exit_code: exit_code, stdout: ws.stdout_buf, stderr: ws.stderr_buf, restarts: restarts})
+  else {
+    let m = observability.empty_metrics()
+    let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages, restarts: restarts}
+    ok({exit_code: exit_code, stdout: ws.stdout_buf, stderr: ws.stderr_buf, restarts: restarts, metrics: metrics})
+  }
 }

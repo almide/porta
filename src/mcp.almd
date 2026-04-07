@@ -4,6 +4,7 @@ import json
 import self.jsonrpc
 import self.manifest
 import self.dispatch
+import self.observability
 
 type McpState =
   | Initializing
@@ -14,10 +15,11 @@ type McpServer = {
   state: McpState,
   manifest: manifest.Manifest,
   config: dispatch.InstanceConfig,
+  metrics: observability.Metrics,
 }
 
 fn new_server(m: manifest.Manifest, config: dispatch.InstanceConfig) -> McpServer =
-  {state: Initializing, manifest: m, config: config}
+  {state: Initializing, manifest: m, config: config, metrics: observability.empty_metrics()}
 
 // --- Handle a single request ---
 
@@ -74,10 +76,16 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
     },
     some(_t) => {
       let args_json = json.stringify(arguments)
-      let result = dispatch.dispatch_tool(server.config, tool_name, args_json)!
+      let tool_result = dispatch.dispatch_tool(server.config, tool_name, args_json)!
+
+      // Diagnostic log to stderr
+      let success = match tool_result.exit_code { some(c) => c == 0, none => true }
+      eprintln(observability.format_tool_log(tool_name, tool_result.metrics.steps, tool_result.metrics.memory_pages, success))
+      let updated_metrics = observability.merge_tool_call(server.metrics, tool_result.metrics.steps, tool_result.metrics.memory_pages)
+      let server = {...server, metrics: updated_metrics}
 
       // Parse stdout: expect {"ok": ...} or {"err": ...}
-      let output = result.stdout
+      let output = tool_result.stdout
       let parsed = json.parse(output)
       let result = match parsed {
         ok(v) => {

@@ -7,6 +7,7 @@ import self.wasm.binary
 import self.wasm.interp
 import self.dispatch
 import self.sandbox
+import self.observability
 import self.manifest
 import self.mcp
 
@@ -258,7 +259,8 @@ effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
   let config = build_config(wasm, opts, caps, env)
   let result = dispatch.run_instance(config)!
   if string.len(result.stdout) > 0 then println(result.stdout) else ()
-  if string.len(result.stderr) > 0 then println(result.stderr) else ()
+  if string.len(result.stderr) > 0 then eprintln(result.stderr) else ()
+  eprintln(observability.format_summary(result.metrics))
   ok(())
 }
 
