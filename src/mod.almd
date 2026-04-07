@@ -1,224 +1,7 @@
 // Porta — WASM agent MCP bridge
-// Single-file entry point (until import self.submodule resolution is fixed)
 
 import process
-import fs
-
-// ============================================================
-// Types (from wasm/binary.almd — duplicated until module import works)
-// ============================================================
-
-type ValType = | I32 | I64 | F64 | V128 | FuncRef | ExternRef
-
-type FuncType = { params: List[ValType], returns: List[ValType] }
-
-type ImportDesc =
-  | ImportFunc(Int)
-  | ImportTable(TableType)
-  | ImportMemory(Limits)
-  | ImportGlobal(GlobalType)
-
-type Import = { mod_name: String, name: String, desc: ImportDesc }
-
-type ExportKind = | ExportFunc | ExportTable | ExportMemory | ExportGlobal
-
-type Export = { name: String, kind: ExportKind, index: Int }
-
-type Limits = { min: Int, max: Option[Int] }
-type TableType = { elem_type: ValType, limits: Limits }
-type GlobalType = { val_type: ValType, mutable: Bool }
-type Global = { global_type: GlobalType, init: List[Int] }
-type ElemSegment = { table_idx: Int, offset: List[Int], func_indices: List[Int] }
-type DataSegment = { mem_idx: Int, offset: List[Int], data: List[Int] }
-type Local = { count: Int, val_type: ValType }
-
-type WasmModule = {
-  types: List[FuncType],
-  imports: List[Import],
-  func_type_indices: List[Int],
-  tables: List[TableType],
-  memories: List[Limits],
-  globals: List[Global],
-  exports: List[Export],
-  start: Option[Int],
-  elements: List[ElemSegment],
-  data_segments: List[DataSegment],
-  num_functions: Int,
-}
-
-// ============================================================
-// Minimal parser (header + section sizes only, for inspect)
-// ============================================================
-
-type Parser = { bytes: List[Int], pos: Int }
-
-fn byte_at(xs: List[Int], i: Int) -> Int = list.get(xs, i) ?? 0
-
-effect fn read_u8(p: Parser) -> Result[{val: Int, next: Parser}, String] =
-  if p.pos >= list.len(p.bytes) then err("unexpected end")
-  else ok({val: byte_at(p.bytes, p.pos), next: {bytes: p.bytes, pos: p.pos + 1}})
-
-effect fn read_u32_le(p: Parser) -> Result[{val: Int, next: Parser}, String] = {
-  let b = p.bytes
-  let i = p.pos
-  if i + 4 > list.len(b) then err("unexpected end")
-  else ok({
-    val: byte_at(b, i) + int.bshl(byte_at(b, i+1), 8) + int.bshl(byte_at(b, i+2), 16) + int.bshl(byte_at(b, i+3), 24),
-    next: {bytes: b, pos: i + 4},
-  })
-}
-
-effect fn read_leb128_u(p: Parser) -> Result[{val: Int, next: Parser}, String] =
-  read_leb_acc(p, 0, 0)
-
-effect fn read_leb_acc(p: Parser, result: Int, shift: Int) -> Result[{val: Int, next: Parser}, String] = {
-  let r = read_u8(p)!
-  let value = int.bor(result, int.bshl(int.band(r.val, 0x7F), shift))
-  if int.band(r.val, 0x80) == 0 then ok({val: value, next: r.next})
-  else read_leb_acc(r.next, value, shift + 7)
-}
-
-effect fn read_name(p: Parser) -> Result[{val: String, next: Parser}, String] = {
-  let len_r = read_leb128_u(p)!
-  if len_r.next.pos + len_r.val > list.len(p.bytes) then err("name too long")
-  else {
-    let bytes = list.slice(p.bytes, len_r.next.pos, len_r.next.pos + len_r.val)
-    ok({val: string.from_bytes(bytes), next: {bytes: p.bytes, pos: len_r.next.pos + len_r.val}})
-  }
-}
-
-// Parse just enough to count sections
-effect fn quick_parse(bytes: List[Int]) -> Result[WasmModule, String] = {
-  let p: Parser = {bytes: bytes, pos: 0}
-  let magic_r = read_u32_le(p)!
-  if magic_r.val != 0x6D736100 then err("not a WASM file")
-  else {
-    let ver_r = read_u32_le(magic_r.next)!
-    if ver_r.val != 1 then err("unsupported WASM version")
-    else scan_sections(ver_r.next, empty_module())
-  }
-}
-
-fn empty_module() -> WasmModule = {
-  types: [], imports: [], func_type_indices: [], tables: [],
-  memories: [], globals: [], exports: [], start: none,
-  elements: [], data_segments: [], num_functions: 0,
-}
-
-effect fn scan_sections(p: Parser, m: WasmModule) -> Result[WasmModule, String] =
-  if p.pos >= list.len(p.bytes) then ok(m)
-  else {
-    let id_r = read_u8(p)!
-    let size_r = read_leb128_u(id_r.next)!
-    let section_end = size_r.next.pos + size_r.val
-    let sp = size_r.next
-
-    let next_m = match id_r.val {
-      1 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, types: list.repeat({params: [], returns: []}, count)}
-      },
-      2 => {
-        let count_r = read_leb128_u(sp)!
-        let imports = parse_imports(count_r.next, count_r.val, [])!
-        {...m, imports: imports}
-      },
-      3 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, func_type_indices: list.repeat(0, count), num_functions: count}
-      },
-      5 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, memories: list.repeat({min: 0, max: none}, count)}
-      },
-      6 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, globals: list.repeat({global_type: {val_type: I32, mutable: false}, init: []}, count)}
-      },
-      7 => {
-        let count_r = read_leb128_u(sp)!
-        let exports = parse_exports(count_r.next, count_r.val, [])!
-        {...m, exports: exports}
-      },
-      10 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, num_functions: count}
-      },
-      11 => {
-        let count = (read_leb128_u(sp)!).val
-        {...m, data_segments: list.repeat({mem_idx: 0, offset: [], data: []}, count)}
-      },
-      _ => m,
-    }
-    scan_sections({bytes: p.bytes, pos: section_end}, next_m)
-  }
-
-effect fn parse_imports(p: Parser, remaining: Int, acc: List[Import]) -> Result[List[Import], String] =
-  if remaining == 0 then ok(acc)
-  else {
-    let mod_r = read_name(p)!
-    let name_r = read_name(mod_r.next)!
-    let tag_r = read_u8(name_r.next)!
-    let skip_r = skip_import_desc(tag_r.next, tag_r.val)!
-    let imp: Import = {mod_name: mod_r.val, name: name_r.val, desc: ImportFunc(0)}
-    parse_imports(skip_r, remaining - 1, acc + [imp])
-  }
-
-effect fn skip_import_desc(p: Parser, tag: Int) -> Result[Parser, String] =
-  match tag {
-    0 => {
-      let r = read_leb128_u(p)!
-      ok(r.next)
-    },
-    1 => {
-      // table: elem_type(1) + limits_flag(1) + min(leb) [+ max(leb)]
-      let r1 = read_u8(p)!
-      let r2 = read_u8(r1.next)!
-      let r3 = read_leb128_u(r2.next)!
-      if r2.val == 1 then {
-        let r4 = read_leb128_u(r3.next)!
-        ok(r4.next)
-      }
-      else ok(r3.next)
-    },
-    2 => {
-      // memory: limits_flag(1) + min(leb) [+ max(leb)]
-      let r = read_u8(p)!
-      let r2 = read_leb128_u(r.next)!
-      if r.val == 1 then {
-        let r3 = read_leb128_u(r2.next)!
-        ok(r3.next)
-      }
-      else ok(r2.next)
-    },
-    3 => {
-      // global: valtype(1) + mutability(1)
-      let r1 = read_u8(p)!
-      let r2 = read_u8(r1.next)!
-      ok(r2.next)
-    },
-    _ => err("unknown import desc"),
-  }
-
-effect fn parse_exports(p: Parser, remaining: Int, acc: List[Export]) -> Result[List[Export], String] =
-  if remaining == 0 then ok(acc)
-  else {
-    let name_r = read_name(p)!
-    let kind_r = read_u8(name_r.next)!
-    let idx_r = read_leb128_u(kind_r.next)!
-    let kind = match kind_r.val {
-      0 => ExportFunc,
-      1 => ExportTable,
-      2 => ExportMemory,
-      3 => ExportGlobal,
-      _ => ExportFunc,
-    }
-    parse_exports(idx_r.next, remaining - 1, acc + [{name: name_r.val, kind: kind, index: idx_r.val}])
-  }
-
-// ============================================================
-// CLI
-// ============================================================
+import self.wasm.binary
 
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
@@ -251,17 +34,18 @@ effect fn main() -> Result[Unit, String] = {
 }
 
 effect fn inspect(path: String) -> Result[Unit, String] = {
-  let bytes = fs.read_bytes(path)!
-  let wasm = quick_parse(bytes)!
+  let wasm = binary.load(path)!
 
   println("Module: ${path}")
   println("  Types:     ${int.to_string(list.len(wasm.types))}")
   println("  Imports:   ${int.to_string(list.len(wasm.imports))}")
-  println("  Functions: ${int.to_string(wasm.num_functions)}")
+  println("  Functions: ${int.to_string(list.len(wasm.func_type_indices))}")
   println("  Exports:   ${int.to_string(list.len(wasm.exports))}")
   println("  Memories:  ${int.to_string(list.len(wasm.memories))}")
   println("  Globals:   ${int.to_string(list.len(wasm.globals))}")
+  println("  Tables:    ${int.to_string(list.len(wasm.tables))}")
   println("  Data:      ${int.to_string(list.len(wasm.data_segments))} segments")
+  println("  Code:      ${int.to_string(list.len(wasm.code))} bodies")
 
   println("")
   println("Imports:")
