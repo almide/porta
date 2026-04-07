@@ -191,4 +191,43 @@ Run 'almide init' to create a project, or specify a file.
 | 3 | Variant コンストラクタ as 関数 | ~~中~~ | ✅ 解決済み |
 | 4 | let...in 式 | ~~低~~ | ❌ 不採用 |
 
-残りブロッカーは #1 のみ。
+## 6. クロスモジュール Rust codegen で変数スコープが壊れる 【ブロッカー】
+
+### 問題
+
+`import self.wasm.binary` 経由でモジュールを統合すると、`almide check` は通るが `almide build` で Rust codegen が壊れる。サブモジュール内の関数の変数（`xs` 等）がスコープ外として参照される。
+
+```
+$ almide check src/mod.almd
+No errors found
+
+$ almide build src/mod.almd -o porta
+error[E0425]: cannot find value `xs` in this scope
+   --> src/main.rs:985:33
+```
+
+132 個の Rust コンパイルエラーが発生。全て `cannot find value` 系。
+
+### 再現
+
+```bash
+cd /Users/o6lvl4/workspace/github.com/almide/porta
+almide build src/mod.almd -o porta
+```
+
+mod.almd は `import self.wasm.binary` で binary.almd（706行）を使用。
+
+---
+
+## 優先順
+
+| # | 課題 | 深刻度 | 状態 |
+|---|------|--------|------|
+| 6 | クロスモジュール Rust codegen スコープ破壊 | **ブロッカー** | 未解決 |
+| 1 | import self サブモジュール解決 | ~~ブロッカー~~ | ✅ 解決済み（0.12.0） |
+| 5 | almide compile のプロジェクト認識 | ~~ブロッカー~~ | ✅ 解決済み（0.12.0） |
+| 2 | float bits 変換 | ~~高~~ | ✅ 解決済み |
+| 3 | Variant コンストラクタ as 関数 | ~~中~~ | ✅ 解決済み |
+| 4 | let...in 式 | ~~低~~ | ❌ 不採用 |
+
+残りブロッカーは #6 のみ。check は通るので型レベルでは正常、codegen 層の問題。
