@@ -87,8 +87,8 @@ fn pop_n(m: Machine, n: Int) -> {vals: List[WasmVal], m: Machine} =
 
 fn pop_n_acc(m: Machine, remaining: Int, acc: List[WasmVal]) -> {vals: List[WasmVal], m: Machine} =
   if remaining == 0 then {vals: acc, m: m}
-  else { let r = pop(m) 
-  pop_n_acc(r.m, remaining - 1, acc + [r.val]) }
+  else { let r = pop(m)
+  pop_n_acc(r.m, remaining - 1, [r.val] + acc) }
 
 fn get_local(m: Machine, idx: Int) -> WasmVal = {
   let frame = list.first(m.frames) ?? {locals: [], func_idx: 0, return_arity: 0}
