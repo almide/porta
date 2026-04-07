@@ -9,6 +9,7 @@ let PAGES_PER_WASM_PAGE: Int = 16
 type Memory = {
   pages: Map[Int, List[Int]],
   num_wasm_pages: Int,
+  max_wasm_pages: Int,
 }
 
 type MemStore = {
@@ -17,13 +18,25 @@ type MemStore = {
 
 // --- Construction ---
 
-fn new_memory(wasm_pages: Int) -> Memory = {
+fn new_memory(wasm_pages: Int, max_pages: Int) -> Memory = {
   pages: map.new(),
   num_wasm_pages: wasm_pages,
+  max_wasm_pages: max_pages,
 }
 
 fn new_mem_store(mem_defs: List[{min: Int, max: Option[Int]}]) -> MemStore = {
-  memories: mem_defs |> list.map((def) => new_memory(def.min)),
+  memories: mem_defs |> list.map((def) => {
+    let max = match def.max { some(m) => m, none => 0 }
+    new_memory(def.min, max)
+  }),
+}
+
+fn new_mem_store_limited(mem_defs: List[{min: Int, max: Option[Int]}], max_pages: Int) -> MemStore = {
+  memories: mem_defs |> list.map((def) => {
+    let def_max = match def.max { some(m) => m, none => 0 }
+    let effective = if max_pages > 0 and (def_max == 0 or max_pages < def_max) then max_pages else def_max
+    new_memory(def.min, effective)
+  }),
 }
 
 // --- Page Access ---
@@ -159,7 +172,10 @@ fn mem_size(mem: Memory) -> Int = mem.num_wasm_pages
 
 fn mem_grow(mem: Memory, delta: Int) -> {mem: Memory, prev_size: Int} = {
   let prev = mem.num_wasm_pages
-  {mem: {...mem, num_wasm_pages: prev + delta}, prev_size: prev}
+  if mem.max_wasm_pages > 0 and prev + delta > mem.max_wasm_pages then
+    {mem: mem, prev_size: -1}
+  else
+    {mem: {...mem, num_wasm_pages: prev + delta}, prev_size: prev}
 }
 
 fn mem_fill(mem: Memory, dest: Int, val: Int, len: Int) -> Result[Memory, String] = {
@@ -199,7 +215,7 @@ fn init_data_acc(mem: Memory, base: Int, data: List[Int], idx: Int) -> Memory =
 // --- MemStore Operations (multi-memory) ---
 
 fn ms_get(ms: MemStore, idx: Int) -> Memory =
-  list.get(ms.memories, idx) ?? new_memory(0)
+  list.get(ms.memories, idx) ?? new_memory(0, 0)
 
 fn ms_set(ms: MemStore, idx: Int, mem: Memory) -> MemStore =
   {memories: list.set(ms.memories, idx, mem)}

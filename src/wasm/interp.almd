@@ -2,6 +2,7 @@
 
 import self.wasm.binary
 import self.wasm.memory
+import self.sandbox
 
 // --- Value ---
 
@@ -143,18 +144,25 @@ type WasiState = {
   stderr_buf: String,
   stdin_data: List[Int],
   stdin_pos: Int,
+  steps: Int,
+  step_limit: Int,
+  capabilities: sandbox.CapabilitySet,
   exit_code: Option[Int],
 }
 
-fn new_wasi_state() -> WasiState = {
+fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: [], stdin_pos: 0,
+  steps: 0, step_limit: step_limit,
+  capabilities: caps,
   exit_code: none,
 }
 
-fn wasi_with_stdin(data: List[Int]) -> WasiState = {
+fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: data, stdin_pos: 0,
+  steps: 0, step_limit: step_limit,
+  capabilities: caps,
   exit_code: none,
 }
 
@@ -466,12 +474,16 @@ effect fn exec_instrs(m: Machine, ws: WasiState, instrs: List[binary.Instr]) -> 
 effect fn exec_instrs_acc(m: Machine, ws: WasiState, instrs: List[binary.Instr], idx: Int) -> Result[{r: ExecResult, ws: WasiState}, String] =
   if idx >= list.len(instrs) then ok({r: Continue(m), ws: ws})
   else {
-    guard idx < list.len(instrs) else ok({r: Continue(m), ws: ws})
-    let instr = list.get(instrs, idx) ?? Unreachable
-    let result = exec_instr(m, ws, instr)!
-    match result.r {
-      Continue(m2) => exec_instrs_acc(m2, result.ws, instrs, idx + 1),
-      _ => ok(result),
+    let ws2 = {...ws, steps: ws.steps + 1}
+    if ws2.step_limit > 0 and ws2.steps >= ws2.step_limit then ok({r: Trap("step limit exceeded"), ws: ws2})
+    else {
+      guard idx < list.len(instrs) else ok({r: Continue(m), ws: ws2})
+      let instr = list.get(instrs, idx) ?? Unreachable
+      let result = exec_instr(m, ws2, instr)!
+      match result.r {
+        Continue(m2) => exec_instrs_acc(m2, result.ws, instrs, idx + 1),
+        _ => ok(result),
+      }
     }
   }
 
@@ -502,7 +514,15 @@ effect fn exec_call(m: Machine, ws: WasiState, func_idx: Int) -> Result[{r: Exec
 
 // --- WASI Dispatch ---
 
-effect fn exec_wasi(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecResult, ws: WasiState}, String] =
+effect fn exec_wasi(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let cap_check = sandbox.check_wasi_call(ws.capabilities, name)
+  match cap_check {
+    err(msg) => ok({r: Trap(msg), ws: ws}),
+    ok(_) => exec_wasi_impl(m, ws, name),
+  }
+}
+
+effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecResult, ws: WasiState}, String] =
   match name {
     "fd_write" => wasi_fd_write(m, ws),
     "proc_exit" => {
@@ -630,9 +650,10 @@ effect fn read_mem_bytes(ms: memory.MemStore, ptr: Int, remaining: Int, acc: Lis
 
 // --- Init & Run ---
 
-effect fn init_module(wasm: binary.WasmModule) -> Result[Machine, String] = {
+effect fn init_module(wasm: binary.WasmModule, max_memory_pages: Int) -> Result[Machine, String] = {
   let mem_defs = wasm.memories |> list.map((lim) => {min: lim.min, max: lim.max})
-  let ms = memory.new_mem_store(mem_defs)
+  let ms = if max_memory_pages > 0 then memory.new_mem_store_limited(mem_defs, max_memory_pages)
+    else memory.new_mem_store(mem_defs)
   let ms2 = init_data_segs(ms, wasm.data_segments, 0)!
   let globals = wasm.globals |> list.map((g) =>
     match list.first(g.init) {
@@ -678,9 +699,9 @@ fn fill_table(table: List[Int], offset: Int, indices: List[Int], idx: Int) -> Li
     fill_table(if pos < list.len(table) then list.set(table, pos, fi) else table, offset, indices, idx + 1)
   }
 
-effect fn run(wasm: binary.WasmModule) -> Result[WasiState, String] = {
-  let m = init_module(wasm)!
-  let ws = new_wasi_state()
+effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet) -> Result[WasiState, String] = {
+  let m = init_module(wasm, max_memory_pages)!
+  let ws = new_wasi_state(step_limit, caps)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,
@@ -693,8 +714,8 @@ effect fn run(wasm: binary.WasmModule) -> Result[WasiState, String] = {
   }
 }
 
-effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String) -> Result[WasiState, String] = {
-  let m = init_module(wasm)!
+effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet) -> Result[WasiState, String] = {
+  let m = init_module(wasm, max_memory_pages)!
   // Build stdin: length-prefixed JSON command
   let cmd = "{\"tool\":\"${tool_name}\",\"arguments\":${args_json}}"
   let cmd_bytes = string.to_bytes(cmd)
@@ -705,7 +726,7 @@ effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String
     int.band(int.bshr(len, 16), 0xFF),
     int.band(int.bshr(len, 24), 0xFF),
   ]
-  let ws = wasi_with_stdin(len_bytes + cmd_bytes)
+  let ws = wasi_with_stdin(len_bytes + cmd_bytes, step_limit, caps)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,

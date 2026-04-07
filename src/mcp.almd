@@ -3,8 +3,7 @@
 import json
 import self.jsonrpc
 import self.manifest
-import self.wasm.binary
-import self.wasm.interp
+import self.dispatch
 
 type McpState =
   | Initializing
@@ -14,11 +13,11 @@ type McpState =
 type McpServer = {
   state: McpState,
   manifest: manifest.Manifest,
-  wasm_module: binary.WasmModule,
+  config: dispatch.InstanceConfig,
 }
 
-fn new_server(m: manifest.Manifest, wasm: binary.WasmModule) -> McpServer =
-  {state: Initializing, manifest: m, wasm_module: wasm}
+fn new_server(m: manifest.Manifest, config: dispatch.InstanceConfig) -> McpServer =
+  {state: Initializing, manifest: m, config: config}
 
 // --- Handle a single request ---
 
@@ -75,10 +74,10 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
     },
     some(_t) => {
       let args_json = json.stringify(arguments)
-      let ws = interp.run_tool(server.wasm_module, tool_name, args_json)!
+      let result = dispatch.dispatch_tool(server.config, tool_name, args_json)!
 
       // Parse stdout: expect {"ok": ...} or {"err": ...}
-      let output = ws.stdout_buf
+      let output = result.stdout
       let parsed = json.parse(output)
       let result = match parsed {
         ok(v) => {

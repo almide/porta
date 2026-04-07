@@ -4,7 +4,8 @@ import process
 import fs
 import json
 import self.wasm.binary
-import self.wasm.interp
+import self.dispatch
+import self.sandbox
 import self.manifest
 import self.mcp
 
@@ -83,16 +84,19 @@ effect fn serve(wasm_path: String) -> Result[Unit, String] = {
       m
     }
   let wasm = binary.load(wasm_path)!
-  let server = mcp.new_server(m, wasm)
+  let caps = if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
+    else sandbox.profile_ai_agent()
+  let config = dispatch.default_config(wasm, caps)
+  let server = mcp.new_server(m, config)
   mcp.serve_loop(server)
 }
 
 effect fn run_wasm(path: String) -> Result[Unit, String] = {
   let wasm = binary.load(path)!
-  let ws = interp.run(wasm)!
-  // Print captured stdout
-  if string.len(ws.stdout_buf) > 0 then println(ws.stdout_buf) else ()
-  if string.len(ws.stderr_buf) > 0 then println(ws.stderr_buf) else ()
+  let config = dispatch.default_config(wasm, sandbox.profile_full())
+  let result = dispatch.run_instance(config)!
+  if string.len(result.stdout) > 0 then println(result.stdout) else ()
+  if string.len(result.stderr) > 0 then println(result.stderr) else ()
   ok(())
 }
 

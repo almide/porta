@@ -1,0 +1,80 @@
+// Instance Lifecycle & Dispatch
+
+import self.wasm.binary
+import self.wasm.interp
+import self.sandbox
+
+type InstanceState =
+  | Created
+  | Starting
+  | Running
+  | Exited(Int)
+  | Failed(String)
+
+type RestartPolicy =
+  | Never
+  | OnFailure
+  | Always
+
+type InstanceConfig = {
+  wasm: binary.WasmModule,
+  entry: String,
+  restart_policy: RestartPolicy,
+  step_limit: Int,
+  max_memory_pages: Int,
+  max_restarts: Int,
+  capabilities: sandbox.CapabilitySet,
+}
+
+type ToolResult = {
+  stdout: String,
+  stderr: String,
+  exit_code: Option[Int],
+}
+
+type RunResult = {
+  exit_code: Int,
+  stdout: String,
+  stderr: String,
+  restarts: Int,
+}
+
+fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+  wasm: wasm,
+  entry: "_start",
+  restart_policy: Never,
+  step_limit: 0,
+  max_memory_pages: 0,
+  max_restarts: 3,
+  capabilities: caps,
+}
+
+// --- Serve mode: dispatch a single tool call ---
+
+effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
+  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities)!
+  ok({
+    stdout: ws.stdout_buf,
+    stderr: ws.stderr_buf,
+    exit_code: ws.exit_code,
+  })
+}
+
+// --- Run mode: full lifecycle with restart ---
+
+effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
+  run_with_restarts(config, 0)
+
+effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
+  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities)!
+  let exit_code = match ws.exit_code { some(c) => c, none => 0 }
+  let should_restart = match config.restart_policy {
+    Never => false,
+    OnFailure => exit_code != 0 and restarts < config.max_restarts,
+    Always => exit_code != 0 and restarts < config.max_restarts,
+  }
+  if should_restart then run_with_restarts(config, restarts + 1)
+  else ok({exit_code: exit_code, stdout: ws.stdout_buf, stderr: ws.stderr_buf, restarts: restarts})
+}
