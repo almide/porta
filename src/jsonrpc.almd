@@ -46,19 +46,13 @@ effect fn read_message() -> Result[Option[JsonRpcRequest], String] = {
       let body = io.read_line()
       if string.len(body) == 0 then ok(none)
       else {
-        let parsed = json.parse(string.trim(body))!
-        let id = json.get(parsed, "id") ?? json.null()
-        let method = json.get_string(parsed, "method") ?? ""
-        let params = json.get(parsed, "params") ?? json.object([])
-        ok(some({id: id, method: method, params: params}))
+        let r = parse_and_wrap(string.trim(body))!
+        ok(r)
       }
     }
     else if string.starts_with(trimmed, "{") then {
-      let parsed = json.parse(trimmed)!
-      let id = json.get(parsed, "id") ?? json.null()
-      let method = json.get_string(parsed, "method") ?? ""
-      let params = json.get(parsed, "params") ?? json.object([])
-      ok(some({id: id, method: method, params: params}))
+      let r = parse_and_wrap(trimmed)!
+      ok(r)
     }
     else read_message()
   }

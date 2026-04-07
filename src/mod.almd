@@ -79,9 +79,20 @@ effect fn load_env_file(path: String) -> Result[List[interp.EnvVar], String] = {
 effect fn resolve_env(opts: Options) -> Result[List[interp.EnvVar], String] = {
   let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
     else []
-  // CLI --env overrides file values
-  ok(file_env + opts.env_vars)
+  // CLI --env overrides file values (dedup: keep last occurrence per key)
+  let combined = file_env + opts.env_vars
+  ok(dedup_env(combined, 0, []))
 }
+
+fn dedup_env(vars: List[interp.EnvVar], idx: Int, acc: List[interp.EnvVar]) -> List[interp.EnvVar] =
+  if idx >= list.len(vars) then acc
+  else {
+    let head = list.get(vars, idx) ?? {key: "", val: ""}
+    let tail = list.drop(vars, idx + 1)
+    let rest_has_key = tail |> list.any((e) => e.key == head.key)
+    if rest_has_key then dedup_env(vars, idx + 1, acc)
+    else dedup_env(vars, idx + 1, acc + [head])
+  }
 
 fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet, env: List[interp.EnvVar]) -> dispatch.InstanceConfig = {
   let config = dispatch.default_config(wasm, caps)

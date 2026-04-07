@@ -46,7 +46,7 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
       ])),
     ])),
   ])
-  ok({server: {...server, state: Initializing}, response: some(jsonrpc.make_response(req.id, result))})
+  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
 }
 
 effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {

@@ -92,7 +92,7 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
   let should_restart = match config.restart_policy {
     Never => false,
     OnFailure => exit_code != 0 and restarts < config.max_restarts,
-    Always => exit_code != 0 and restarts < config.max_restarts,
+    Always => restarts < config.max_restarts,
   }
   if should_restart then run_with_restarts(config, restarts + 1)
   else {
