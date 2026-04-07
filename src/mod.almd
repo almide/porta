@@ -9,43 +9,141 @@ import self.sandbox
 import self.manifest
 import self.mcp
 
+// --- Options ---
+
+type Options = {
+  path: String,
+  entry: String,
+  step_limit: Int,
+  max_memory_pages: Int,
+  restart: String,
+  profile: String,
+  manifest_path: String,
+}
+
+fn default_options() -> Options = {
+  path: "",
+  entry: "_start",
+  step_limit: 0,
+  max_memory_pages: 0,
+  restart: "no",
+  profile: "",
+  manifest_path: "",
+}
+
+fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
+  if idx >= list.len(args) then opts
+  else {
+    let arg = list.get(args, idx) ?? ""
+    let next = list.get(args, idx + 1) ?? ""
+    match arg {
+      "--entry" => parse_options(args, idx + 2, {...opts, entry: next}),
+      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: parse_int(next)}),
+      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: parse_int(next)}),
+      "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
+      "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
+      "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
+      _ =>
+        if string.starts_with(arg, "--") then parse_options(args, idx + 2, opts)
+        else if opts.path == "" then parse_options(args, idx + 1, {...opts, path: arg})
+        else parse_options(args, idx + 1, opts),
+    }
+  }
+
+fn parse_int(s: String) -> Int =
+  parse_int_acc(string.to_bytes(s), 0, 0)
+
+fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
+  if idx >= list.len(bytes) then acc
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b >= 48 and b <= 57 then parse_int_acc(bytes, idx + 1, acc * 10 + (b - 48))
+    else acc
+  }
+
+// --- Resolve capabilities from options ---
+
+fn resolve_caps(opts: Options, manifest_caps: List[String]) -> sandbox.CapabilitySet =
+  if opts.profile != "" then
+    match opts.profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
+  else sandbox.profile_full()
+
+fn resolve_serve_caps(opts: Options, manifest_caps: List[String]) -> sandbox.CapabilitySet =
+  if opts.profile != "" then
+    match opts.profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
+  else sandbox.profile_ai_agent()
+
+fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet) -> dispatch.InstanceConfig = {
+  let config = dispatch.default_config(wasm, caps)
+  {
+    ...config,
+    entry: opts.entry,
+    step_limit: opts.step_limit,
+    max_memory_pages: opts.max_memory_pages,
+    restart_policy: dispatch.parse_restart_policy(opts.restart),
+  }
+}
+
+// --- Main ---
+
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
   let cmd = list.get(args, 1) ?? "help"
 
   match cmd {
     "serve" => {
-      let path = list.get(args, 2) ?? ""
-      if path == "" then {
-        println("usage: porta serve <agent.wasm> [--manifest manifest.json]")
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
+        println("usage: porta serve <agent.wasm> [options]")
+        println("  run 'porta help serve' for options")
         ok(())
       }
-      else serve(path)
+      else serve(opts)
     },
     "run" => {
-      let path = list.get(args, 2) ?? ""
-      if path == "" then {
-        println("usage: porta run <agent.wasm>")
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
+        println("usage: porta run <agent.wasm> [options]")
+        println("  run 'porta help run' for options")
         ok(())
       }
-      else run_wasm(path)
+      else run_wasm(opts)
     },
     "inspect" => {
-      let path = list.get(args, 2) ?? ""
-      if path == "" then {
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
         println("usage: porta inspect <agent.wasm>")
         ok(())
       }
-      else inspect(path)
+      else inspect(opts.path)
+    },
+    "validate" => {
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
+        println("usage: porta validate <agent.wasm> [--profile <name>]")
+        ok(())
+      }
+      else validate(opts)
     },
     "help" => {
-      println("porta — WASM agent MCP bridge")
-      println("")
-      println("usage:")
-      println("  porta run <agent.wasm>        Execute WASM binary")
-      println("  porta inspect <agent.wasm>    Show module info")
-      println("  porta validate <agent.wasm>   Validate binary")
-      println("  porta serve <agent.wasm>      Start MCP server")
+      let topic = list.get(args, 2) ?? ""
+      print_help(topic)
+      ok(())
+    },
+    "version" => {
+      println("porta 0.1.0")
       ok(())
     },
     _ => {
@@ -56,14 +154,15 @@ effect fn main() -> Result[Unit, String] = {
   }
 }
 
-effect fn serve(wasm_path: String) -> Result[Unit, String] = {
-  // Look for manifest.json next to the .wasm file
-  let manifest_path = string.replace(wasm_path, ".wasm", ".manifest.json")
+// --- Commands ---
+
+effect fn serve(opts: Options) -> Result[Unit, String] = {
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
   let has_manifest = fs.exists(manifest_path)
   let m = if has_manifest then manifest.load_manifest(manifest_path)!
     else {
-      // Generate minimal manifest from WASM exports
-      let wasm = binary.load(wasm_path)!
+      let wasm = binary.load(opts.path)!
       let export_tools = wasm.exports
         |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
         |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
@@ -83,21 +182,71 @@ effect fn serve(wasm_path: String) -> Result[Unit, String] = {
       }
       m
     }
-  let wasm = binary.load(wasm_path)!
-  let caps = if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
-    else sandbox.profile_ai_agent()
-  let config = dispatch.default_config(wasm, caps)
+  let wasm = binary.load(opts.path)!
+  let caps = resolve_serve_caps(opts, m.capabilities)
+  let config = build_config(wasm, opts, caps)
   let server = mcp.new_server(m, config)
   mcp.serve_loop(server)
 }
 
-effect fn run_wasm(path: String) -> Result[Unit, String] = {
-  let wasm = binary.load(path)!
-  let config = dispatch.default_config(wasm, sandbox.profile_full())
+effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
+  let wasm = binary.load(opts.path)!
+  let caps = resolve_caps(opts, [])
+  let config = build_config(wasm, opts, caps)
   let result = dispatch.run_instance(config)!
   if string.len(result.stdout) > 0 then println(result.stdout) else ()
   if string.len(result.stderr) > 0 then println(result.stderr) else ()
   ok(())
+}
+
+effect fn validate(opts: Options) -> Result[Unit, String] = {
+  let wasm = binary.load(opts.path)!
+  println("Validating: ${opts.path}")
+
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+  let has_manifest = fs.exists(manifest_path)
+
+  let caps = if opts.profile != "" then
+    match opts.profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if has_manifest then {
+    let m = manifest.load_manifest(manifest_path)!
+    if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
+    else sandbox.profile_full()
+  }
+  else sandbox.profile_full()
+
+  let wasi_imports = wasm.imports
+    |> list.filter((imp) => imp.mod_name == "wasi_snapshot_preview1")
+
+  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
+  for imp in wasi_imports {
+    let req = sandbox.required_capability(imp.name)
+    let status = match req {
+      none => "  ok",
+      some(cap) =>
+        if sandbox.has_capability(caps, cap) then "  ok"
+        else "  DENIED (requires ${sandbox.cap_name(cap)})",
+    }
+    println("    ${imp.name}${status}")
+  }
+
+  let result = sandbox.validate_imports(wasm.imports, caps)
+  match result {
+    ok(_) => {
+      println("  Result: PASS")
+      ok(())
+    },
+    err(msg) => {
+      println("  Result: FAIL — ${msg}")
+      ok(())
+    },
+  }
 }
 
 effect fn inspect(path: String) -> Result[Unit, String] = {
@@ -129,3 +278,55 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
 
   ok(())
 }
+
+// --- Help ---
+
+fn print_help(topic: String) -> Unit =
+  match topic {
+    "run" => {
+      println("porta run <agent.wasm> [options]")
+      println("")
+      println("Execute a WASM binary.")
+      println("")
+      println("options:")
+      println("  --entry <name>          Entry point (default: _start)")
+      println("  --step-limit <n>        Max instructions (0 = unlimited)")
+      println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
+      println("  --restart <policy>      Restart policy: no, on-failure, always")
+      println("  --profile <name>        Capability profile: ai-agent, worker, full")
+    },
+    "serve" => {
+      println("porta serve <agent.wasm> [options]")
+      println("")
+      println("Start MCP server on stdio (JSON-RPC 2.0).")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Path to manifest.json")
+      println("  --entry <name>          Entry point (default: _start)")
+      println("  --step-limit <n>        Max instructions per tool call (0 = unlimited)")
+      println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
+      println("  --profile <name>        Capability profile: ai-agent, worker, full")
+    },
+    "validate" => {
+      println("porta validate <agent.wasm> [options]")
+      println("")
+      println("Check WASI imports against capability profile.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Path to manifest.json")
+      println("  --profile <name>        Capability profile: ai-agent, worker, full")
+    },
+    _ => {
+      println("porta — WASM agent MCP bridge")
+      println("")
+      println("usage:")
+      println("  porta run <agent.wasm>        Execute WASM binary")
+      println("  porta serve <agent.wasm>      Start MCP server")
+      println("  porta inspect <agent.wasm>    Show module info")
+      println("  porta validate <agent.wasm>   Validate WASI imports")
+      println("  porta version                 Show version")
+      println("  porta help [command]          Show help")
+      println("")
+      println("Run 'porta help <command>' for command-specific options.")
+    },
+  }

@@ -39,6 +39,13 @@ type RunResult = {
   restarts: Int,
 }
 
+fn parse_restart_policy(s: String) -> RestartPolicy =
+  match s {
+    "on-failure" => OnFailure,
+    "always" => Always,
+    _ => Never,
+  }
+
 fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
   wasm: wasm,
   entry: "_start",
