@@ -1,5 +1,6 @@
 // WASM Instruction Interpreter
 
+import fs
 import self.wasm.binary
 import self.wasm.memory
 import self.sandbox
@@ -141,6 +142,15 @@ fn exec_cmp_f64(m: Machine, op: (Float, Float) -> Bool) -> ExecResult = {
 
 type EnvVar = { key: String, val: String }
 
+type FdKind =
+  | FdStdin
+  | FdStdout
+  | FdStderr
+  | FdFile(String, String)
+  | FdDir(String)
+
+type FdEntry = { kind: FdKind, rights_read: Bool, rights_write: Bool }
+
 type WasiState = {
   stdout_buf: String,
   stderr_buf: String,
@@ -150,23 +160,43 @@ type WasiState = {
   step_limit: Int,
   capabilities: sandbox.CapabilitySet,
   env_vars: List[EnvVar],
+  fds: Map[Int, FdEntry],
+  next_fd: Int,
+  preopen_dirs: List[String],
   memory_pages: Int,
   exit_code: Option[Int],
 }
 
-fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> WasiState = {
+fn init_fds(dirs: List[String]) -> Map[Int, FdEntry] = {
+  let base = map.new()
+    |> map.set(0, {kind: FdStdin, rights_read: true, rights_write: false})
+    |> map.set(1, {kind: FdStdout, rights_read: false, rights_write: true})
+    |> map.set(2, {kind: FdStderr, rights_read: false, rights_write: true})
+  add_preopen_fds(base, dirs, 0)
+}
+
+fn add_preopen_fds(fds: Map[Int, FdEntry], dirs: List[String], idx: Int) -> Map[Int, FdEntry] =
+  if idx >= list.len(dirs) then fds
+  else {
+    let dir = list.get(dirs, idx) ?? ""
+    add_preopen_fds(map.set(fds, 3 + idx, {kind: FdDir(dir), rights_read: true, rights_write: true}), dirs, idx + 1)
+  }
+
+fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar], dirs: List[String]) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: [], stdin_pos: 0,
   steps: 0, step_limit: step_limit,
   capabilities: caps, env_vars: env,
+  fds: init_fds(dirs), next_fd: 3 + list.len(dirs), preopen_dirs: dirs,
   memory_pages: 0, exit_code: none,
 }
 
-fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> WasiState = {
+fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar], dirs: List[String]) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: data, stdin_pos: 0,
   steps: 0, step_limit: step_limit,
   capabilities: caps, env_vars: env,
+  fds: init_fds(dirs), next_fd: 3 + list.len(dirs), preopen_dirs: dirs,
   memory_pages: 0, exit_code: none,
 }
 
@@ -529,6 +559,45 @@ effect fn exec_wasi(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecR
 effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecResult, ws: WasiState}, String] =
   match name {
     "fd_write" => wasi_fd_write(m, ws),
+    "fd_read" => wasi_fd_read(m, ws),
+    "fd_close" => wasi_fd_close(m, ws),
+    "fd_seek" => {
+      let np = pop_i32(m)
+      let _w = pop_i32(np.m)
+      let _o = pop_i64(_w.m)
+      let _fd = pop_i32(_o.m)
+      let nm = memory.ms_store_i64(_fd.m.mem, 0, np.val, 0)!
+      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
+    },
+    "path_open" => wasi_path_open(m, ws),
+    "fd_filestat_get" => wasi_fd_filestat_get(m, ws),
+    "path_filestat_get" => wasi_path_filestat_get(m, ws),
+    "path_create_directory" => wasi_path_create_directory(m, ws),
+    "path_rename" => {
+      let _a = pop_i32(m)
+      let _b = pop_i32(_a.m)
+      let _c = pop_i32(_b.m)
+      let _d = pop_i32(_c.m)
+      let _e = pop_i32(_d.m)
+      let _f = pop_i32(_e.m)
+      ok({r: Continue(push_i32(_f.m, 0)), ws: ws})
+    },
+    "path_unlink_file" => wasi_path_unlink_file(m, ws),
+    "path_remove_directory" => {
+      let _pl = pop_i32(m)
+      let _pp = pop_i32(_pl.m)
+      let _dd = pop_i32(_pp.m)
+      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
+    },
+    "fd_readdir" => {
+      let bup = pop_i32(m)
+      let _ck = pop_i64(bup.m)
+      let _bl = pop_i32(_ck.m)
+      let _bf = pop_i32(_bl.m)
+      let _fd = pop_i32(_bf.m)
+      let nm = memory.ms_store_i32(_fd.m.mem, 0, bup.val, 0)!
+      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
+    },
     "proc_exit" => {
       let code = pop_i32(m)
       ok({r: Continue(code.m), ws: {...ws, exit_code: some(code.val)}})
@@ -546,80 +615,6 @@ effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: 
       let nm = memory.ms_fill(buf.m.mem, 0, buf.val, 0, len.val)!
       ok({r: Continue(push_i32({...buf.m, mem: nm}, 0)), ws: ws})
     },
-    "fd_close" => {
-      let _fd = pop_i32(m)
-      ok({r: Continue(push_i32(_fd.m, 0)), ws: ws})
-    },
-    "fd_seek" => {
-      let np = pop_i32(m)
-      let _w = pop_i32(np.m)
-      let _o = pop_i64(_w.m)
-      let _fd = pop_i32(_o.m)
-      let nm = memory.ms_store_i64(_fd.m.mem, 0, np.val, 0)!
-      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
-    },
-    "fd_read" => wasi_fd_read(m, ws),
-    "path_open" => {
-      let fp = pop_i32(m)
-      let _ff = pop_i32(fp.m)
-      let _ri = pop_i64(_ff.m)
-      let _rb = pop_i64(_ri.m)
-      let _of = pop_i32(_rb.m)
-      let _pl = pop_i32(_of.m)
-      let _pp = pop_i32(_pl.m)
-      let _df = pop_i32(_pp.m)
-      let _dd = pop_i32(_df.m)
-      ok({r: Continue(push_i32(_dd.m, 44)), ws: ws})
-    },
-    "fd_filestat_get" => {
-      let _bp = pop_i32(m)
-      let _fd = pop_i32(_bp.m)
-      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
-    },
-    "path_filestat_get" => {
-      let _bp = pop_i32(m)
-      let _pl = pop_i32(_bp.m)
-      let _pp = pop_i32(_pl.m)
-      let _fl = pop_i32(_pp.m)
-      let _dd = pop_i32(_fl.m)
-      ok({r: Continue(push_i32(_dd.m, 44)), ws: ws})
-    },
-    "path_create_directory" => {
-      let _pl = pop_i32(m)
-      let _pp = pop_i32(_pl.m)
-      let _dd = pop_i32(_pp.m)
-      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
-    },
-    "path_rename" => {
-      let _a = pop_i32(m)
-      let _b = pop_i32(_a.m)
-      let _c = pop_i32(_b.m)
-      let _d = pop_i32(_c.m)
-      let _e = pop_i32(_d.m)
-      let _f = pop_i32(_e.m)
-      ok({r: Continue(push_i32(_f.m, 0)), ws: ws})
-    },
-    "path_unlink_file" => {
-      let _pl = pop_i32(m)
-      let _pp = pop_i32(_pl.m)
-      let _dd = pop_i32(_pp.m)
-      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
-    },
-    "path_remove_directory" => {
-      let _pl = pop_i32(m)
-      let _pp = pop_i32(_pl.m)
-      let _dd = pop_i32(_pp.m)
-      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
-    },
-    "fd_readdir" => {
-      let bup = pop_i32(m)
-      let _ck = pop_i64(bup.m)
-      let _bl = pop_i32(_ck.m)
-      let _bf = pop_i32(_bl.m)
-      let _fd = pop_i32(_bf.m)
-      let nm = memory.ms_store_i32(_fd.m.mem, 0, bup.val, 0)!
-      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
-    },
     "environ_sizes_get" => wasi_environ_sizes_get(m, ws),
     "environ_get" => wasi_environ_get(m, ws),
     "args_sizes_get" => {
@@ -634,17 +629,8 @@ effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: 
       let _argv_ptr = pop_i32(_buf_ptr.m)
       ok({r: Continue(push_i32(_argv_ptr.m, 0)), ws: ws})
     },
-    "fd_prestat_get" => {
-      let _buf = pop_i32(m)
-      let _fd = pop_i32(_buf.m)
-      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
-    },
-    "fd_prestat_dir_name" => {
-      let _len = pop_i32(m)
-      let _buf = pop_i32(_len.m)
-      let _fd = pop_i32(_buf.m)
-      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
-    },
+    "fd_prestat_get" => wasi_fd_prestat_get(m, ws),
+    "fd_prestat_dir_name" => wasi_fd_prestat_dir_name(m, ws),
     "fd_fdstat_get" => {
       let _buf = pop_i32(m)
       let _fd = pop_i32(_buf.m)
@@ -705,17 +691,191 @@ effect fn write_bytes_at(ms: memory.MemStore, base: Int, bytes: List[Int], idx: 
     write_bytes_at(ms2, base, bytes, idx + 1)
   }
 
+// --- WASI Implementations ---
+
 effect fn wasi_fd_write(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
   let nwp = pop_i32(m)
   let ioc = pop_i32(nwp.m)
   let iov = pop_i32(ioc.m)
   let fd = pop_i32(iov.m)
-  let result = read_iovecs(fd.m.mem, iov.val, ioc.val, "", 0)!
-  let ws2 = if fd.val == 1 then {...ws, stdout_buf: ws.stdout_buf + result.data}
-    else if fd.val == 2 then {...ws, stderr_buf: ws.stderr_buf + result.data}
-    else ws
-  let nm = memory.ms_store_i32(fd.m.mem, 0, nwp.val, result.total_bytes)!
-  ok({r: Continue(push_i32({...fd.m, mem: nm}, 0)), ws: ws2})
+  let m2 = fd.m
+  let entry = map.get(ws.fds, fd.val)
+  match entry {
+    none => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+    some(e) =>
+      if not e.rights_write then ok({r: Continue(push_i32(m2, 2)), ws: ws})
+      else {
+        let result = read_iovecs(m2.mem, iov.val, ioc.val, "", 0)!
+        let ws2 = match e.kind {
+          FdStdout => {...ws, stdout_buf: ws.stdout_buf + result.data},
+          FdStderr => {...ws, stderr_buf: ws.stderr_buf + result.data},
+          _ => ws,
+        }
+        let nm = memory.ms_store_i32(m2.mem, 0, nwp.val, result.total_bytes)!
+        ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws2})
+      },
+  }
+}
+
+effect fn wasi_fd_close(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let fd = pop_i32(m)
+  if map.contains(ws.fds, fd.val) then
+    ok({r: Continue(push_i32(fd.m, 0)), ws: {...ws, fds: map.remove(ws.fds, fd.val)}})
+  else ok({r: Continue(push_i32(fd.m, 8)), ws: ws})
+}
+
+effect fn wasi_path_open(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let fd_ptr = pop_i32(m)
+  let _fdflags = pop_i32(fd_ptr.m)
+  let _ri = pop_i64(_fdflags.m)
+  let _rb = pop_i64(_ri.m)
+  let _oflags = pop_i32(_rb.m)
+  let pathlen = pop_i32(_oflags.m)
+  let path_ptr = pop_i32(pathlen.m)
+  let _dirflags = pop_i32(path_ptr.m)
+  let dirfd = pop_i32(_dirflags.m)
+  let m2 = dirfd.m
+  let path_bytes = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind { FdDir(d) => d, _ => "" },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path_bytes else base_dir + "/" + path_bytes
+  let content_result = fs.read_text(full_path)
+  match content_result {
+    ok(content) => {
+      let new_fd = ws.next_fd
+      let ws2 = {
+        ...ws,
+        fds: map.set(ws.fds, new_fd, {kind: FdFile(full_path, content), rights_read: true, rights_write: true}),
+        next_fd: new_fd + 1,
+      }
+      let nm = memory.ms_store_i32(m2.mem, 0, fd_ptr.val, new_fd)!
+      ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws2})
+    },
+    err(_) => ok({r: Continue(push_i32(m2, 44)), ws: ws}),
+  }
+}
+
+effect fn wasi_fd_filestat_get(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let buf_ptr = pop_i32(m)
+  let fd = pop_i32(buf_ptr.m)
+  let m2 = fd.m
+  let entry = map.get(ws.fds, fd.val)
+  match entry {
+    none => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+    some(e) => {
+      let size = match e.kind { FdFile(_, content) => string.len(content), _ => 0 }
+      let nm = memory.ms_store_i64(m2.mem, 0, buf_ptr.val + 32, size)!
+      ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws})
+    },
+  }
+}
+
+effect fn wasi_path_filestat_get(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let buf_ptr = pop_i32(m)
+  let pathlen = pop_i32(buf_ptr.m)
+  let path_ptr = pop_i32(pathlen.m)
+  let _flags = pop_i32(path_ptr.m)
+  let dirfd = pop_i32(_flags.m)
+  let m2 = dirfd.m
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind { FdDir(d) => d, _ => "" },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+  let size_result = fs.file_size(full_path)
+  match size_result {
+    ok(size) => {
+      let nm = memory.ms_store_i64(m2.mem, 0, buf_ptr.val + 32, size)!
+      ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws})
+    },
+    err(_) => ok({r: Continue(push_i32(m2, 44)), ws: ws}),
+  }
+}
+
+effect fn wasi_path_create_directory(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let pathlen = pop_i32(m)
+  let path_ptr = pop_i32(pathlen.m)
+  let dirfd = pop_i32(path_ptr.m)
+  let m2 = dirfd.m
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind { FdDir(d) => d, _ => "" },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+  match fs.mkdir_p(full_path) {
+    ok(_) => ok({r: Continue(push_i32(m2, 0)), ws: ws}),
+    err(_) => ok({r: Continue(push_i32(m2, 2)), ws: ws}),
+  }
+}
+
+effect fn wasi_path_unlink_file(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let pathlen = pop_i32(m)
+  let path_ptr = pop_i32(pathlen.m)
+  let dirfd = pop_i32(path_ptr.m)
+  let m2 = dirfd.m
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind { FdDir(d) => d, _ => "" },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+  match fs.remove(full_path) {
+    ok(_) => ok({r: Continue(push_i32(m2, 0)), ws: ws}),
+    err(_) => ok({r: Continue(push_i32(m2, 44)), ws: ws}),
+  }
+}
+
+effect fn wasi_fd_prestat_get(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let buf = pop_i32(m)
+  let fd = pop_i32(buf.m)
+  let m2 = fd.m
+  let entry = map.get(ws.fds, fd.val)
+  match entry {
+    some(e) => match e.kind {
+      FdDir(path) => {
+        // prestat type 0 = directory, name length at offset 4
+        let nm = memory.ms_store_i32(m2.mem, 0, buf.val, 0)!
+        let nm2 = memory.ms_store_i32(nm, 0, buf.val + 4, string.len(path))!
+        ok({r: Continue(push_i32({...m2, mem: nm2}, 0)), ws: ws})
+      },
+      _ => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+    },
+    none => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+  }
+}
+
+effect fn wasi_fd_prestat_dir_name(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let len = pop_i32(m)
+  let buf = pop_i32(len.m)
+  let fd = pop_i32(buf.m)
+  let m2 = fd.m
+  let entry = map.get(ws.fds, fd.val)
+  match entry {
+    some(e) => match e.kind {
+      FdDir(path) => {
+        let bytes = string.to_bytes(path)
+        let nm = write_bytes_at(m2.mem, buf.val, bytes, 0)!
+        ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws})
+      },
+      _ => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+    },
+    none => ok({r: Continue(push_i32(m2, 8)), ws: ws}),
+  }
+}
+
+// --- WASI helpers ---
+
+effect fn read_mem_string(ms: memory.MemStore, ptr: Int, len: Int) -> Result[String, String] = {
+  let bytes = read_mem_bytes(ms, ptr, len, [])!
+  ok(string.from_bytes(bytes))
 }
 
 effect fn read_iovecs(ms: memory.MemStore, ptr: Int, remaining: Int, acc: String, total: Int) -> Result[{data: String, total_bytes: Int}, String] =
@@ -785,9 +945,9 @@ fn fill_table(table: List[Int], offset: Int, indices: List[Int], idx: Int) -> Li
     fill_table(if pos < list.len(table) then list.set(table, pos, fi) else table, offset, indices, idx + 1)
   }
 
-effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> Result[WasiState, String] = {
+effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar], dirs: List[String]) -> Result[WasiState, String] = {
   let m = init_module(wasm, max_memory_pages)!
-  let ws = new_wasi_state(step_limit, caps, env)
+  let ws = new_wasi_state(step_limit, caps, env, dirs)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,
@@ -802,7 +962,7 @@ effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, c
   }
 }
 
-effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> Result[WasiState, String] = {
+effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar], dirs: List[String]) -> Result[WasiState, String] = {
   let m = init_module(wasm, max_memory_pages)!
   // Build stdin: length-prefixed JSON command
   let cmd = "{\"tool\":\"${tool_name}\",\"arguments\":${args_json}}"
@@ -814,7 +974,7 @@ effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String
     int.band(int.bshr(len, 16), 0xFF),
     int.band(int.bshr(len, 24), 0xFF),
   ]
-  let ws = wasi_with_stdin(len_bytes + cmd_bytes, step_limit, caps, env)
+  let ws = wasi_with_stdin(len_bytes + cmd_bytes, step_limit, caps, env, dirs)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,

@@ -27,6 +27,7 @@ type InstanceConfig = {
   capabilities: sandbox.CapabilitySet,
   env_vars: List[interp.EnvVar],
   secrets: List[interp.EnvVar],
+  preopen_dirs: List[String],
 }
 
 type ToolResult = {
@@ -61,6 +62,7 @@ fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> Insta
   capabilities: caps,
   env_vars: [],
   secrets: [],
+  preopen_dirs: ["."],
 }
 
 // --- Serve mode: dispatch a single tool call ---
@@ -68,7 +70,7 @@ fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> Insta
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
   sandbox.validate_imports(config.wasm.imports, config.capabilities)!
   let env = config.env_vars + config.secrets
-  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env)!
+  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env, config.preopen_dirs)!
   let m = observability.empty_metrics()
   let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages}
   ok({
@@ -87,7 +89,7 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
   sandbox.validate_imports(config.wasm.imports, config.capabilities)!
   let env = config.env_vars + config.secrets
-  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities, env)!
+  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities, env, config.preopen_dirs)!
   let exit_code = match ws.exit_code { some(c) => c, none => 0 }
   let should_restart = match config.restart_policy {
     Never => false,
