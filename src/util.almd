@@ -1,0 +1,70 @@
+// Utility functions for CLI and config parsing
+
+import self.wasm.interp
+import self.dispatch
+import self.sandbox
+
+// --- Int parsing ---
+
+fn parse_int(s: String) -> Int =
+  parse_int_acc(string.to_bytes(s), 0, 0)
+
+fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
+  if idx >= list.len(bytes) then acc
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b >= 48 and b <= 57 then parse_int_acc(bytes, idx + 1, acc * 10 + (b - 48))
+    else acc
+  }
+
+// --- String splitting ---
+
+fn split_at_eq(s: String) -> Option[interp.EnvVar] =
+  find_eq_pos(string.to_bytes(s), 0)
+
+fn find_eq_pos(bytes: List[Int], idx: Int) -> Option[interp.EnvVar] =
+  if idx >= list.len(bytes) then none
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b == 61 then {
+      let key = string.from_bytes(list.take(bytes, idx))
+      let val = string.from_bytes(list.drop(bytes, idx + 1))
+      some({key: key, val: val})
+    }
+    else find_eq_pos(bytes, idx + 1)
+  }
+
+fn split_lines(bytes: List[Int], start: Int, idx: Int, acc: List[String]) -> List[String] =
+  if idx >= list.len(bytes) then {
+    if idx > start then acc + [string.from_bytes(list.slice(bytes, start, idx))]
+    else acc
+  }
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b == 10 then split_lines(bytes, idx + 1, idx + 1, acc + [string.from_bytes(list.slice(bytes, start, idx))])
+    else split_lines(bytes, start, idx + 1, acc)
+  }
+
+// --- Capability resolution ---
+
+fn resolve_caps(profile: String, manifest_caps: List[String]) -> sandbox.CapabilitySet =
+  if profile != "" then
+    match profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
+  else sandbox.profile_full()
+
+fn resolve_serve_caps(profile: String, manifest_caps: List[String]) -> sandbox.CapabilitySet =
+  if profile != "" then
+    match profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
+  else sandbox.profile_ai_agent()

@@ -1,0 +1,71 @@
+import self.observability
+
+// --- empty_metrics ---
+
+test "empty_metrics: all zeros" {
+  let m = observability.empty_metrics()
+  assert_eq(m.steps, 0)
+  assert_eq(m.memory_pages, 0)
+  assert_eq(m.tool_calls, 0)
+  assert_eq(m.total_tool_steps, 0)
+  assert_eq(m.restarts, 0)
+}
+
+// --- merge_tool_call ---
+
+test "merge_tool_call: first call" {
+  let m = observability.empty_metrics()
+  let m2 = observability.merge_tool_call(m, 1000, 4)
+  assert_eq(m2.tool_calls, 1)
+  assert_eq(m2.total_tool_steps, 1000)
+  assert_eq(m2.steps, 1000)
+  assert_eq(m2.memory_pages, 4)
+}
+
+test "merge_tool_call: accumulates" {
+  let m = observability.empty_metrics()
+  let m2 = observability.merge_tool_call(m, 1000, 4)
+  let m3 = observability.merge_tool_call(m2, 500, 8)
+  assert_eq(m3.tool_calls, 2)
+  assert_eq(m3.total_tool_steps, 1500)
+  assert_eq(m3.steps, 500)
+  assert_eq(m3.memory_pages, 8)
+}
+
+// --- format_summary ---
+
+test "format_summary: basic" {
+  let m = observability.empty_metrics()
+  let m2 = {...m, steps: 42, memory_pages: 3}
+  let s = observability.format_summary(m2)
+  assert(string.starts_with(s, "steps: 42"))
+}
+
+test "format_summary: includes restarts when non-zero" {
+  let m = observability.empty_metrics()
+  let m2 = {...m, steps: 10, memory_pages: 1, restarts: 2}
+  let s = observability.format_summary(m2)
+  // Should contain "restarts: 2"
+  let bytes = string.to_bytes(s)
+  assert(list.len(bytes) > 30)
+}
+
+test "format_summary: includes tool_calls when non-zero" {
+  let m = observability.empty_metrics()
+  let m2 = {...m, steps: 10, memory_pages: 1, tool_calls: 5, total_tool_steps: 2500}
+  let s = observability.format_summary(m2)
+  let bytes = string.to_bytes(s)
+  assert(list.len(bytes) > 40)
+}
+
+// --- format_tool_log ---
+
+test "format_tool_log: success" {
+  let s = observability.format_tool_log("greet", 100, 2, true)
+  assert(string.starts_with(s, "[porta]"))
+}
+
+test "format_tool_log: error" {
+  let s = observability.format_tool_log("fail_tool", 50, 1, false)
+  assert(string.starts_with(s, "[porta]"))
+}

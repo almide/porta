@@ -8,6 +8,7 @@ import self.wasm.interp
 import self.dispatch
 import self.sandbox
 import self.observability
+import self.util
 import self.manifest
 import self.mcp
 
@@ -46,17 +47,17 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
     let next = list.get(args, idx + 1) ?? ""
     match arg {
       "--entry" => parse_options(args, idx + 2, {...opts, entry: next}),
-      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: parse_int(next)}),
-      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: parse_int(next)}),
+      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: util.parse_int(next)}),
+      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: util.parse_int(next)}),
       "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
       "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
       "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
-      "--env" => match split_at_eq(next) {
+      "--env" => match util.split_at_eq(next) {
         some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
         none => parse_options(args, idx + 2, opts),
       },
       "--env-file" => parse_options(args, idx + 2, {...opts, env_file: next}),
-      "--secret" => match split_at_eq(next) {
+      "--secret" => match util.split_at_eq(next) {
         some(kv) => parse_options(args, idx + 2, {...opts, secrets: opts.secrets + [kv]}),
         none => parse_options(args, idx + 2, opts),
       },
@@ -67,76 +68,13 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
     }
   }
 
-// --- String helpers ---
-
-fn split_at_eq(s: String) -> Option[interp.EnvVar] =
-  find_eq_pos(string.to_bytes(s), 0, s)
-
-fn find_eq_pos(bytes: List[Int], idx: Int, s: String) -> Option[interp.EnvVar] =
-  if idx >= list.len(bytes) then none
-  else {
-    let b = list.get(bytes, idx) ?? 0
-    if b == 61 then {
-      let key = string.from_bytes(list.take(bytes, idx))
-      let val = string.from_bytes(list.drop(bytes, idx + 1))
-      some({key: key, val: val})
-    }
-    else find_eq_pos(bytes, idx + 1, s)
-  }
-
-fn split_lines(bytes: List[Int], start: Int, idx: Int, acc: List[String]) -> List[String] =
-  if idx >= list.len(bytes) then {
-    if idx > start then acc + [string.from_bytes(list.slice(bytes, start, idx))]
-    else acc
-  }
-  else {
-    let b = list.get(bytes, idx) ?? 0
-    if b == 10 then split_lines(bytes, idx + 1, idx + 1, acc + [string.from_bytes(list.slice(bytes, start, idx))])
-    else split_lines(bytes, start, idx + 1, acc)
-  }
-
 effect fn load_env_file(path: String) -> Result[List[interp.EnvVar], String] = {
   let content = fs.read_text(path)!
-  let lines = split_lines(string.to_bytes(content), 0, 0, [])
+  let lines = util.split_lines(string.to_bytes(content), 0, 0, [])
   ok(lines
     |> list.filter((line) => string.len(string.trim(line)) > 0 and not string.starts_with(string.trim(line), "#"))
-    |> list.filter_map((line) => split_at_eq(string.trim(line))))
+    |> list.filter_map((line) => util.split_at_eq(string.trim(line))))
 }
-
-fn parse_int(s: String) -> Int =
-  parse_int_acc(string.to_bytes(s), 0, 0)
-
-fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
-  if idx >= list.len(bytes) then acc
-  else {
-    let b = list.get(bytes, idx) ?? 0
-    if b >= 48 and b <= 57 then parse_int_acc(bytes, idx + 1, acc * 10 + (b - 48))
-    else acc
-  }
-
-// --- Resolve capabilities from options ---
-
-fn resolve_caps(opts: Options, manifest_caps: List[String]) -> sandbox.CapabilitySet =
-  if opts.profile != "" then
-    match opts.profile {
-      "ai-agent" => sandbox.profile_ai_agent(),
-      "worker" => sandbox.profile_worker(),
-      "full" => sandbox.profile_full(),
-      _ => sandbox.profile_ai_agent(),
-    }
-  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
-  else sandbox.profile_full()
-
-fn resolve_serve_caps(opts: Options, manifest_caps: List[String]) -> sandbox.CapabilitySet =
-  if opts.profile != "" then
-    match opts.profile {
-      "ai-agent" => sandbox.profile_ai_agent(),
-      "worker" => sandbox.profile_worker(),
-      "full" => sandbox.profile_full(),
-      _ => sandbox.profile_ai_agent(),
-    }
-  else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
-  else sandbox.profile_ai_agent()
 
 effect fn resolve_env(opts: Options) -> Result[List[interp.EnvVar], String] = {
   let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
@@ -245,7 +183,7 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
       m
     }
   let wasm = binary.load(opts.path)!
-  let caps = resolve_serve_caps(opts, m.capabilities)
+  let caps = util.resolve_serve_caps(opts.profile, m.capabilities)
   let env = resolve_env(opts)!
   let config = build_config(wasm, opts, caps, env)
   let server = mcp.new_server(m, config)
@@ -254,7 +192,7 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
 
 effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
   let wasm = binary.load(opts.path)!
-  let caps = resolve_caps(opts, [])
+  let caps = util.resolve_caps(opts.profile, [])
   let env = resolve_env(opts)!
   let config = build_config(wasm, opts, caps, env)
   let result = dispatch.run_instance(config)!

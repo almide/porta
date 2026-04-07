@@ -1,0 +1,53 @@
+import json
+import self.manifest
+
+// --- parse_manifest ---
+
+test "parse_manifest: full manifest" {
+  let v = json.parse("{\"schema_version\":\"1.0\",\"name\":\"test-agent\",\"version\":\"0.2.0\",\"description\":\"A test agent\",\"entry\":\"main\",\"capabilities\":[\"io\",\"fs\"],\"tools\":[{\"name\":\"greet\",\"description\":\"Say hello\",\"inputSchema\":{}}],\"wasi_imports\":[\"fd_write\"]}")!
+  let m = manifest.parse_manifest(v)!
+  assert_eq(m.schema_version, "1.0")
+  assert_eq(m.name, "test-agent")
+  assert_eq(m.version, "0.2.0")
+  assert_eq(m.description, "A test agent")
+  assert_eq(m.entry, "main")
+  assert_eq(list.len(m.capabilities), 2)
+  assert_eq(list.len(m.tools), 1)
+  assert_eq(list.len(m.wasi_imports), 1)
+}
+
+test "parse_manifest: defaults for missing fields" {
+  let v = json.parse("{}")!
+  let m = manifest.parse_manifest(v)!
+  assert_eq(m.schema_version, "1.0")
+  assert_eq(m.name, "unknown")
+  assert_eq(m.version, "0.0.0")
+  assert_eq(m.description, "")
+  assert_eq(m.entry, "_start")
+  assert_eq(list.len(m.capabilities), 0)
+  assert_eq(list.len(m.tools), 0)
+}
+
+test "parse_manifest: tool parsing" {
+  let v = json.parse("{\"tools\":[{\"name\":\"add\",\"description\":\"Add numbers\",\"inputSchema\":{\"type\":\"object\"}},{\"name\":\"sub\",\"description\":\"Subtract\"}]}")!
+  let m = manifest.parse_manifest(v)!
+  assert_eq(list.len(m.tools), 2)
+  let t0 = list.get(m.tools, 0) ?? {name: "", description: "", input_schema: json.null()}
+  let t1 = list.get(m.tools, 1) ?? {name: "", description: "", input_schema: json.null()}
+  assert_eq(t0.name, "add")
+  assert_eq(t0.description, "Add numbers")
+  assert_eq(t1.name, "sub")
+  assert_eq(t1.description, "Subtract")
+}
+
+test "parse_manifest: capabilities list" {
+  let v = json.parse("{\"capabilities\":[\"io\",\"fs\",\"clock\"]}")!
+  let m = manifest.parse_manifest(v)!
+  assert_eq(m.capabilities, ["io", "fs", "clock"])
+}
+
+test "parse_manifest: wasi_imports list" {
+  let v = json.parse("{\"wasi_imports\":[\"fd_write\",\"fd_read\",\"proc_exit\"]}")!
+  let m = manifest.parse_manifest(v)!
+  assert_eq(m.wasi_imports, ["fd_write", "fd_read", "proc_exit"])
+}

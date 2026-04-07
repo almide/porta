@@ -1,0 +1,117 @@
+import self.util
+import self.sandbox
+import self.wasm.interp
+
+// --- parse_int ---
+
+test "parse_int: positive numbers" {
+  assert_eq(util.parse_int("0"), 0)
+  assert_eq(util.parse_int("1"), 1)
+  assert_eq(util.parse_int("42"), 42)
+  assert_eq(util.parse_int("1000"), 1000)
+  assert_eq(util.parse_int("999999"), 999999)
+}
+
+test "parse_int: empty string" {
+  assert_eq(util.parse_int(""), 0)
+}
+
+test "parse_int: stops at non-digit" {
+  assert_eq(util.parse_int("123abc"), 123)
+  assert_eq(util.parse_int("0x10"), 0)
+}
+
+// --- split_at_eq ---
+
+test "split_at_eq: basic key=value" {
+  let result = util.split_at_eq("FOO=bar")
+  assert_eq(result, some({key: "FOO", val: "bar"}))
+}
+
+test "split_at_eq: value with equals" {
+  let result = util.split_at_eq("KEY=a=b=c")
+  assert_eq(result, some({key: "KEY", val: "a=b=c"}))
+}
+
+test "split_at_eq: empty value" {
+  let result = util.split_at_eq("KEY=")
+  assert_eq(result, some({key: "KEY", val: ""}))
+}
+
+test "split_at_eq: no equals" {
+  assert_eq(util.split_at_eq("noequals"), none)
+}
+
+test "split_at_eq: empty string" {
+  assert_eq(util.split_at_eq(""), none)
+}
+
+// --- split_lines ---
+
+test "split_lines: multiple lines" {
+  let bytes = string.to_bytes("line1\nline2\nline3")
+  let lines = util.split_lines(bytes, 0, 0, [])
+  assert_eq(lines, ["line1", "line2", "line3"])
+}
+
+test "split_lines: trailing newline" {
+  let bytes = string.to_bytes("a\nb\n")
+  let lines = util.split_lines(bytes, 0, 0, [])
+  assert_eq(lines, ["a", "b"])
+}
+
+test "split_lines: single line no newline" {
+  let bytes = string.to_bytes("hello")
+  let lines = util.split_lines(bytes, 0, 0, [])
+  assert_eq(lines, ["hello"])
+}
+
+test "split_lines: empty string" {
+  let bytes = string.to_bytes("")
+  let lines = util.split_lines(bytes, 0, 0, [])
+  assert_eq(lines, [])
+}
+
+test "split_lines: empty lines preserved" {
+  let bytes = string.to_bytes("a\n\nb")
+  let lines = util.split_lines(bytes, 0, 0, [])
+  assert_eq(lines, ["a", "", "b"])
+}
+
+// --- resolve_caps ---
+
+test "resolve_caps: profile takes precedence" {
+  let caps = util.resolve_caps("ai-agent", ["io", "fs", "clock"])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(not sandbox.has_capability(caps, sandbox.CapFS))
+}
+
+test "resolve_caps: manifest caps when no profile" {
+  let caps = util.resolve_caps("", ["io", "clock"])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapClock))
+  assert(not sandbox.has_capability(caps, sandbox.CapFS))
+}
+
+test "resolve_caps: full profile when nothing specified" {
+  let caps = util.resolve_caps("", [])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapFS))
+  assert(sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+// --- resolve_serve_caps ---
+
+test "resolve_serve_caps: defaults to ai-agent" {
+  let caps = util.resolve_serve_caps("", [])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapProcess))
+  assert(not sandbox.has_capability(caps, sandbox.CapFS))
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "resolve_serve_caps: profile override" {
+  let caps = util.resolve_serve_caps("full", [])
+  assert(sandbox.has_capability(caps, sandbox.CapFS))
+  assert(sandbox.has_capability(caps, sandbox.CapNet))
+}
