@@ -148,6 +148,15 @@ effect fn main() -> Result[Unit, String] = {
       }
       else validate(opts)
     },
+    "build" => {
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
+        println("usage: porta build <agent.wasm> [--manifest <path>]")
+        println("  run 'porta help build' for options")
+        ok(())
+      }
+      else build_package(opts)
+    },
     "help" => {
       let topic = list.get(args, 2) ?? ""
       print_help(topic)
@@ -210,6 +219,43 @@ effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
   if string.len(result.stdout) > 0 then println(result.stdout) else ()
   if string.len(result.stderr) > 0 then eprintln(result.stderr) else ()
   eprintln(observability.format_summary(result.metrics))
+  ok(())
+}
+
+effect fn build_package(opts: Options) -> Result[Unit, String] = {
+  let wasm = binary.load(opts.path)!
+  let output_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+
+  let export_tools = wasm.exports
+    |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
+    |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
+    |> list.map((exp) => json.object([
+      ("name", json.from_string(exp.name)),
+      ("description", json.from_string(exp.name)),
+      ("inputSchema", json.object([("type", json.from_string("object"))])),
+    ]))
+
+  let wasi_imports = wasm.imports
+    |> list.filter((imp) => imp.mod_name == "wasi_snapshot_preview1")
+    |> list.map((imp) => json.from_string(imp.name))
+
+  let manifest_json = json.object([
+    ("schema_version", json.from_string("1.0")),
+    ("name", json.from_string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
+    ("version", json.from_string("0.1.0")),
+    ("description", json.from_string("")),
+    ("entry", json.from_string("_start")),
+    ("capabilities", json.array([])),
+    ("tools", json.array(export_tools)),
+    ("wasi_imports", json.array(wasi_imports)),
+  ])
+
+  let content = json.stringify(manifest_json)
+  fs.write(output_path, content)!
+  println("Built ${output_path}")
+  println("  Tools: ${int.to_string(list.len(export_tools))}")
+  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
   ok(())
 }
 
@@ -336,12 +382,21 @@ fn print_help(topic: String) -> Unit =
       println("  --manifest <path>       Path to manifest.json")
       println("  --profile <name>        Capability profile: ai-agent, worker, full")
     },
+    "build" => {
+      println("porta build <agent.wasm> [options]")
+      println("")
+      println("Generate manifest.json from WASM binary.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Output path (default: <agent>.manifest.json)")
+    },
     _ => {
       println("porta — WASM agent MCP bridge")
       println("")
       println("usage:")
       println("  porta run <agent.wasm>        Execute WASM binary")
       println("  porta serve <agent.wasm>      Start MCP server")
+      println("  porta build <agent.wasm>      Generate manifest.json")
       println("  porta inspect <agent.wasm>    Show module info")
       println("  porta validate <agent.wasm>   Validate WASI imports")
       println("  porta version                 Show version")
