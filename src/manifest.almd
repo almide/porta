@@ -42,7 +42,7 @@ effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
     |> list.filter_map((w) => json.as_string(w))
 
   let tools_arr = json.get_array(v, "tools") ?? []
-  let tools = tools_arr |> list.map((t) => parse_tool(t))
+  let tools = tools_arr |> list.map(parse_tool)
 
   ok({
     schema_version: schema_version,

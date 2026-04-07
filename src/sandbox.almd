@@ -33,7 +33,7 @@ fn parse_capability(s: String) -> Option[Capability] =
   }
 
 fn from_manifest(caps: List[String]) -> CapabilitySet = {
-  caps: caps |> list.filter_map((s) => parse_capability(s)),
+  caps: caps |> list.filter_map(parse_capability),
 }
 
 // --- Capability matching ---
