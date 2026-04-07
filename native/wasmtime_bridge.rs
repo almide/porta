@@ -142,21 +142,31 @@ pub fn wt_run(handle: i64) -> i64 {
     }
 
     let mut linker = Linker::new(&inst.engine);
-    if p1::add_to_linker_sync(&mut linker, |ctx| ctx).is_err() {
+    if let Err(e) = p1::add_to_linker_sync(&mut linker, |ctx| ctx) {
+        inst.stderr_result = format!("linker setup failed: {}", e);
+        inst.exit_code = -1;
         return -1;
     }
 
     let instance = match linker.instantiate(&mut store, &inst.module) {
         Ok(i) => i,
-        Err(_) => return -1,
+        Err(e) => {
+            inst.stderr_result = format!("instantiation failed: {}", e);
+            inst.exit_code = -1;
+            return -1;
+        }
     };
 
-    let start = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
-        Ok(f) => f,
-        Err(_) => return -1,
+    // Try () -> () first, then () -> i32 (for effect fn main returning Result)
+    let result = if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+        start.call(&mut store, ())
+    } else if let Ok(start) = instance.get_typed_func::<(), (i32,)>(&mut store, "_start") {
+        start.call(&mut store, ()).map(|_| ())
+    } else {
+        inst.stderr_result = "_start function not found".to_string();
+        inst.exit_code = -1;
+        return -1;
     };
-
-    let result = start.call(&mut store, ());
 
     // Read fuel consumed
     if inst.fuel > 0 {
@@ -164,10 +174,10 @@ pub fn wt_run(handle: i64) -> i64 {
         inst.fuel_consumed = inst.fuel.saturating_sub(remaining);
     }
 
-    // Capture stdout/stderr
+    // Capture stdout/stderr (use contents() which clones, avoiding Arc ref count issues)
+    inst.stdout_result = String::from_utf8(stdout_pipe.contents().to_vec()).unwrap_or_default();
+    inst.stderr_result = String::from_utf8(stderr_pipe.contents().to_vec()).unwrap_or_default();
     drop(store);
-    inst.stdout_result = String::from_utf8(stdout_pipe.try_into_inner().unwrap_or_default().to_vec()).unwrap_or_default();
-    inst.stderr_result = String::from_utf8(stderr_pipe.try_into_inner().unwrap_or_default().to_vec()).unwrap_or_default();
 
     match result {
         Ok(()) => { inst.exit_code = 0; 0 }
