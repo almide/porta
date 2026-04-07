@@ -1,0 +1,65 @@
+// Demo MCP agent for porta
+// Reads length-prefixed JSON tool calls from stdin, writes JSON results to stdout.
+
+import io
+import json
+import fs
+
+effect fn main() -> Result[Unit, String] = {
+  // Read 4-byte length prefix (little-endian)
+  let b0 = io.read_byte()
+  let b1 = io.read_byte()
+  let b2 = io.read_byte()
+  let b3 = io.read_byte()
+  let len = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+
+  // Read JSON payload
+  let payload = io.read_n_bytes(len)
+  let cmd = json.parse(string.from_bytes(payload))!
+  let tool = json.get_string(cmd, "tool") ?? ""
+  let args = json.get(cmd, "arguments") ?? json.object([])
+
+  let result = dispatch(tool, args)
+  match result {
+    ok(v) => println(json.stringify(v)),
+    err(e) => println(json.stringify(json.object([("err", json.from_string(e))]))),
+  }
+  ok(())
+}
+
+effect fn dispatch(tool: String, args: Value) -> Result[Value, String] =
+  match tool {
+    "hello" => {
+      let name = json.get_string(args, "name") ?? "world"
+      ok(json.object([("ok", json.from_string("Hello, ${name}!"))]))
+    },
+    "add" => {
+      let a = json.get_int(args, "a") ?? 0
+      let b = json.get_int(args, "b") ?? 0
+      ok(json.object([("ok", json.from_string(int.to_string(a + b)))]))
+    },
+    "read_file" => {
+      let path = json.get_string(args, "path") ?? ""
+      if path == "" then ok(json.object([("err", json.from_string("path is required"))]))
+      else {
+        let content = fs.read_text(path)!
+        ok(json.object([("ok", json.from_string(content))]))
+      }
+    },
+    "list_files" => {
+      let dir = json.get_string(args, "directory") ?? "."
+      let files = fs.list_dir(dir)!
+      let file_list = files |> list.map(json.from_string) |> json.array
+      ok(json.object([("ok", file_list)]))
+    },
+    "write_file" => {
+      let path = json.get_string(args, "path") ?? ""
+      let content = json.get_string(args, "content") ?? ""
+      if path == "" then ok(json.object([("err", json.from_string("path is required"))]))
+      else {
+        fs.write(path, content)!
+        ok(json.object([("ok", json.from_string("wrote ${int.to_string(string.len(content))} bytes to ${path}"))]))
+      }
+    },
+    _ => ok(json.object([("err", json.from_string("unknown tool: ${tool}"))])),
+  }

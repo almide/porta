@@ -12,6 +12,7 @@ struct WasmInstance {
     module: Module,
     stdin_data: Vec<u8>,
     env_vars: Vec<(String, String)>,
+    preopen_dirs: Vec<(String, String)>,
     fuel: u64,
     stdout_result: String,
     stderr_result: String,
@@ -54,6 +55,7 @@ fn wt_create_from_bytes(wasm_bytes: Vec<u8>, fuel: i64) -> i64 {
         module,
         stdin_data: Vec::new(),
         env_vars: Vec::new(),
+        preopen_dirs: Vec::new(),
         fuel: if fuel > 0 { fuel as u64 } else { 0 },
         stdout_result: String::new(),
         stderr_result: String::new(),
@@ -113,6 +115,20 @@ pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> 
     }
 }
 
+/// Add a preopened directory (must be called before wt_run).
+/// host_path: actual path on the host filesystem.
+/// guest_path: path the WASM agent sees (e.g., "." or "/work").
+pub fn wt_preopen_dir(handle: i64, host_path: impl AsRef<str>, guest_path: impl AsRef<str>) -> i64 {
+    let mut instances = INSTANCES.lock().unwrap();
+    match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
+        Some(inst) => {
+            inst.preopen_dirs.push((host_path.as_ref().to_string(), guest_path.as_ref().to_string()));
+            0
+        }
+        None => -1,
+    }
+}
+
 /// Run _start. Returns exit code (0 = success, -1 = error/trap).
 pub fn wt_run(handle: i64) -> i64 {
     let mut instances = INSTANCES.lock().unwrap();
@@ -128,6 +144,13 @@ pub fn wt_run(handle: i64) -> i64 {
     }
     if !inst.stdin_data.is_empty() {
         wasi.stdin(MemoryInputPipe::new(inst.stdin_data.clone()));
+    }
+    for (host, guest) in &inst.preopen_dirs {
+        let _ = wasi.preopened_dir(
+            host, guest,
+            wasmtime_wasi::filesystem::DirPerms::all(),
+            wasmtime_wasi::filesystem::FilePerms::all(),
+        );
     }
     let stdout_pipe = MemoryOutputPipe::new(1024 * 1024);
     let stderr_pipe = MemoryOutputPipe::new(1024 * 1024);
@@ -175,8 +198,8 @@ pub fn wt_run(handle: i64) -> i64 {
     }
 
     // Capture stdout/stderr (use contents() which clones, avoiding Arc ref count issues)
-    inst.stdout_result = String::from_utf8(stdout_pipe.contents().to_vec()).unwrap_or_default();
-    inst.stderr_result = String::from_utf8(stderr_pipe.contents().to_vec()).unwrap_or_default();
+    inst.stdout_result = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+    inst.stderr_result = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
     drop(store);
 
     match result {

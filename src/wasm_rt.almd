@@ -27,5 +27,8 @@ fn wt_get_fuel_consumed(handle: Int) -> Int
 @extern(rs, "wasmtime_bridge", "wt_get_exit_code")
 fn wt_get_exit_code(handle: Int) -> Int
 
+@extern(rs, "wasmtime_bridge", "wt_preopen_dir")
+fn wt_preopen_dir(handle: Int, host_path: String, guest_path: String) -> Int
+
 @extern(rs, "wasmtime_bridge", "wt_destroy")
 fn wt_destroy(handle: Int) -> Int

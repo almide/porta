@@ -81,6 +81,14 @@ fn setup_env(handle: Int, env: List[EnvVar], idx: Int) -> Unit =
     setup_env(handle, env, idx + 1)
   }
 
+fn setup_dirs(handle: Int, dirs: List[String], idx: Int) -> Unit =
+  if idx >= list.len(dirs) then ()
+  else {
+    let dir = list.get(dirs, idx) ?? "."
+    let _ = wasm_rt.wt_preopen_dir(handle, dir, dir)
+    setup_dirs(handle, dirs, idx + 1)
+  }
+
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
@@ -91,6 +99,7 @@ effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: St
   else {
     let env = config.env_vars + config.secrets
     setup_env(h, env, 0)
+    setup_dirs(h, config.preopen_dirs, 0)
     let _ = wasm_rt.wt_set_tool_stdin(h, tool_name, args_json)
     let _ = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
@@ -122,6 +131,7 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
   else {
     let env = config.env_vars + config.secrets
     setup_env(h, env, 0)
+    setup_dirs(h, config.preopen_dirs, 0)
     let _ = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
     let stderr = wasm_rt.wt_get_stderr(h)
