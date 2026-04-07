@@ -1,0 +1,689 @@
+// WASM Instruction Interpreter
+
+import self.wasm.binary
+import self.wasm.memory
+
+// --- Value ---
+
+type WasmVal =
+  | VI32(Int)
+  | VI64(Int)
+  | VF64(Float)
+
+// --- Label ---
+
+type LabelKind = | LabelBlock | LabelLoop | LabelIf
+
+type Label = {
+  kind: LabelKind,
+  arity: Int,
+  body: List[binary.Instr],
+}
+
+// --- Frame ---
+
+type Frame = {
+  locals: List[WasmVal],
+  func_idx: Int,
+  return_arity: Int,
+}
+
+// --- Machine State ---
+
+type Machine = {
+  stack: List[WasmVal],
+  labels: List[Label],
+  frames: List[Frame],
+  mem: memory.MemStore,
+  globals: List[WasmVal],
+  table: List[Int],
+  funcs: List[binary.FuncBody],
+  types: List[binary.FuncType],
+  func_type_indices: List[Int],
+  num_imports: Int,
+  import_names: List[String],
+}
+
+type ExecResult =
+  | Continue(Machine)
+  | Branch(Int, Machine)
+  | ReturnFrom(Machine)
+  | Trap(String)
+
+// --- Stack ---
+
+fn push(m: Machine, v: WasmVal) -> Machine = {...m, stack: [v] + m.stack}
+fn push_i32(m: Machine, v: Int) -> Machine = push(m, VI32(int.band(v, 0xFFFFFFFF)))
+fn push_i64(m: Machine, v: Int) -> Machine = push(m, VI64(v))
+fn push_f64(m: Machine, v: Float) -> Machine = push(m, VF64(v))
+
+fn pop(m: Machine) -> {val: WasmVal, m: Machine} = {
+  let v = list.first(m.stack) ?? VI32(0)
+  {val: v, m: {...m, stack: list.drop(m.stack, 1)}}
+}
+
+fn pop_i32(m: Machine) -> {val: Int, m: Machine} = {
+  let r = pop(m)
+  let v = match r.val { VI32(n) => n, VI64(n) => int.band(n, 0xFFFFFFFF), VF64(_) => 0 }
+  {val: v, m: r.m}
+}
+
+fn pop_i64(m: Machine) -> {val: Int, m: Machine} = {
+  let r = pop(m)
+  let v = match r.val { VI32(n) => n, VI64(n) => n, VF64(_) => 0 }
+  {val: v, m: r.m}
+}
+
+fn pop_f64(m: Machine) -> {val: Float, m: Machine} = {
+  let r = pop(m)
+  let v = match r.val { VI32(n) => int.to_float(n), VI64(n) => int.to_float(n), VF64(f) => f }
+  {val: v, m: r.m}
+}
+
+fn pop_n(m: Machine, n: Int) -> {vals: List[WasmVal], m: Machine} =
+  pop_n_acc(m, n, [])
+
+fn pop_n_acc(m: Machine, remaining: Int, acc: List[WasmVal]) -> {vals: List[WasmVal], m: Machine} =
+  if remaining == 0 then {vals: acc, m: m}
+  else { let r = pop(m) 
+  pop_n_acc(r.m, remaining - 1, acc + [r.val]) }
+
+fn get_local(m: Machine, idx: Int) -> WasmVal = {
+  let frame = list.first(m.frames) ?? {locals: [], func_idx: 0, return_arity: 0}
+  list.get(frame.locals, idx) ?? VI32(0)
+}
+
+fn set_local(m: Machine, idx: Int, val: WasmVal) -> Machine = {
+  let frame = list.first(m.frames) ?? {locals: [], func_idx: 0, return_arity: 0}
+  {...m, frames: [{...frame, locals: list.set(frame.locals, idx, val)}] + list.drop(m.frames, 1)}
+}
+
+fn get_global(m: Machine, idx: Int) -> WasmVal = list.get(m.globals, idx) ?? VI32(0)
+fn set_global(m: Machine, idx: Int, val: WasmVal) -> Machine = {...m, globals: list.set(m.globals, idx, val)}
+
+fn sign_extend_32(v: Int) -> Int =
+  if int.band(v, 0x80000000) != 0 then int.bor(v, int.bshl(-1, 32)) else v
+
+fn zero_val(vt: binary.ValType) -> WasmVal =
+  match vt { binary.I32 => VI32(0), binary.I64 => VI64(0), binary.F64 => VF64(0.0), _ => VI32(0) }
+
+fn block_arity(bt: binary.BlockType) -> Int =
+  match bt { binary.BlockEmpty => 0, binary.BlockVal(_) => 1, binary.BlockFuncType(_) => 1 }
+
+fn exec_binop_i32(m: Machine, op: (Int, Int) -> Int) -> ExecResult = {
+  let b = pop_i32(m) 
+  let a = pop_i32(b.m) 
+  Continue(push_i32(a.m, op(a.val, b.val)))
+}
+fn exec_binop_i64(m: Machine, op: (Int, Int) -> Int) -> ExecResult = {
+  let b = pop_i64(m) 
+  let a = pop_i64(b.m) 
+  Continue(push_i64(a.m, op(a.val, b.val)))
+}
+fn exec_binop_f64(m: Machine, op: (Float, Float) -> Float) -> ExecResult = {
+  let b = pop_f64(m) 
+  let a = pop_f64(b.m) 
+  Continue(push_f64(a.m, op(a.val, b.val)))
+}
+fn exec_cmp_i64(m: Machine, op: (Int, Int) -> Bool) -> ExecResult = {
+  let b = pop_i64(m) 
+  let a = pop_i64(b.m) 
+  Continue(push_i32(a.m, if op(a.val, b.val) then 1 else 0))
+}
+fn exec_cmp_f64(m: Machine, op: (Float, Float) -> Bool) -> ExecResult = {
+  let b = pop_f64(m) 
+  let a = pop_f64(b.m) 
+  Continue(push_i32(a.m, if op(a.val, b.val) then 1 else 0))
+}
+
+// --- WASI state ---
+
+type WasiState = {
+  stdout_buf: String,
+  stderr_buf: String,
+  exit_code: Option[Int],
+}
+
+fn new_wasi_state() -> WasiState = { stdout_buf: "", stderr_buf: "", exit_code: none }
+
+// --- Unary helpers (avoid let-in) ---
+
+fn unop_i32(m: Machine, ws: WasiState, f: (Int) -> Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i32(m)
+  ok({r: Continue(push_i32(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_i64(m: Machine, ws: WasiState, f: (Int) -> Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i64(m)
+  ok({r: Continue(push_i64(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_f64(m: Machine, ws: WasiState, f: (Float) -> Float) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_f64(m)
+  ok({r: Continue(push_f64(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_i32_to_i64(m: Machine, ws: WasiState, f: (Int) -> Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i32(m)
+  ok({r: Continue(push_i64(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_i64_to_i32(m: Machine, ws: WasiState, f: (Int) -> Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i64(m)
+  ok({r: Continue(push_i32(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_i64_to_f64(m: Machine, ws: WasiState, f: (Int) -> Float) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i64(m)
+  ok({r: Continue(push_f64(r.m, f(r.val))), ws: ws})
+}
+
+fn unop_f64_to_i64(m: Machine, ws: WasiState, f: (Float) -> Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_f64(m)
+  ok({r: Continue(push_i64(r.m, f(r.val))), ws: ws})
+}
+
+fn test_i32(m: Machine, ws: WasiState, f: (Int) -> Bool) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i32(m)
+  ok({r: Continue(push_i32(r.m, if f(r.val) then 1 else 0)), ws: ws})
+}
+
+fn test_i64(m: Machine, ws: WasiState, f: (Int) -> Bool) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let r = pop_i64(m)
+  ok({r: Continue(push_i32(r.m, if f(r.val) then 1 else 0)), ws: ws})
+}
+
+// --- Execute Instruction ---
+
+effect fn exec_instr(m: Machine, ws: WasiState, instr: binary.Instr) -> Result[{r: ExecResult, ws: WasiState}, String] =
+  match instr {
+    binary.Unreachable => ok({r: Trap("unreachable"), ws: ws}),
+    binary.Nop => ok({r: Continue(m), ws: ws}),
+    binary.Return => ok({r: ReturnFrom(m), ws: ws}),
+    binary.End => ok({r: Continue(m), ws: ws}),
+    binary.Br(depth) => ok({r: Branch(depth, m), ws: ws}),
+    binary.BrIf(depth) => {
+      let c = pop_i32(m)
+      if c.val != 0 then ok({r: Branch(depth, c.m), ws: ws}) else ok({r: Continue(c.m), ws: ws})
+    },
+    binary.I32Const(v) => ok({r: Continue(push_i32(m, v)), ws: ws}),
+    binary.I64Const(v) => ok({r: Continue(push_i64(m, v)), ws: ws}),
+    binary.F64Const(v) => ok({r: Continue(push_f64(m, v)), ws: ws}),
+    binary.LocalGet(idx) => ok({r: Continue(push(m, get_local(m, idx))), ws: ws}),
+    binary.LocalSet(idx) => {
+      let r = pop(m)
+      ok({r: Continue(set_local(r.m, idx, r.val)), ws: ws})
+    },
+    binary.LocalTee(idx) => {
+      let r = pop(m)
+      ok({r: Continue(push(set_local(r.m, idx, r.val), r.val)), ws: ws})
+    },
+    binary.GlobalGet(idx) => ok({r: Continue(push(m, get_global(m, idx))), ws: ws}),
+    binary.GlobalSet(idx) => {
+      let r = pop(m)
+      ok({r: Continue(set_global(r.m, idx, r.val)), ws: ws})
+    },
+    binary.Drop => {
+      let r = pop(m)
+      ok({r: Continue(r.m), ws: ws})
+    },
+    binary.Select => {
+      let c = pop_i32(m)
+      let v2 = pop(c.m)
+      let v1 = pop(v2.m)
+      if c.val != 0 then ok({r: Continue(push(v1.m, v1.val)), ws: ws})
+      else ok({r: Continue(push(v1.m, v2.val)), ws: ws})
+    },
+    // i32
+    binary.I32Eqz => test_i32(m, ws, (v) => v == 0),
+    binary.I32Eq => ok({r: exec_binop_i32(m, (a, b) => if a == b then 1 else 0), ws: ws}),
+    binary.I32Ne => ok({r: exec_binop_i32(m, (a, b) => if a != b then 1 else 0), ws: ws}),
+    binary.I32LtS => ok({r: exec_binop_i32(m, (a, b) => if sign_extend_32(a) < sign_extend_32(b) then 1 else 0), ws: ws}),
+    binary.I32LtU => ok({r: exec_binop_i32(m, (a, b) => if a < b then 1 else 0), ws: ws}),
+    binary.I32GtS => ok({r: exec_binop_i32(m, (a, b) => if sign_extend_32(a) > sign_extend_32(b) then 1 else 0), ws: ws}),
+    binary.I32GtU => ok({r: exec_binop_i32(m, (a, b) => if a > b then 1 else 0), ws: ws}),
+    binary.I32LeS => ok({r: exec_binop_i32(m, (a, b) => if sign_extend_32(a) <= sign_extend_32(b) then 1 else 0), ws: ws}),
+    binary.I32LeU => ok({r: exec_binop_i32(m, (a, b) => if a <= b then 1 else 0), ws: ws}),
+    binary.I32GeS => ok({r: exec_binop_i32(m, (a, b) => if sign_extend_32(a) >= sign_extend_32(b) then 1 else 0), ws: ws}),
+    binary.I32GeU => ok({r: exec_binop_i32(m, (a, b) => if a >= b then 1 else 0), ws: ws}),
+    binary.I32Add => ok({r: exec_binop_i32(m, (a, b) => a + b), ws: ws}),
+    binary.I32Sub => ok({r: exec_binop_i32(m, (a, b) => a - b), ws: ws}),
+    binary.I32Mul => ok({r: exec_binop_i32(m, (a, b) => a * b), ws: ws}),
+    binary.I32DivU => ok({r: exec_binop_i32(m, (a, b) => if b == 0 then 0 else a / b), ws: ws}),
+    binary.I32RemU => ok({r: exec_binop_i32(m, (a, b) => if b == 0 then 0 else a - (a / b) * b), ws: ws}),
+    binary.I32And => ok({r: exec_binop_i32(m, (a, b) => int.band(a, b)), ws: ws}),
+    binary.I32Or => ok({r: exec_binop_i32(m, (a, b) => int.bor(a, b)), ws: ws}),
+    binary.I32Xor => ok({r: exec_binop_i32(m, (a, b) => int.bxor(a, b)), ws: ws}),
+    binary.I32Shl => ok({r: exec_binop_i32(m, (a, b) => int.bshl(a, int.band(b, 31))), ws: ws}),
+    binary.I32ShrU => ok({r: exec_binop_i32(m, (a, b) => int.bshr(a, int.band(b, 31))), ws: ws}),
+    // i64
+    binary.I64Eqz => test_i64(m, ws, (v) => v == 0),
+    binary.I64Eq => ok({r: exec_cmp_i64(m, (a, b) => a == b), ws: ws}),
+    binary.I64Ne => ok({r: exec_cmp_i64(m, (a, b) => a != b), ws: ws}),
+    binary.I64LtS => ok({r: exec_cmp_i64(m, (a, b) => a < b), ws: ws}),
+    binary.I64GtS => ok({r: exec_cmp_i64(m, (a, b) => a > b), ws: ws}),
+    binary.I64LeS => ok({r: exec_cmp_i64(m, (a, b) => a <= b), ws: ws}),
+    binary.I64GeS => ok({r: exec_cmp_i64(m, (a, b) => a >= b), ws: ws}),
+    binary.I64GeU => ok({r: exec_cmp_i64(m, (a, b) => a >= b), ws: ws}),
+    binary.I64Add => ok({r: exec_binop_i64(m, (a, b) => a + b), ws: ws}),
+    binary.I64Sub => ok({r: exec_binop_i64(m, (a, b) => a - b), ws: ws}),
+    binary.I64Mul => ok({r: exec_binop_i64(m, (a, b) => a * b), ws: ws}),
+    binary.I64DivS => ok({r: exec_binop_i64(m, (a, b) => if b == 0 then 0 else a / b), ws: ws}),
+    binary.I64DivU => ok({r: exec_binop_i64(m, (a, b) => if b == 0 then 0 else a / b), ws: ws}),
+    binary.I64RemS => ok({r: exec_binop_i64(m, (a, b) => if b == 0 then 0 else a - (a / b) * b), ws: ws}),
+    binary.I64RemU => ok({r: exec_binop_i64(m, (a, b) => if b == 0 then 0 else a - (a / b) * b), ws: ws}),
+    binary.I64And => ok({r: exec_binop_i64(m, (a, b) => int.band(a, b)), ws: ws}),
+    binary.I64Or => ok({r: exec_binop_i64(m, (a, b) => int.bor(a, b)), ws: ws}),
+    binary.I64Xor => ok({r: exec_binop_i64(m, (a, b) => int.bxor(a, b)), ws: ws}),
+    binary.I64Shl => ok({r: exec_binop_i64(m, (a, b) => int.bshl(a, int.band(b, 63))), ws: ws}),
+    binary.I64ShrS => ok({r: exec_binop_i64(m, (a, b) => int.bshr(a, int.band(b, 63))), ws: ws}),
+    binary.I64ShrU => ok({r: exec_binop_i64(m, (a, b) => int.bshr(a, int.band(b, 63))), ws: ws}),
+    // f64
+    binary.F64Eq => ok({r: exec_cmp_f64(m, (a, b) => a == b), ws: ws}),
+    binary.F64Ne => ok({r: exec_cmp_f64(m, (a, b) => a != b), ws: ws}),
+    binary.F64Lt => ok({r: exec_cmp_f64(m, (a, b) => a < b), ws: ws}),
+    binary.F64Gt => ok({r: exec_cmp_f64(m, (a, b) => a > b), ws: ws}),
+    binary.F64Le => ok({r: exec_cmp_f64(m, (a, b) => a <= b), ws: ws}),
+    binary.F64Ge => ok({r: exec_cmp_f64(m, (a, b) => a >= b), ws: ws}),
+    binary.F64Add => ok({r: exec_binop_f64(m, (a, b) => a + b), ws: ws}),
+    binary.F64Sub => ok({r: exec_binop_f64(m, (a, b) => a - b), ws: ws}),
+    binary.F64Mul => ok({r: exec_binop_f64(m, (a, b) => a * b), ws: ws}),
+    binary.F64Div => ok({r: exec_binop_f64(m, (a, b) => a / b), ws: ws}),
+    binary.F64Abs => unop_f64(m, ws, (v) => float.abs(v)),
+    binary.F64Neg => unop_f64(m, ws, (v) => 0.0 - v),
+    binary.F64Sqrt => unop_f64(m, ws, (v) => float.sqrt(v)),
+    binary.F64Floor => unop_f64(m, ws, (v) => float.floor(v)),
+    binary.F64Ceil => unop_f64(m, ws, (v) => float.ceil(v)),
+    binary.F64Nearest => unop_f64(m, ws, (v) => float.round(v)),
+    binary.F64Copysign => {
+      let b = pop_f64(m)
+      let a = pop_f64(b.m)
+      ok({r: Continue(push_f64(a.m, if b.val < 0.0 then 0.0 - float.abs(a.val) else float.abs(a.val))), ws: ws})
+    },
+    // Conversion
+    binary.I32WrapI64 => unop_i64_to_i32(m, ws, (v) => int.band(v, 0xFFFFFFFF)),
+    binary.I64ExtendI32S => unop_i32_to_i64(m, ws, (v) => sign_extend_32(v)),
+    binary.I64ExtendI32U => unop_i32_to_i64(m, ws, (v) => int.band(v, 0xFFFFFFFF)),
+    binary.F64ConvertI64S => unop_i64_to_f64(m, ws, (v) => int.to_float(v)),
+    binary.F64ConvertI64U => unop_i64_to_f64(m, ws, (v) => int.to_float(v)),
+    binary.I64TruncF64S => unop_f64_to_i64(m, ws, (v) => float.to_int(v)),
+    binary.F64ReinterpretI64 => unop_i64_to_f64(m, ws, (v) => int.bits_to_float(v)),
+    binary.I64ReinterpretF64 => unop_f64_to_i64(m, ws, (v) => float.to_bits(v)),
+    // Memory load
+    binary.I32Load(ma) => exec_mem_load_i32(m, ws, ma),
+    binary.I64Load(ma) => exec_mem_load_i64(m, ws, ma),
+    binary.F64Load(ma) => exec_mem_load_f64(m, ws, ma),
+    binary.I32Load8U(ma) => exec_mem_load_u8(m, ws, ma),
+    binary.I32Load16U(ma) => exec_mem_load_u16(m, ws, ma),
+    // Memory store
+    binary.I32Store(ma) => exec_mem_store_i32(m, ws, ma),
+    binary.I64Store(ma) => exec_mem_store_i64(m, ws, ma),
+    binary.F64Store(ma) => exec_mem_store_f64(m, ws, ma),
+    binary.I32Store8(ma) => exec_mem_store_u8(m, ws, ma),
+    // Memory mgmt
+    binary.MemorySize(idx) => ok({r: Continue(push_i32(m, memory.ms_size(m.mem, idx))), ws: ws}),
+    binary.MemoryGrow(idx) => {
+      let delta = pop_i32(m)
+      let gr = memory.ms_grow(m.mem, idx, delta.val)
+      ok({r: Continue(push_i32({...delta.m, mem: gr.ms}, gr.prev_size)), ws: ws})
+    },
+    binary.MemoryFill(idx) => {
+      let n = pop_i32(m)
+      let val = pop_i32(n.m)
+      let dest = pop_i32(val.m)
+      let nm = memory.ms_fill(m.mem, idx, dest.val, val.val, n.val)!
+      ok({r: Continue({...dest.m, mem: nm}), ws: ws})
+    },
+    binary.MemoryCopy(dst, src) => {
+      let n = pop_i32(m)
+      let s = pop_i32(n.m)
+      let d = pop_i32(s.m)
+      let nm = if dst == src then memory.ms_copy_same(m.mem, dst, d.val, s.val, n.val)!
+        else memory.ms_copy_cross(m.mem, dst, src, d.val, s.val, n.val)!
+      ok({r: Continue({...d.m, mem: nm}), ws: ws})
+    },
+    // Block / Loop / If
+    binary.Block(bt, body) => exec_block(m, ws, LabelBlock, bt, body),
+    binary.Loop(bt, body) => exec_block(m, ws, LabelLoop, bt, body),
+    binary.If(bt, then_body, else_body) => {
+      let cond = pop_i32(m)
+      if cond.val != 0 then exec_block(cond.m, ws, LabelIf, bt, then_body)
+      else exec_block(cond.m, ws, LabelIf, bt, else_body)
+    },
+    // Calls
+    binary.Call(idx) => exec_call(m, ws, idx),
+    binary.ReturnCall(idx) => exec_call(m, ws, idx),
+    binary.CallIndirect(_ti, _tab) => {
+      let ti = pop_i32(m)
+      exec_call(ti.m, ws, list.get(m.table, ti.val) ?? 0)
+    },
+    binary.ReturnCallIndirect(_ti, _tab) => {
+      let ti = pop_i32(m)
+      exec_call(ti.m, ws, list.get(m.table, ti.val) ?? 0)
+    },
+    // SIMD stubs
+    binary.V128Load(_) => ok({r: Continue(m), ws: ws}),
+    binary.V128Store(_) => ok({r: Continue(m), ws: ws}),
+    binary.F64x2Splat => ok({r: Continue(m), ws: ws}),
+    binary.F64x2Mul => ok({r: Continue(m), ws: ws}),
+    binary.F64x2Add => ok({r: Continue(m), ws: ws}),
+    _ => ok({r: Trap("unimplemented"), ws: ws}),
+  }
+
+// --- Memory load/store helpers ---
+
+effect fn exec_mem_load_i32(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let a = pop_i32(m)
+  let v = memory.ms_load_i32(m.mem, ma.mem_idx, a.val + ma.offset)!
+  ok({r: Continue(push_i32(a.m, v)), ws: ws})
+}
+
+effect fn exec_mem_load_i64(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let a = pop_i32(m)
+  let v = memory.ms_load_i64(m.mem, ma.mem_idx, a.val + ma.offset)!
+  ok({r: Continue(push_i64(a.m, v)), ws: ws})
+}
+
+effect fn exec_mem_load_f64(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let a = pop_i32(m)
+  let v = memory.ms_load_f64(m.mem, ma.mem_idx, a.val + ma.offset)!
+  ok({r: Continue(push_f64(a.m, v)), ws: ws})
+}
+
+effect fn exec_mem_load_u8(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let a = pop_i32(m)
+  let v = memory.ms_load_u8(m.mem, ma.mem_idx, a.val + ma.offset)!
+  ok({r: Continue(push_i32(a.m, v)), ws: ws})
+}
+
+effect fn exec_mem_load_u16(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let a = pop_i32(m)
+  let v = memory.ms_load_u16(m.mem, ma.mem_idx, a.val + ma.offset)!
+  ok({r: Continue(push_i32(a.m, v)), ws: ws})
+}
+
+effect fn exec_mem_store_i32(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let v = pop_i32(m)
+  let a = pop_i32(v.m)
+  let nm = memory.ms_store_i32(m.mem, ma.mem_idx, a.val + ma.offset, v.val)!
+  ok({r: Continue({...a.m, mem: nm}), ws: ws})
+}
+
+effect fn exec_mem_store_i64(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let v = pop_i64(m)
+  let a = pop_i32(v.m)
+  let nm = memory.ms_store_i64(m.mem, ma.mem_idx, a.val + ma.offset, v.val)!
+  ok({r: Continue({...a.m, mem: nm}), ws: ws})
+}
+
+effect fn exec_mem_store_f64(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let v = pop_f64(m)
+  let a = pop_i32(v.m)
+  let nm = memory.ms_store_f64(m.mem, ma.mem_idx, a.val + ma.offset, v.val)!
+  ok({r: Continue({...a.m, mem: nm}), ws: ws})
+}
+
+effect fn exec_mem_store_u8(m: Machine, ws: WasiState, ma: binary.MemArg) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let v = pop_i32(m)
+  let a = pop_i32(v.m)
+  let nm = memory.ms_store_u8(m.mem, ma.mem_idx, a.val + ma.offset, v.val)!
+  ok({r: Continue({...a.m, mem: nm}), ws: ws})
+}
+
+// --- Block / Instrs / Call ---
+
+effect fn exec_block(m: Machine, ws: WasiState, kind: LabelKind, bt: binary.BlockType, body: List[binary.Instr]) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let label: Label = {kind: kind, arity: block_arity(bt), body: body}
+  let m2 = {...m, labels: [label] + m.labels}
+  let result = exec_instrs(m2, ws, body)!
+  match result.r {
+    Continue(m3) => ok({r: Continue({...m3, labels: list.drop(m3.labels, 1)}), ws: result.ws}),
+    Branch(0, m3) => match kind {
+      LabelLoop => exec_block({...m3, labels: list.drop(m3.labels, 1)}, result.ws, kind, bt, body),
+      _ => ok({r: Continue({...m3, labels: list.drop(m3.labels, 1)}), ws: result.ws}),
+    },
+    Branch(depth, m3) => ok({r: Branch(depth - 1, {...m3, labels: list.drop(m3.labels, 1)}), ws: result.ws}),
+    ReturnFrom(m3) => ok({r: ReturnFrom(m3), ws: result.ws}),
+    Trap(msg) => ok({r: Trap(msg), ws: result.ws}),
+  }
+}
+
+effect fn exec_instrs(m: Machine, ws: WasiState, instrs: List[binary.Instr]) -> Result[{r: ExecResult, ws: WasiState}, String] =
+  exec_instrs_acc(m, ws, instrs, 0)
+
+effect fn exec_instrs_acc(m: Machine, ws: WasiState, instrs: List[binary.Instr], idx: Int) -> Result[{r: ExecResult, ws: WasiState}, String] =
+  if idx >= list.len(instrs) then ok({r: Continue(m), ws: ws})
+  else {
+    guard idx < list.len(instrs) else ok({r: Continue(m), ws: ws})
+    let instr = list.get(instrs, idx) ?? Unreachable
+    let result = exec_instr(m, ws, instr)!
+    match result.r {
+      Continue(m2) => exec_instrs_acc(m2, result.ws, instrs, idx + 1),
+      _ => ok(result),
+    }
+  }
+
+effect fn exec_call(m: Machine, ws: WasiState, func_idx: Int) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let local_idx = func_idx - m.num_imports
+  if local_idx < 0 then exec_wasi(m, ws, list.get(m.import_names, func_idx) ?? "")
+  else {
+    let body = list.get(m.funcs, local_idx) ?? {locals: [], code: []}
+    let type_idx = list.get(m.func_type_indices, local_idx) ?? 0
+    let ftype = list.get(m.types, type_idx) ?? {params: [], returns: []}
+    let args_r = pop_n(m, list.len(ftype.params))
+    let declared = body.locals
+      |> list.flat_map((loc) => list.repeat(zero_val(loc.val_type), loc.count))
+    let frame: Frame = {locals: args_r.vals + declared, func_idx: func_idx, return_arity: list.len(ftype.returns)}
+    let m2 = {...args_r.m, frames: [frame] + args_r.m.frames}
+    let result = exec_instrs(m2, ws, body.code)!
+    let m3 = match result.r {
+      Continue(mx) => mx,
+      ReturnFrom(mx) => mx,
+      Branch(_, mx) => mx,
+      Trap(msg) => err(msg)!,
+    }
+    let ret_vals = list.take(m3.stack, frame.return_arity)
+    let m4 = {...m3, stack: ret_vals + args_r.m.stack, frames: list.drop(m3.frames, 1)}
+    ok({r: Continue(m4), ws: result.ws})
+  }
+}
+
+// --- WASI Dispatch ---
+
+effect fn exec_wasi(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecResult, ws: WasiState}, String] =
+  match name {
+    "fd_write" => wasi_fd_write(m, ws),
+    "proc_exit" => {
+      let code = pop_i32(m)
+      ok({r: Continue(code.m), ws: {...ws, exit_code: some(code.val)}})
+    },
+    "clock_time_get" => {
+      let tp = pop_i32(m)
+      let _p = pop_i64(tp.m)
+      let _id = pop_i32(_p.m)
+      let nm = memory.ms_store_i64(_id.m.mem, 0, tp.val, 0)!
+      ok({r: Continue(push_i32({..._id.m, mem: nm}, 0)), ws: ws})
+    },
+    "random_get" => {
+      let len = pop_i32(m)
+      let buf = pop_i32(len.m)
+      let nm = memory.ms_fill(buf.m.mem, 0, buf.val, 0, len.val)!
+      ok({r: Continue(push_i32({...buf.m, mem: nm}, 0)), ws: ws})
+    },
+    "fd_close" => {
+      let _fd = pop_i32(m)
+      ok({r: Continue(push_i32(_fd.m, 0)), ws: ws})
+    },
+    "fd_seek" => {
+      let np = pop_i32(m)
+      let _w = pop_i32(np.m)
+      let _o = pop_i64(_w.m)
+      let _fd = pop_i32(_o.m)
+      let nm = memory.ms_store_i64(_fd.m.mem, 0, np.val, 0)!
+      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
+    },
+    "fd_read" => {
+      let nrp = pop_i32(m)
+      let _ic = pop_i32(nrp.m)
+      let _iv = pop_i32(_ic.m)
+      let _fd = pop_i32(_iv.m)
+      let nm = memory.ms_store_i32(_fd.m.mem, 0, nrp.val, 0)!
+      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
+    },
+    "path_open" => {
+      let fp = pop_i32(m)
+      let _ff = pop_i32(fp.m)
+      let _ri = pop_i64(_ff.m)
+      let _rb = pop_i64(_ri.m)
+      let _of = pop_i32(_rb.m)
+      let _pl = pop_i32(_of.m)
+      let _pp = pop_i32(_pl.m)
+      let _df = pop_i32(_pp.m)
+      let _dd = pop_i32(_df.m)
+      ok({r: Continue(push_i32(_dd.m, 44)), ws: ws})
+    },
+    "fd_filestat_get" => {
+      let _bp = pop_i32(m)
+      let _fd = pop_i32(_bp.m)
+      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
+    },
+    "path_filestat_get" => {
+      let _bp = pop_i32(m)
+      let _pl = pop_i32(_bp.m)
+      let _pp = pop_i32(_pl.m)
+      let _fl = pop_i32(_pp.m)
+      let _dd = pop_i32(_fl.m)
+      ok({r: Continue(push_i32(_dd.m, 44)), ws: ws})
+    },
+    "path_create_directory" => {
+      let _pl = pop_i32(m)
+      let _pp = pop_i32(_pl.m)
+      let _dd = pop_i32(_pp.m)
+      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
+    },
+    "path_rename" => {
+      let _a = pop_i32(m)
+      let _b = pop_i32(_a.m)
+      let _c = pop_i32(_b.m)
+      let _d = pop_i32(_c.m)
+      let _e = pop_i32(_d.m)
+      let _f = pop_i32(_e.m)
+      ok({r: Continue(push_i32(_f.m, 0)), ws: ws})
+    },
+    "path_unlink_file" => {
+      let _pl = pop_i32(m)
+      let _pp = pop_i32(_pl.m)
+      let _dd = pop_i32(_pp.m)
+      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
+    },
+    "path_remove_directory" => {
+      let _pl = pop_i32(m)
+      let _pp = pop_i32(_pl.m)
+      let _dd = pop_i32(_pp.m)
+      ok({r: Continue(push_i32(_dd.m, 0)), ws: ws})
+    },
+    "fd_readdir" => {
+      let bup = pop_i32(m)
+      let _ck = pop_i64(bup.m)
+      let _bl = pop_i32(_ck.m)
+      let _bf = pop_i32(_bl.m)
+      let _fd = pop_i32(_bf.m)
+      let nm = memory.ms_store_i32(_fd.m.mem, 0, bup.val, 0)!
+      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
+    },
+    _ => ok({r: Trap("unknown WASI: ${name}"), ws: ws}),
+  }
+
+effect fn wasi_fd_write(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let nwp = pop_i32(m)
+  let ioc = pop_i32(nwp.m)
+  let iov = pop_i32(ioc.m)
+  let fd = pop_i32(iov.m)
+  let result = read_iovecs(fd.m.mem, iov.val, ioc.val, "", 0)!
+  let ws2 = if fd.val == 1 then {...ws, stdout_buf: ws.stdout_buf + result.data}
+    else if fd.val == 2 then {...ws, stderr_buf: ws.stderr_buf + result.data}
+    else ws
+  let nm = memory.ms_store_i32(fd.m.mem, 0, nwp.val, result.total_bytes)!
+  ok({r: Continue(push_i32({...fd.m, mem: nm}, 0)), ws: ws2})
+}
+
+effect fn read_iovecs(ms: memory.MemStore, ptr: Int, remaining: Int, acc: String, total: Int) -> Result[{data: String, total_bytes: Int}, String] =
+  if remaining == 0 then ok({data: acc, total_bytes: total})
+  else {
+    let bp = memory.ms_load_i32(ms, 0, ptr)!
+    let bl = memory.ms_load_i32(ms, 0, ptr + 4)!
+    let bytes = read_mem_bytes(ms, bp, bl, [])!
+    read_iovecs(ms, ptr + 8, remaining - 1, acc + string.from_bytes(bytes), total + bl)
+  }
+
+effect fn read_mem_bytes(ms: memory.MemStore, ptr: Int, remaining: Int, acc: List[Int]) -> Result[List[Int], String] =
+  if remaining == 0 then ok(acc)
+  else {
+    let b = memory.ms_load_u8(ms, 0, ptr)!
+    read_mem_bytes(ms, ptr + 1, remaining - 1, acc + [b])
+  }
+
+// --- Init & Run ---
+
+effect fn init_module(wasm: binary.WasmModule) -> Result[Machine, String] = {
+  let mem_defs = wasm.memories |> list.map((lim) => {min: lim.min, max: lim.max})
+  let ms = memory.new_mem_store(mem_defs)
+  let ms2 = init_data_segs(ms, wasm.data_segments, 0)!
+  let globals = wasm.globals |> list.map((g) =>
+    match list.first(g.init) {
+      some(binary.I32Const(v)) => VI32(v),
+      some(binary.I64Const(v)) => VI64(v),
+      some(binary.F64Const(v)) => VF64(v),
+      _ => VI32(0),
+    })
+  let table = init_table(list.repeat(0, int.max(1, list.len(wasm.elements) * 64)), wasm.elements, 0)
+  ok({
+    stack: [], labels: [], frames: [],
+    mem: ms2, globals: globals, table: table,
+    funcs: wasm.code, types: wasm.types,
+    func_type_indices: wasm.func_type_indices,
+    num_imports: list.len(wasm.imports),
+    import_names: wasm.imports |> list.map((imp) => imp.name),
+  })
+}
+
+effect fn init_data_segs(ms: memory.MemStore, segs: List[binary.DataSegment], idx: Int) -> Result[memory.MemStore, String] =
+  if idx >= list.len(segs) then ok(ms)
+  else {
+    let seg = list.get(segs, idx) ?? {mem_idx: 0, offset: [], data: []}
+    let offset = match list.first(seg.offset) { some(binary.I32Const(v)) => v, _ => 0 }
+    let mem = memory.ms_get(ms, seg.mem_idx)
+    let mem2 = memory.init_data(mem, offset, seg.data)
+    init_data_segs(memory.ms_set(ms, seg.mem_idx, mem2), segs, idx + 1)
+  }
+
+fn init_table(table: List[Int], elems: List[binary.ElemSegment], idx: Int) -> List[Int] =
+  if idx >= list.len(elems) then table
+  else {
+    let elem = list.get(elems, idx) ?? {table_idx: 0, offset: [], func_indices: []}
+    let offset = match list.first(elem.offset) { some(binary.I32Const(v)) => v, _ => 0 }
+    init_table(fill_table(table, offset, elem.func_indices, 0), elems, idx + 1)
+  }
+
+fn fill_table(table: List[Int], offset: Int, indices: List[Int], idx: Int) -> List[Int] =
+  if idx >= list.len(indices) then table
+  else {
+    let fi = list.get(indices, idx) ?? 0
+    let pos = offset + idx
+    fill_table(if pos < list.len(table) then list.set(table, pos, fi) else table, offset, indices, idx + 1)
+  }
+
+effect fn run(wasm: binary.WasmModule) -> Result[WasiState, String] = {
+  let m = init_module(wasm)!
+  let ws = new_wasi_state()
+  let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
+  let start_idx = match start_export {
+    some(exp) => exp.index,
+    none => 0,
+  }
+  let result = exec_call(m, ws, start_idx)!
+  match result.r {
+    Trap(msg) => err("trap: ${msg}"),
+    _ => ok(result.ws),
+  }
+}

@@ -2,12 +2,21 @@
 
 import process
 import self.wasm.binary
+import self.wasm.interp
 
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
   let cmd = list.get(args, 1) ?? "help"
 
   match cmd {
+    "run" => {
+      let path = list.get(args, 2) ?? ""
+      if path == "" then {
+        println("usage: porta run <agent.wasm>")
+        ok(())
+      }
+      else run_wasm(path)
+    },
     "inspect" => {
       let path = list.get(args, 2) ?? ""
       if path == "" then {
@@ -20,6 +29,7 @@ effect fn main() -> Result[Unit, String] = {
       println("porta — WASM agent MCP bridge")
       println("")
       println("usage:")
+      println("  porta run <agent.wasm>        Execute WASM binary")
       println("  porta inspect <agent.wasm>    Show module info")
       println("  porta validate <agent.wasm>   Validate binary")
       println("  porta serve <agent.wasm>      Start MCP server")
@@ -31,6 +41,15 @@ effect fn main() -> Result[Unit, String] = {
       ok(())
     },
   }
+}
+
+effect fn run_wasm(path: String) -> Result[Unit, String] = {
+  let wasm = binary.load(path)!
+  let ws = interp.run(wasm)!
+  // Print captured stdout
+  if string.len(ws.stdout_buf) > 0 then println(ws.stdout_buf) else ()
+  if string.len(ws.stderr_buf) > 0 then println(ws.stderr_buf) else ()
+  ok(())
 }
 
 effect fn inspect(path: String) -> Result[Unit, String] = {
