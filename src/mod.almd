@@ -82,7 +82,8 @@ effect fn serve(wasm_path: String) -> Result[Unit, String] = {
       }
       m
     }
-  let server = mcp.new_server(m)
+  let wasm = binary.load(wasm_path)!
+  let server = mcp.new_server(m, wasm)
   mcp.serve_loop(server)
 }
 

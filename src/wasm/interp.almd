@@ -141,10 +141,22 @@ fn exec_cmp_f64(m: Machine, op: (Float, Float) -> Bool) -> ExecResult = {
 type WasiState = {
   stdout_buf: String,
   stderr_buf: String,
+  stdin_data: List[Int],
+  stdin_pos: Int,
   exit_code: Option[Int],
 }
 
-fn new_wasi_state() -> WasiState = { stdout_buf: "", stderr_buf: "", exit_code: none }
+fn new_wasi_state() -> WasiState = {
+  stdout_buf: "", stderr_buf: "",
+  stdin_data: [], stdin_pos: 0,
+  exit_code: none,
+}
+
+fn wasi_with_stdin(data: List[Int]) -> WasiState = {
+  stdout_buf: "", stderr_buf: "",
+  stdin_data: data, stdin_pos: 0,
+  exit_code: none,
+}
 
 // --- Unary helpers (avoid let-in) ---
 
@@ -522,14 +534,7 @@ effect fn exec_wasi(m: Machine, ws: WasiState, name: String) -> Result[{r: ExecR
       let nm = memory.ms_store_i64(_fd.m.mem, 0, np.val, 0)!
       ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
     },
-    "fd_read" => {
-      let nrp = pop_i32(m)
-      let _ic = pop_i32(nrp.m)
-      let _iv = pop_i32(_ic.m)
-      let _fd = pop_i32(_iv.m)
-      let nm = memory.ms_store_i32(_fd.m.mem, 0, nrp.val, 0)!
-      ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
-    },
+    "fd_read" => wasi_fd_read(m, ws),
     "path_open" => {
       let fp = pop_i32(m)
       let _ff = pop_i32(fp.m)
@@ -687,3 +692,67 @@ effect fn run(wasm: binary.WasmModule) -> Result[WasiState, String] = {
     _ => ok(result.ws),
   }
 }
+
+effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String) -> Result[WasiState, String] = {
+  let m = init_module(wasm)!
+  // Build stdin: length-prefixed JSON command
+  let cmd = "{\"tool\":\"${tool_name}\",\"arguments\":${args_json}}"
+  let cmd_bytes = string.to_bytes(cmd)
+  let len = list.len(cmd_bytes)
+  let len_bytes = [
+    int.band(len, 0xFF),
+    int.band(int.bshr(len, 8), 0xFF),
+    int.band(int.bshr(len, 16), 0xFF),
+    int.band(int.bshr(len, 24), 0xFF),
+  ]
+  let ws = wasi_with_stdin(len_bytes + cmd_bytes)
+  let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
+  let start_idx = match start_export {
+    some(exp) => exp.index,
+    none => 0,
+  }
+  let result = exec_call(m, ws, start_idx)!
+  match result.r {
+    Trap(msg) => err("trap: ${msg}"),
+    _ => ok(result.ws),
+  }
+}
+
+effect fn wasi_fd_read(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let nread_ptr = pop_i32(m)
+  let iovcnt = pop_i32(nread_ptr.m)
+  let iovs_ptr = pop_i32(iovcnt.m)
+  let fd = pop_i32(iovs_ptr.m)
+  let m2 = fd.m
+
+  if fd.val != 0 then {
+    // Not stdin — return 0 bytes
+    let nm = memory.ms_store_i32(m2.mem, 0, nread_ptr.val, 0)!
+    ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: ws})
+  }
+  else {
+    // Read from stdin_data
+    let total_written = write_stdin_to_iovecs(m2.mem, ws, iovs_ptr.val, iovcnt.val, 0)!
+    let nm = memory.ms_store_i32(total_written.mem, 0, nread_ptr.val, total_written.bytes_written)!
+    ok({r: Continue(push_i32({...m2, mem: nm}, 0)), ws: total_written.ws})
+  }
+}
+
+effect fn write_stdin_to_iovecs(mem: memory.MemStore, ws: WasiState, iovs_ptr: Int, remaining: Int, total: Int) -> Result[{mem: memory.MemStore, ws: WasiState, bytes_written: Int}, String] =
+  if remaining == 0 or ws.stdin_pos >= list.len(ws.stdin_data) then ok({mem: mem, ws: ws, bytes_written: total})
+  else {
+    let buf_ptr = memory.ms_load_i32(mem, 0, iovs_ptr)!
+    let buf_len = memory.ms_load_i32(mem, 0, iovs_ptr + 4)!
+    let available = list.len(ws.stdin_data) - ws.stdin_pos
+    let to_write = int.min(buf_len, available)
+    let result = write_stdin_bytes(mem, ws, buf_ptr, to_write)!
+    write_stdin_to_iovecs(result.mem, result.ws, iovs_ptr + 8, remaining - 1, total + to_write)
+  }
+
+effect fn write_stdin_bytes(mem: memory.MemStore, ws: WasiState, ptr: Int, remaining: Int) -> Result[{mem: memory.MemStore, ws: WasiState}, String] =
+  if remaining == 0 or ws.stdin_pos >= list.len(ws.stdin_data) then ok({mem: mem, ws: ws})
+  else {
+    let byte = list.get(ws.stdin_data, ws.stdin_pos) ?? 0
+    let mem2 = memory.ms_store_u8(mem, 0, ptr, byte)!
+    write_stdin_bytes(mem2, {...ws, stdin_pos: ws.stdin_pos + 1}, ptr + 1, remaining - 1)
+  }

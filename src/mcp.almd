@@ -3,6 +3,8 @@
 import json
 import self.jsonrpc
 import self.manifest
+import self.wasm.binary
+import self.wasm.interp
 
 type McpState =
   | Initializing
@@ -12,10 +14,11 @@ type McpState =
 type McpServer = {
   state: McpState,
   manifest: manifest.Manifest,
+  wasm_module: binary.WasmModule,
 }
 
-fn new_server(m: manifest.Manifest) -> McpServer =
-  {state: Initializing, manifest: m}
+fn new_server(m: manifest.Manifest, wasm: binary.WasmModule) -> McpServer =
+  {state: Initializing, manifest: m, wasm_module: wasm}
 
 // --- Handle a single request ---
 
@@ -61,26 +64,71 @@ effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 
 effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let tool_name = json.get_string(req.params, "name") ?? ""
-  let _arguments = json.get(req.params, "arguments") ?? json.object([])
+  let arguments = json.get(req.params, "arguments") ?? json.object([])
 
-  // Check tool exists
   let tool = server.manifest.tools |> list.find((t) => t.name == tool_name)
   match tool {
     none => {
-      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown tool: '${tool_name}'")
+      let avail = server.manifest.tools |> list.map((t) => t.name) |> string.join(", ")
+      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown tool: '${tool_name}'. Available tools: ${avail}")
       ok({server: server, response: some(resp)})
     },
     some(_t) => {
-      // TODO: dispatch to WASM agent
-      let result = json.object([
-        ("content", json.array([
+      let args_json = json.stringify(arguments)
+      let ws = interp.run_tool(server.wasm_module, tool_name, args_json)!
+
+      // Parse stdout: expect {"ok": ...} or {"err": ...}
+      let output = ws.stdout_buf
+      let parsed = json.parse(output)
+      let result = match parsed {
+        ok(v) => {
+          let ok_val = json.get(v, "ok")
+          let err_val = json.get(v, "err")
+          match ok_val {
+            some(ov) => json.object([
+              ("content", json.array([
+                json.object([
+                  ("type", json.from_string("text")),
+                  ("text", match json.as_string(ov) { some(s) => json.from_string(s), none => ov }),
+                ]),
+              ])),
+              ("isError", json.from_bool(false)),
+            ]),
+            none => match err_val {
+              some(ev) => json.object([
+                ("content", json.array([
+                  json.object([
+                    ("type", json.from_string("text")),
+                    ("text", match json.as_string(ev) { some(s) => json.from_string(s), none => ev }),
+                  ]),
+                ])),
+                ("isError", json.from_bool(true)),
+              ]),
+              none => json.object([
+                ("content", json.array([
+                  json.object([
+                    ("type", json.from_string("text")),
+                    ("text", json.from_string(output)),
+                  ]),
+                ])),
+                ("isError", json.from_bool(false)),
+              ]),
+            },
+          }
+        },
+        err(_) => {
+          // Raw text output (not JSON)
           json.object([
-            ("type", json.from_string("text")),
-            ("text", json.from_string("tool '${tool_name}' called (dispatch not yet implemented)")),
-          ]),
-        ])),
-        ("isError", json.from_bool(false)),
-      ])
+            ("content", json.array([
+              json.object([
+                ("type", json.from_string("text")),
+                ("text", json.from_string(output)),
+              ]),
+            ])),
+            ("isError", json.from_bool(false)),
+          ])
+        },
+      }
       ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
     },
   }
