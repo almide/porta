@@ -4,3 +4,7 @@ version = "0.1.0"
 
 [permissions]
 allow = ["FS.read", "FS.write", "IO", "Env", "Time"]
+
+[native-deps]
+wasmtime = "42.0.1"
+wasmtime-wasi = "42.0.1"
