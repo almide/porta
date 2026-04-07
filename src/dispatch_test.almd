@@ -1,0 +1,45 @@
+import self.dispatch
+import self.sandbox
+import self.observability
+
+// --- parse_restart_policy ---
+
+test "parse_restart_policy: no" {
+  let p = dispatch.parse_restart_policy("no")
+  match p {
+    dispatch.Never => assert(true),
+    _ => assert(false),
+  }
+}
+
+test "parse_restart_policy: on-failure" {
+  let p = dispatch.parse_restart_policy("on-failure")
+  match p {
+    dispatch.OnFailure => assert(true),
+    _ => assert(false),
+  }
+}
+
+test "parse_restart_policy: always" {
+  let p = dispatch.parse_restart_policy("always")
+  match p {
+    dispatch.Always => assert(true),
+    _ => assert(false),
+  }
+}
+
+test "parse_restart_policy: unknown defaults to Never" {
+  let p = dispatch.parse_restart_policy("garbage")
+  match p {
+    dispatch.Never => assert(true),
+    _ => assert(false),
+  }
+}
+
+test "parse_restart_policy: empty defaults to Never" {
+  let p = dispatch.parse_restart_policy("")
+  match p {
+    dispatch.Never => assert(true),
+    _ => assert(false),
+  }
+}

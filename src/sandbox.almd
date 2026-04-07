@@ -1,0 +1,148 @@
+// Capability-based Sandbox Enforcement
+// Deny-by-default: all WASI access requires explicit capability grants.
+
+import self.wasm.binary
+
+type Capability =
+  | CapIO
+  | CapFS
+  | CapFSWrite
+  | CapProcess
+  | CapEnv
+  | CapClock
+  | CapRandom
+  | CapNet
+
+type CapabilitySet = {
+  caps: List[Capability],
+}
+
+// --- Parsing ---
+
+fn parse_capability(s: String) -> Option[Capability] =
+  match s {
+    "io" => some(CapIO),
+    "fs" => some(CapFS),
+    "fs.write" => some(CapFSWrite),
+    "process" => some(CapProcess),
+    "env" => some(CapEnv),
+    "clock" => some(CapClock),
+    "random" => some(CapRandom),
+    "net" => some(CapNet),
+    _ => none,
+  }
+
+fn from_manifest(caps: List[String]) -> CapabilitySet = {
+  caps: caps |> list.filter_map(parse_capability),
+}
+
+// --- Capability matching ---
+
+fn cap_eq(a: Capability, b: Capability) -> Bool =
+  match (a, b) {
+    (CapIO, CapIO) => true,
+    (CapFS, CapFS) => true,
+    (CapFSWrite, CapFSWrite) => true,
+    (CapProcess, CapProcess) => true,
+    (CapEnv, CapEnv) => true,
+    (CapClock, CapClock) => true,
+    (CapRandom, CapRandom) => true,
+    (CapNet, CapNet) => true,
+    _ => false,
+  }
+
+fn has_capability(set: CapabilitySet, cap: Capability) -> Bool =
+  set.caps |> list.any((c) => cap_eq(c, cap))
+
+fn cap_name(cap: Capability) -> String =
+  match cap {
+    CapIO => "io",
+    CapFS => "fs",
+    CapFSWrite => "fs.write",
+    CapProcess => "process",
+    CapEnv => "env",
+    CapClock => "clock",
+    CapRandom => "random",
+    CapNet => "net",
+  }
+
+// --- WASI function → required capability ---
+
+fn required_capability(wasi_name: String) -> Option[Capability] =
+  match wasi_name {
+    // IO
+    "fd_write" => some(CapIO),
+    "fd_read" => some(CapIO),
+    "fd_close" => some(CapIO),
+    "fd_seek" => some(CapIO),
+    // FS read
+    "path_open" => some(CapFS),
+    "fd_filestat_get" => some(CapFS),
+    "path_filestat_get" => some(CapFS),
+    "fd_readdir" => some(CapFS),
+    "fd_prestat_get" => some(CapFS),
+    "fd_prestat_dir_name" => some(CapFS),
+    // FS write
+    "path_create_directory" => some(CapFSWrite),
+    "path_rename" => some(CapFSWrite),
+    "path_unlink_file" => some(CapFSWrite),
+    "path_remove_directory" => some(CapFSWrite),
+    // Process
+    "proc_exit" => some(CapProcess),
+    "args_sizes_get" => some(CapProcess),
+    "args_get" => some(CapProcess),
+    // Env
+    "environ_sizes_get" => some(CapEnv),
+    "environ_get" => some(CapEnv),
+    // Clock
+    "clock_time_get" => some(CapClock),
+    // Random
+    "random_get" => some(CapRandom),
+    _ => none,
+  }
+
+// --- Runtime check ---
+
+fn check_wasi_call(set: CapabilitySet, wasi_name: String) -> Result[Unit, String] =
+  match required_capability(wasi_name) {
+    none => ok(()),
+    some(cap) =>
+      if has_capability(set, cap) then ok(())
+      else err("capability denied: '${wasi_name}' requires '${cap_name(cap)}'"),
+  }
+
+// --- Import validation (module load time) ---
+
+fn validate_imports(imports: List[binary.Import], set: CapabilitySet) -> Result[Unit, String] =
+  validate_imports_acc(imports, set, 0)
+
+fn validate_imports_acc(imports: List[binary.Import], set: CapabilitySet, idx: Int) -> Result[Unit, String] =
+  if idx >= list.len(imports) then ok(())
+  else match list.get(imports, idx) {
+    none => ok(()),
+    some(imp) =>
+      if imp.mod_name == "wasi_snapshot_preview1" then
+        match check_wasi_call(set, imp.name) {
+          ok(_) => validate_imports_acc(imports, set, idx + 1),
+          err(msg) => err("import validation failed: ${imp.name} — ${msg}"),
+        }
+      else validate_imports_acc(imports, set, idx + 1),
+  }
+
+// --- Built-in profiles ---
+
+fn profile_ai_agent() -> CapabilitySet = {
+  caps: [CapIO, CapProcess],
+}
+
+fn profile_worker() -> CapabilitySet = {
+  caps: [CapIO, CapProcess, CapClock, CapRandom],
+}
+
+fn profile_full() -> CapabilitySet = {
+  caps: [CapIO, CapFS, CapFSWrite, CapProcess, CapEnv, CapClock, CapRandom, CapNet],
+}
+
+fn empty() -> CapabilitySet = {
+  caps: [],
+}

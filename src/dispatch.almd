@@ -1,0 +1,103 @@
+// Instance Lifecycle & Dispatch
+
+import self.wasm.binary
+import self.wasm.interp
+import self.sandbox
+import self.observability
+
+type InstanceState =
+  | Created
+  | Starting
+  | Running
+  | Exited(Int)
+  | Failed(String)
+
+type RestartPolicy =
+  | Never
+  | OnFailure
+  | Always
+
+type InstanceConfig = {
+  wasm: binary.WasmModule,
+  entry: String,
+  restart_policy: RestartPolicy,
+  step_limit: Int,
+  max_memory_pages: Int,
+  max_restarts: Int,
+  capabilities: sandbox.CapabilitySet,
+  env_vars: List[interp.EnvVar],
+  secrets: List[interp.EnvVar],
+}
+
+type ToolResult = {
+  stdout: String,
+  stderr: String,
+  exit_code: Option[Int],
+  metrics: observability.Metrics,
+}
+
+type RunResult = {
+  exit_code: Int,
+  stdout: String,
+  stderr: String,
+  restarts: Int,
+  metrics: observability.Metrics,
+}
+
+fn parse_restart_policy(s: String) -> RestartPolicy =
+  match s {
+    "on-failure" => OnFailure,
+    "always" => Always,
+    _ => Never,
+  }
+
+fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+  wasm: wasm,
+  entry: "_start",
+  restart_policy: Never,
+  step_limit: 0,
+  max_memory_pages: 0,
+  max_restarts: 3,
+  capabilities: caps,
+  env_vars: [],
+  secrets: [],
+}
+
+// --- Serve mode: dispatch a single tool call ---
+
+effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
+  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  let env = config.env_vars + config.secrets
+  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env)!
+  let m = observability.empty_metrics()
+  let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages}
+  ok({
+    stdout: ws.stdout_buf,
+    stderr: ws.stderr_buf,
+    exit_code: ws.exit_code,
+    metrics: metrics,
+  })
+}
+
+// --- Run mode: full lifecycle with restart ---
+
+effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
+  run_with_restarts(config, 0)
+
+effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
+  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  let env = config.env_vars + config.secrets
+  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities, env)!
+  let exit_code = match ws.exit_code { some(c) => c, none => 0 }
+  let should_restart = match config.restart_policy {
+    Never => false,
+    OnFailure => exit_code != 0 and restarts < config.max_restarts,
+    Always => restarts < config.max_restarts,
+  }
+  if should_restart then run_with_restarts(config, restarts + 1)
+  else {
+    let m = observability.empty_metrics()
+    let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages, restarts: restarts}
+    ok({exit_code: exit_code, stdout: ws.stdout_buf, stderr: ws.stderr_buf, restarts: restarts, metrics: metrics})
+  }
+}

@@ -1,0 +1,442 @@
+// WASI Preview 1 Host Function Implementation
+// Implements the subset of WASI that Almide-compiled agents use.
+
+import fs
+import json
+
+// --- WASI Error Codes ---
+
+let WASI_SUCCESS: Int = 0
+let WASI_EBADF: Int = 8
+let WASI_ENOENT: Int = 44
+let WASI_EACCES: Int = 2
+let WASI_EINVAL: Int = 28
+
+// --- File Descriptor Table ---
+
+type FdKind =
+  | FdStdin
+  | FdStdout
+  | FdStderr
+  | FdFile(String, String)
+  | FdDir(String)
+
+type FdEntry = {
+  kind: FdKind,
+  rights_read: Bool,
+  rights_write: Bool,
+}
+
+type WasiState = {
+  fds: Map[Int, FdEntry],
+  next_fd: Int,
+  preopen_dirs: List[String],
+  env_vars: Map[String, String],
+  stdout_buf: String,
+  stderr_buf: String,
+  stdin_data: String,
+  stdin_pos: Int,
+  exit_code: Option[Int],
+}
+
+// --- Initialization ---
+
+fn new_wasi_state(dirs: List[String], envs: Map[String, String], stdin_data: String) -> WasiState = {
+  let base_fds = map.new()
+    |> map.set(0, {kind: FdStdin, rights_read: true, rights_write: false})
+    |> map.set(1, {kind: FdStdout, rights_read: false, rights_write: true})
+    |> map.set(2, {kind: FdStderr, rights_read: false, rights_write: true})
+
+  // Pre-open directories as fd 3, 4, ...
+  let fds_with_dirs = dirs
+    |> list.enumerate
+    |> list.fold(base_fds, (fds, entry) => {
+      let (idx, dir) = entry
+      map.set(fds, 3 + idx, {kind: FdDir(dir), rights_read: true, rights_write: true})
+    })
+
+  {
+    fds: fds_with_dirs,
+    next_fd: 3 + list.len(dirs),
+    preopen_dirs: dirs,
+    env_vars: envs,
+    stdout_buf: "",
+    stderr_buf: "",
+    stdin_data: stdin_data,
+    stdin_pos: 0,
+    exit_code: none,
+  }
+}
+
+// --- WASI Call Dispatch ---
+
+effect fn wasi_call(name: String, m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] =
+  match name {
+    "fd_write" => wasi_fd_write(m, ws),
+    "fd_read" => wasi_fd_read(m, ws),
+    "fd_close" => wasi_fd_close(m, ws),
+    "path_open" => wasi_path_open(m, ws),
+    "fd_seek" => wasi_fd_seek(m, ws),
+    "fd_filestat_get" => wasi_fd_filestat_get(m, ws),
+    "path_filestat_get" => wasi_path_filestat_get(m, ws),
+    "proc_exit" => wasi_proc_exit(m, ws),
+    "clock_time_get" => wasi_clock_time_get(m, ws),
+    "random_get" => wasi_random_get(m, ws),
+    "path_create_directory" => wasi_path_create_directory(m, ws),
+    "path_unlink_file" => wasi_path_unlink_file(m, ws),
+    "fd_readdir" => wasi_fd_readdir(m, ws),
+    _ => err("unknown WASI function: ${name}"),
+  }
+
+// --- fd_write(fd, iovs, iovcnt, nwritten_ptr) -> errno ---
+
+effect fn wasi_fd_write(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let nwritten_ptr = pop_i32(m)
+  let iovcnt = pop_i32(nwritten_ptr.m)
+  let iovs = pop_i32(iovcnt.m)
+  let fd = pop_i32(iovs.m)
+  let m2 = fd.m
+
+  let fd_entry = map.get(ws.fds, fd.val)
+  match fd_entry {
+    none => ok({m: push_i32(m2, WASI_EBADF), ws: ws}),
+    some(entry) => {
+      if not entry.rights_write then ok({m: push_i32(m2, WASI_EACCES), ws: ws})
+      else {
+        // Read iov vectors and collect bytes
+        let result = read_iovecs(m2.mem, iovs.val, iovcnt.val)!
+        let total = result.total_bytes
+        let data = result.data
+
+        // Write to appropriate fd
+        let ws2 = match entry.kind {
+          FdStdout => {...ws, stdout_buf: ws.stdout_buf + data},
+          FdStderr => {...ws, stderr_buf: ws.stderr_buf + data},
+          FdFile(path, _content) => ws,  // TODO: file write
+          _ => ws,
+        }
+
+        // Store nwritten
+        let new_mem = ms_store_i32(m2.mem, 0, nwritten_ptr.val, total)!
+        ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws2})
+      }
+    },
+  }
+}
+
+// --- fd_read(fd, iovs, iovcnt, nread_ptr) -> errno ---
+
+effect fn wasi_fd_read(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let nread_ptr = pop_i32(m)
+  let iovcnt = pop_i32(nread_ptr.m)
+  let iovs = pop_i32(iovcnt.m)
+  let fd = pop_i32(iovs.m)
+  let m2 = fd.m
+
+  let fd_entry = map.get(ws.fds, fd.val)
+  match fd_entry {
+    none => ok({m: push_i32(m2, WASI_EBADF), ws: ws}),
+    some(entry) => {
+      if not entry.rights_read then ok({m: push_i32(m2, WASI_EACCES), ws: ws})
+      else {
+        match entry.kind {
+          FdStdin => {
+            let remaining = string.len(ws.stdin_data) - ws.stdin_pos
+            let iov_info = read_iovec_info(m2.mem, iovs.val, iovcnt.val)!
+            let to_read = int.min(remaining, iov_info.total_capacity)
+            let data_bytes = string.to_bytes(string.slice(ws.stdin_data, ws.stdin_pos, ws.stdin_pos + to_read))
+            let new_mem = write_to_iovecs(m2.mem, iovs.val, iovcnt.val, data_bytes)!
+            let new_mem2 = ms_store_i32(new_mem, 0, nread_ptr.val, to_read)!
+            let ws2 = {...ws, stdin_pos: ws.stdin_pos + to_read}
+            ok({m: push_i32({...m2, mem: new_mem2}, WASI_SUCCESS), ws: ws2})
+          },
+          FdFile(path, content) => {
+            // Read from file content
+            let iov_info = read_iovec_info(m2.mem, iovs.val, iovcnt.val)!
+            let data_bytes = string.to_bytes(content)
+            let to_read = int.min(list.len(data_bytes), iov_info.total_capacity)
+            let new_mem = write_to_iovecs(m2.mem, iovs.val, iovcnt.val, list.take(data_bytes, to_read))!
+            let new_mem2 = ms_store_i32(new_mem, 0, nread_ptr.val, to_read)!
+            ok({m: push_i32({...m2, mem: new_mem2}, WASI_SUCCESS), ws: ws})
+          },
+          _ => ok({m: push_i32(m2, WASI_EBADF), ws: ws}),
+        }
+      }
+    },
+  }
+}
+
+// --- path_open(dirfd, dirflags, path, pathlen, oflags, rights_base, rights_inheriting, fdflags, fd_ptr) -> errno ---
+
+effect fn wasi_path_open(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let fd_ptr = pop_i32(m)
+  let fdflags = pop_i32(fd_ptr.m)
+  let rights_inheriting = pop_i64(fdflags.m)
+  let rights_base = pop_i64(rights_inheriting.m)
+  let oflags = pop_i32(rights_base.m)
+  let pathlen = pop_i32(oflags.m)
+  let path_ptr = pop_i32(pathlen.m)
+  let dirflags = pop_i32(path_ptr.m)
+  let dirfd = pop_i32(dirflags.m)
+  let m2 = dirfd.m
+
+  // Read path string from memory
+  let path_bytes = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+
+  // Resolve against preopen dir
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  match dir_entry {
+    none => ok({m: push_i32(m2, WASI_EBADF), ws: ws}),
+    some(entry) => {
+      let base_dir = match entry.kind {
+        FdDir(d) => d,
+        _ => "",
+      }
+      let full_path = if base_dir == "" then path_bytes else base_dir + "/" + path_bytes
+
+      // Try to read the file
+      let content_result = fs.read_text(full_path)
+      match content_result {
+        ok(content) => {
+          let new_fd = ws.next_fd
+          let ws2 = {
+            ...ws,
+            fds: map.set(ws.fds, new_fd, {kind: FdFile(full_path, content), rights_read: true, rights_write: true}),
+            next_fd: new_fd + 1,
+          }
+          let new_mem = ms_store_i32(m2.mem, 0, fd_ptr.val, new_fd)!
+          ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws2})
+        },
+        err(_) => ok({m: push_i32(m2, WASI_ENOENT), ws: ws}),
+      }
+    },
+  }
+}
+
+// --- fd_close(fd) -> errno ---
+
+effect fn wasi_fd_close(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let fd = pop_i32(m)
+  if map.contains(ws.fds, fd.val) then {
+    let ws2 = {...ws, fds: map.remove(ws.fds, fd.val)}
+    ok({m: push_i32(fd.m, WASI_SUCCESS), ws: ws2})
+  }
+  else ok({m: push_i32(fd.m, WASI_EBADF), ws: ws})
+}
+
+// --- fd_seek(fd, offset, whence, newoffset_ptr) -> errno ---
+
+effect fn wasi_fd_seek(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let newoffset_ptr = pop_i32(m)
+  let whence = pop_i32(newoffset_ptr.m)
+  let offset = pop_i64(whence.m)
+  let fd = pop_i32(offset.m)
+  // Stub: return 0 offset
+  let new_mem = ms_store_i64(fd.m.mem, 0, newoffset_ptr.val, 0)!
+  ok({m: push_i32({...fd.m, mem: new_mem}, WASI_SUCCESS), ws: ws})
+}
+
+// --- fd_filestat_get(fd, buf_ptr) -> errno ---
+
+effect fn wasi_fd_filestat_get(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let buf_ptr = pop_i32(m)
+  let fd = pop_i32(buf_ptr.m)
+  let m2 = fd.m
+
+  let fd_entry = map.get(ws.fds, fd.val)
+  match fd_entry {
+    none => ok({m: push_i32(m2, WASI_EBADF), ws: ws}),
+    some(entry) => {
+      let size = match entry.kind {
+        FdFile(_, content) => string.len(content),
+        _ => 0,
+      }
+      // filestat struct: 64 bytes, size at offset 32
+      let new_mem = ms_store_i64(m2.mem, 0, buf_ptr.val + 32, size)!
+      ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws})
+    },
+  }
+}
+
+// --- path_filestat_get(dirfd, flags, path, pathlen, buf_ptr) -> errno ---
+
+effect fn wasi_path_filestat_get(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let buf_ptr = pop_i32(m)
+  let pathlen = pop_i32(buf_ptr.m)
+  let path_ptr = pop_i32(pathlen.m)
+  let flags = pop_i32(path_ptr.m)
+  let dirfd = pop_i32(flags.m)
+  let m2 = dirfd.m
+
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind {
+      FdDir(d) => d,
+      _ => "",
+    },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+
+  if fs.exists(full_path) then {
+    let stat = fs.stat(full_path)
+    match stat {
+      ok(s) => {
+        let new_mem = ms_store_i64(m2.mem, 0, buf_ptr.val + 32, s.size)!
+        ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws})
+      },
+      err(_) => ok({m: push_i32(m2, WASI_ENOENT), ws: ws}),
+    }
+  }
+  else ok({m: push_i32(m2, WASI_ENOENT), ws: ws})
+}
+
+// --- proc_exit(code) ---
+
+effect fn wasi_proc_exit(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let code = pop_i32(m)
+  ok({m: code.m, ws: {...ws, exit_code: some(code.val)}})
+}
+
+// --- clock_time_get(id, precision, time_ptr) -> errno ---
+
+effect fn wasi_clock_time_get(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let time_ptr = pop_i32(m)
+  let _precision = pop_i64(time_ptr.m)
+  let _id = pop_i32(_precision.m)
+  let m2 = _id.m
+  // Return 0 for now (no time stdlib yet)
+  let new_mem = ms_store_i64(m2.mem, 0, time_ptr.val, 0)!
+  ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws})
+}
+
+// --- random_get(buf, len) -> errno ---
+
+effect fn wasi_random_get(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let len = pop_i32(m)
+  let buf = pop_i32(len.m)
+  // Fill with zeros for now (no random stdlib yet)
+  let new_mem = ms_fill(buf.m.mem, 0, buf.val, 0, len.val)!
+  ok({m: push_i32({...buf.m, mem: new_mem}, WASI_SUCCESS), ws: ws})
+}
+
+// --- path_create_directory(dirfd, path, pathlen) -> errno ---
+
+effect fn wasi_path_create_directory(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let pathlen = pop_i32(m)
+  let path_ptr = pop_i32(pathlen.m)
+  let dirfd = pop_i32(path_ptr.m)
+  let m2 = dirfd.m
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind {
+      FdDir(d) => d,
+      _ => "",
+    },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+  let result = fs.create_dir(full_path)
+  match result {
+    ok(_) => ok({m: push_i32(m2, WASI_SUCCESS), ws: ws}),
+    err(_) => ok({m: push_i32(m2, WASI_EACCES), ws: ws}),
+  }
+}
+
+// --- path_unlink_file(dirfd, path, pathlen) -> errno ---
+
+effect fn wasi_path_unlink_file(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let pathlen = pop_i32(m)
+  let path_ptr = pop_i32(pathlen.m)
+  let dirfd = pop_i32(path_ptr.m)
+  let m2 = dirfd.m
+  let path = read_mem_string(m2.mem, path_ptr.val, pathlen.val)!
+  let dir_entry = map.get(ws.fds, dirfd.val)
+  let base_dir = match dir_entry {
+    some(e) => match e.kind {
+      FdDir(d) => d,
+      _ => "",
+    },
+    none => "",
+  }
+  let full_path = if base_dir == "" then path else base_dir + "/" + path
+  let result = fs.remove(full_path)
+  match result {
+    ok(_) => ok({m: push_i32(m2, WASI_SUCCESS), ws: ws}),
+    err(_) => ok({m: push_i32(m2, WASI_ENOENT), ws: ws}),
+  }
+}
+
+// --- fd_readdir(fd, buf, buf_len, cookie, bufused_ptr) -> errno ---
+
+effect fn wasi_fd_readdir(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: WasiState}, String] = {
+  let bufused_ptr = pop_i32(m)
+  let _cookie = pop_i64(bufused_ptr.m)
+  let buf_len = pop_i32(_cookie.m)
+  let buf = pop_i32(buf_len.m)
+  let fd = pop_i32(buf.m)
+  let m2 = fd.m
+  // Stub: return 0 bytes used
+  let new_mem = ms_store_i32(m2.mem, 0, bufused_ptr.val, 0)!
+  ok({m: push_i32({...m2, mem: new_mem}, WASI_SUCCESS), ws: ws})
+}
+
+// --- Memory Helpers ---
+
+effect fn read_mem_string(ms: MemStore, ptr: Int, len: Int) -> Result[String, String] = {
+  let bytes = read_mem_bytes(ms, ptr, len, [])!
+  ok(string.from_bytes(bytes))
+}
+
+effect fn read_mem_bytes(ms: MemStore, ptr: Int, remaining: Int, acc: List[Int]) -> Result[List[Int], String] =
+  if remaining == 0 then ok(acc)
+  else {
+    let b = ms_load_u8(ms, 0, ptr)!
+    read_mem_bytes(ms, ptr + 1, remaining - 1, acc + [b])
+  }
+
+effect fn read_iovecs(ms: MemStore, iovs_ptr: Int, count: Int) -> Result[{data: String, total_bytes: Int}, String] =
+  read_iovecs_acc(ms, iovs_ptr, count, "", 0)
+
+effect fn read_iovecs_acc(ms: MemStore, iovs_ptr: Int, remaining: Int, acc: String, total: Int) -> Result[{data: String, total_bytes: Int}, String] =
+  if remaining == 0 then ok({data: acc, total_bytes: total})
+  else {
+    let buf_ptr = ms_load_i32(ms, 0, iovs_ptr)!
+    let buf_len = ms_load_i32(ms, 0, iovs_ptr + 4)!
+    let bytes = read_mem_bytes(ms, buf_ptr, buf_len, [])!
+    let s = string.from_bytes(bytes)
+    read_iovecs_acc(ms, iovs_ptr + 8, remaining - 1, acc + s, total + buf_len)
+  }
+
+effect fn read_iovec_info(ms: MemStore, iovs_ptr: Int, count: Int) -> Result[{total_capacity: Int}, String] =
+  read_iovec_info_acc(ms, iovs_ptr, count, 0)
+
+effect fn read_iovec_info_acc(ms: MemStore, iovs_ptr: Int, remaining: Int, total: Int) -> Result[{total_capacity: Int}, String] =
+  if remaining == 0 then ok({total_capacity: total})
+  else {
+    let buf_len = ms_load_i32(ms, 0, iovs_ptr + 4)!
+    read_iovec_info_acc(ms, iovs_ptr + 8, remaining - 1, total + buf_len)
+  }
+
+effect fn write_to_iovecs(ms: MemStore, iovs_ptr: Int, count: Int, data: List[Int]) -> Result[MemStore, String] =
+  write_to_iovecs_acc(ms, iovs_ptr, count, data, 0)
+
+effect fn write_to_iovecs_acc(ms: MemStore, iovs_ptr: Int, remaining: Int, data: List[Int], data_offset: Int) -> Result[MemStore, String] =
+  if remaining == 0 or data_offset >= list.len(data) then ok(ms)
+  else {
+    let buf_ptr = ms_load_i32(ms, 0, iovs_ptr)!
+    let buf_len = ms_load_i32(ms, 0, iovs_ptr + 4)!
+    let to_write = int.min(buf_len, list.len(data) - data_offset)
+    let ms2 = write_bytes_to_mem(ms, buf_ptr, data, data_offset, to_write)!
+    write_to_iovecs_acc(ms2, iovs_ptr + 8, remaining - 1, data, data_offset + to_write)
+  }
+
+effect fn write_bytes_to_mem(ms: MemStore, ptr: Int, data: List[Int], offset: Int, len: Int) -> Result[MemStore, String] =
+  if len == 0 then ok(ms)
+  else {
+    let byte = list.get(data, offset) ?? 0
+    let ms2 = ms_store_u8(ms, 0, ptr, byte)!
+    write_bytes_to_mem(ms2, ptr + 1, data, offset + 1, len - 1)
+  }

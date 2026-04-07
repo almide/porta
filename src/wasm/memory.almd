@@ -1,0 +1,285 @@
+// WASM Linear Memory Management
+// Page-table based: Map[Int, List[Int]] where each internal page is 4096 bytes.
+// WASM page = 65536 bytes = 16 internal pages.
+
+let PAGE_SIZE: Int = 4096
+let WASM_PAGE_SIZE: Int = 65536
+let PAGES_PER_WASM_PAGE: Int = 16
+
+type Memory = {
+  pages: Map[Int, List[Int]],
+  num_wasm_pages: Int,
+  max_wasm_pages: Int,
+}
+
+type MemStore = {
+  memories: List[Memory],
+}
+
+// --- Construction ---
+
+fn new_memory(wasm_pages: Int, max_pages: Int) -> Memory = {
+  pages: map.new(),
+  num_wasm_pages: wasm_pages,
+  max_wasm_pages: max_pages,
+}
+
+fn new_mem_store(mem_defs: List[{min: Int, max: Option[Int]}]) -> MemStore = {
+  memories: mem_defs |> list.map((def) => {
+    let max = match def.max { some(m) => m, none => 0 }
+    new_memory(def.min, max)
+  }),
+}
+
+fn new_mem_store_limited(mem_defs: List[{min: Int, max: Option[Int]}], max_pages: Int) -> MemStore = {
+  memories: mem_defs |> list.map((def) => {
+    let def_max = match def.max { some(m) => m, none => 0 }
+    let effective = if max_pages > 0 and (def_max == 0 or max_pages < def_max) then max_pages else def_max
+    new_memory(def.min, effective)
+  }),
+}
+
+// --- Page Access ---
+
+fn get_page(mem: Memory, page_idx: Int) -> List[Int] =
+  map.get(mem.pages, page_idx) ?? list.repeat(0, PAGE_SIZE)
+
+fn set_page(mem: Memory, page_idx: Int, page: List[Int]) -> Memory =
+  {...mem, pages: map.set(mem.pages, page_idx, page)}
+
+fn page_of(addr: Int) -> Int = addr / PAGE_SIZE
+fn offset_in(addr: Int) -> Int = addr - (page_of(addr) * PAGE_SIZE)
+
+// --- Bounds Check ---
+
+fn check_addr(mem: Memory, addr: Int, size: Int) -> Result[Unit, String] =
+  if addr < 0 or addr + size > mem.num_wasm_pages * WASM_PAGE_SIZE then
+    err("out of bounds memory access: addr=${int.to_string(addr)} size=${int.to_string(size)} limit=${int.to_string(mem.num_wasm_pages * WASM_PAGE_SIZE)}")
+  else ok(())
+
+// --- Byte Read/Write ---
+
+fn load_u8(mem: Memory, addr: Int) -> Result[Int, String] = {
+  check_addr(mem, addr, 1)?
+  let page = get_page(mem, page_of(addr))
+  ok(list.get(page, offset_in(addr)) ?? 0)
+}
+
+fn store_u8(mem: Memory, addr: Int, val: Int) -> Result[Memory, String] = {
+  check_addr(mem, addr, 1)?
+  let pi = page_of(addr)
+  let oi = offset_in(addr)
+  let page = get_page(mem, pi)
+  let new_page = list.set(page, oi, int.band(val, 0xFF))
+  ok(set_page(mem, pi, new_page))
+}
+
+// --- Multi-byte Little-Endian Read ---
+
+fn load_i32(mem: Memory, addr: Int) -> Result[Int, String] = {
+  check_addr(mem, addr, 4)?
+  let b0 = load_u8_unchecked(mem, addr)
+  let b1 = load_u8_unchecked(mem, addr + 1)
+  let b2 = load_u8_unchecked(mem, addr + 2)
+  let b3 = load_u8_unchecked(mem, addr + 3)
+  ok(b0 + int.bshl(b1, 8) + int.bshl(b2, 16) + int.bshl(b3, 24))
+}
+
+fn load_i64(mem: Memory, addr: Int) -> Result[Int, String] = {
+  check_addr(mem, addr, 8)?
+  let lo = load_i32_unchecked(mem, addr)
+  let hi = load_i32_unchecked(mem, addr + 4)
+  ok(int.bor(lo, int.bshl(hi, 32)))
+}
+
+fn load_f64(mem: Memory, addr: Int) -> Result[Float, String] = {
+  check_addr(mem, addr, 8)?
+  // TODO: needs int.bits_to_float
+  let _bits = load_i64_unchecked(mem, addr)
+  ok(0.0)
+}
+
+fn load_u16(mem: Memory, addr: Int) -> Result[Int, String] = {
+  check_addr(mem, addr, 2)?
+  let b0 = load_u8_unchecked(mem, addr)
+  let b1 = load_u8_unchecked(mem, addr + 1)
+  ok(b0 + int.bshl(b1, 8))
+}
+
+// --- Multi-byte Little-Endian Write ---
+
+fn store_i32(mem: Memory, addr: Int, val: Int) -> Result[Memory, String] = {
+  check_addr(mem, addr, 4)?
+  let m1 = store_u8_unchecked(mem, addr, int.band(val, 0xFF))
+  let m2 = store_u8_unchecked(m1, addr + 1, int.band(int.bshr(val, 8), 0xFF))
+  let m3 = store_u8_unchecked(m2, addr + 2, int.band(int.bshr(val, 16), 0xFF))
+  let m4 = store_u8_unchecked(m3, addr + 3, int.band(int.bshr(val, 24), 0xFF))
+  ok(m4)
+}
+
+fn store_i64(mem: Memory, addr: Int, val: Int) -> Result[Memory, String] = {
+  check_addr(mem, addr, 8)?
+  let m1 = store_i32_unchecked(mem, addr, int.band(val, 0xFFFFFFFF))
+  let m2 = store_i32_unchecked(m1, addr + 4, int.band(int.bshr(val, 32), 0xFFFFFFFF))
+  ok(m2)
+}
+
+fn store_f64(mem: Memory, addr: Int, val: Float) -> Result[Memory, String] = {
+  check_addr(mem, addr, 8)?
+  // TODO: needs float.to_bits
+  let _bits = 0
+  ok(mem)
+}
+
+// --- Unchecked (bounds already verified) ---
+
+fn load_u8_unchecked(mem: Memory, addr: Int) -> Int = {
+  let page = get_page(mem, page_of(addr))
+  list.get(page, offset_in(addr)) ?? 0
+}
+
+fn load_i32_unchecked(mem: Memory, addr: Int) -> Int = {
+  let b0 = load_u8_unchecked(mem, addr)
+  let b1 = load_u8_unchecked(mem, addr + 1)
+  let b2 = load_u8_unchecked(mem, addr + 2)
+  let b3 = load_u8_unchecked(mem, addr + 3)
+  b0 + int.bshl(b1, 8) + int.bshl(b2, 16) + int.bshl(b3, 24)
+}
+
+fn load_i64_unchecked(mem: Memory, addr: Int) -> Int = {
+  let lo = load_i32_unchecked(mem, addr)
+  let hi = load_i32_unchecked(mem, addr + 4)
+  int.bor(lo, int.bshl(hi, 32))
+}
+
+fn store_u8_unchecked(mem: Memory, addr: Int, val: Int) -> Memory = {
+  let pi = page_of(addr)
+  let oi = offset_in(addr)
+  let page = get_page(mem, pi)
+  set_page(mem, pi, list.set(page, oi, int.band(val, 0xFF)))
+}
+
+fn store_i32_unchecked(mem: Memory, addr: Int, val: Int) -> Memory = {
+  let m1 = store_u8_unchecked(mem, addr, int.band(val, 0xFF))
+  let m2 = store_u8_unchecked(m1, addr + 1, int.band(int.bshr(val, 8), 0xFF))
+  let m3 = store_u8_unchecked(m2, addr + 2, int.band(int.bshr(val, 16), 0xFF))
+  store_u8_unchecked(m3, addr + 3, int.band(int.bshr(val, 24), 0xFF))
+}
+
+// --- Memory Operations ---
+
+fn mem_size(mem: Memory) -> Int = mem.num_wasm_pages
+
+fn mem_grow(mem: Memory, delta: Int) -> {mem: Memory, prev_size: Int} = {
+  let prev = mem.num_wasm_pages
+  if mem.max_wasm_pages > 0 and prev + delta > mem.max_wasm_pages then
+    {mem: mem, prev_size: -1}
+  else
+    {mem: {...mem, num_wasm_pages: prev + delta}, prev_size: prev}
+}
+
+fn mem_fill(mem: Memory, dest: Int, val: Int, len: Int) -> Result[Memory, String] = {
+  check_addr(mem, dest, len)?
+  ok(mem_fill_acc(mem, dest, int.band(val, 0xFF), len))
+}
+
+fn mem_fill_acc(mem: Memory, dest: Int, val: Int, remaining: Int) -> Memory =
+  if remaining == 0 then mem
+  else mem_fill_acc(store_u8_unchecked(mem, dest, val), dest + 1, val, remaining - 1)
+
+fn mem_copy(mem: Memory, dest: Int, src: Int, len: Int) -> Result[Memory, String] = {
+  check_addr(mem, dest, len)?
+  check_addr(mem, src, len)?
+  ok(mem_copy_acc(mem, dest, src, len))
+}
+
+fn mem_copy_acc(mem: Memory, dest: Int, src: Int, remaining: Int) -> Memory =
+  if remaining == 0 then mem
+  else {
+    let byte = load_u8_unchecked(mem, src)
+    mem_copy_acc(store_u8_unchecked(mem, dest, byte), dest + 1, src + 1, remaining - 1)
+  }
+
+// --- Data Segment Initialization ---
+
+fn init_data(mem: Memory, offset: Int, data: List[Int]) -> Memory =
+  init_data_acc(mem, offset, data, 0)
+
+fn init_data_acc(mem: Memory, base: Int, data: List[Int], idx: Int) -> Memory =
+  if idx >= list.len(data) then mem
+  else {
+    let byte = list.get(data, idx) ?? 0
+    init_data_acc(store_u8_unchecked(mem, base + idx, byte), base, data, idx + 1)
+  }
+
+// --- MemStore Operations (multi-memory) ---
+
+fn ms_get(ms: MemStore, idx: Int) -> Memory =
+  list.get(ms.memories, idx) ?? new_memory(0, 0)
+
+fn ms_set(ms: MemStore, idx: Int, mem: Memory) -> MemStore =
+  {memories: list.set(ms.memories, idx, mem)}
+
+effect fn ms_load_u8(ms: MemStore, mem_idx: Int, addr: Int) -> Result[Int, String] =
+  load_u8(ms_get(ms, mem_idx), addr)
+
+effect fn ms_store_u8(ms: MemStore, mem_idx: Int, addr: Int, val: Int) -> Result[MemStore, String] = {
+  let r = store_u8(ms_get(ms, mem_idx), addr, val)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+effect fn ms_load_i32(ms: MemStore, mem_idx: Int, addr: Int) -> Result[Int, String] =
+  load_i32(ms_get(ms, mem_idx), addr)
+
+effect fn ms_store_i32(ms: MemStore, mem_idx: Int, addr: Int, val: Int) -> Result[MemStore, String] = {
+  let r = store_i32(ms_get(ms, mem_idx), addr, val)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+effect fn ms_load_i64(ms: MemStore, mem_idx: Int, addr: Int) -> Result[Int, String] =
+  load_i64(ms_get(ms, mem_idx), addr)
+
+effect fn ms_store_i64(ms: MemStore, mem_idx: Int, addr: Int, val: Int) -> Result[MemStore, String] = {
+  let r = store_i64(ms_get(ms, mem_idx), addr, val)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+effect fn ms_load_f64(ms: MemStore, mem_idx: Int, addr: Int) -> Result[Float, String] =
+  load_f64(ms_get(ms, mem_idx), addr)
+
+effect fn ms_store_f64(ms: MemStore, mem_idx: Int, addr: Int, val: Float) -> Result[MemStore, String] = {
+  let r = store_f64(ms_get(ms, mem_idx), addr, val)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+fn ms_load_u16(ms: MemStore, mem_idx: Int, addr: Int) -> Result[Int, String] =
+  load_u16(ms_get(ms, mem_idx), addr)
+
+fn ms_size(ms: MemStore, mem_idx: Int) -> Int =
+  mem_size(ms_get(ms, mem_idx))
+
+fn ms_grow(ms: MemStore, mem_idx: Int, delta: Int) -> {ms: MemStore, prev_size: Int} = {
+  let r = mem_grow(ms_get(ms, mem_idx), delta)
+  {ms: ms_set(ms, mem_idx, r.mem), prev_size: r.prev_size}
+}
+
+effect fn ms_fill(ms: MemStore, mem_idx: Int, dest: Int, val: Int, len: Int) -> Result[MemStore, String] = {
+  let r = mem_fill(ms_get(ms, mem_idx), dest, val, len)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+effect fn ms_copy_same(ms: MemStore, mem_idx: Int, dest: Int, src: Int, len: Int) -> Result[MemStore, String] = {
+  let r = mem_copy(ms_get(ms, mem_idx), dest, src, len)!
+  ok(ms_set(ms, mem_idx, r))
+}
+
+effect fn ms_copy_cross(ms: MemStore, dst_idx: Int, src_idx: Int, dest: Int, src: Int, len: Int) -> Result[MemStore, String] =
+  ms_copy_cross_acc(ms, dst_idx, src_idx, dest, src, len)
+
+effect fn ms_copy_cross_acc(ms: MemStore, dst_idx: Int, src_idx: Int, dest: Int, src: Int, remaining: Int) -> Result[MemStore, String] =
+  if remaining == 0 then ok(ms)
+  else {
+    let byte = ms_load_u8(ms, src_idx, src)!
+    let ms2 = ms_store_u8(ms, dst_idx, dest, byte)!
+    ms_copy_cross_acc(ms2, dst_idx, src_idx, dest + 1, src + 1, remaining - 1)
+  }

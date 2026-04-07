@@ -1,0 +1,181 @@
+import self.sandbox
+import self.wasm.binary
+
+// --- parse_capability ---
+
+test "parse_capability: valid capabilities" {
+  assert_eq(sandbox.parse_capability("io"), some(sandbox.CapIO))
+  assert_eq(sandbox.parse_capability("fs"), some(sandbox.CapFS))
+  assert_eq(sandbox.parse_capability("fs.write"), some(sandbox.CapFSWrite))
+  assert_eq(sandbox.parse_capability("process"), some(sandbox.CapProcess))
+  assert_eq(sandbox.parse_capability("env"), some(sandbox.CapEnv))
+  assert_eq(sandbox.parse_capability("clock"), some(sandbox.CapClock))
+  assert_eq(sandbox.parse_capability("random"), some(sandbox.CapRandom))
+  assert_eq(sandbox.parse_capability("net"), some(sandbox.CapNet))
+}
+
+test "parse_capability: invalid returns none" {
+  assert_eq(sandbox.parse_capability(""), none)
+  assert_eq(sandbox.parse_capability("invalid"), none)
+  assert_eq(sandbox.parse_capability("IO"), none)
+}
+
+// --- from_manifest ---
+
+test "from_manifest: parses valid capabilities" {
+  let caps = sandbox.from_manifest(["io", "fs", "clock"])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapFS))
+  assert(sandbox.has_capability(caps, sandbox.CapClock))
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "from_manifest: empty list" {
+  let caps = sandbox.from_manifest([])
+  assert(not sandbox.has_capability(caps, sandbox.CapIO))
+}
+
+test "from_manifest: skips invalid entries" {
+  let caps = sandbox.from_manifest(["io", "garbage", "clock"])
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapClock))
+}
+
+// --- cap_name ---
+
+test "cap_name roundtrip" {
+  assert_eq(sandbox.cap_name(sandbox.CapIO), "io")
+  assert_eq(sandbox.cap_name(sandbox.CapFS), "fs")
+  assert_eq(sandbox.cap_name(sandbox.CapFSWrite), "fs.write")
+  assert_eq(sandbox.cap_name(sandbox.CapProcess), "process")
+  assert_eq(sandbox.cap_name(sandbox.CapEnv), "env")
+  assert_eq(sandbox.cap_name(sandbox.CapClock), "clock")
+  assert_eq(sandbox.cap_name(sandbox.CapRandom), "random")
+  assert_eq(sandbox.cap_name(sandbox.CapNet), "net")
+}
+
+// --- required_capability ---
+
+test "required_capability: IO functions" {
+  assert_eq(sandbox.required_capability("fd_write"), some(sandbox.CapIO))
+  assert_eq(sandbox.required_capability("fd_read"), some(sandbox.CapIO))
+  assert_eq(sandbox.required_capability("fd_close"), some(sandbox.CapIO))
+  assert_eq(sandbox.required_capability("fd_seek"), some(sandbox.CapIO))
+}
+
+test "required_capability: FS read functions" {
+  assert_eq(sandbox.required_capability("path_open"), some(sandbox.CapFS))
+  assert_eq(sandbox.required_capability("fd_filestat_get"), some(sandbox.CapFS))
+  assert_eq(sandbox.required_capability("fd_readdir"), some(sandbox.CapFS))
+}
+
+test "required_capability: FS write functions" {
+  assert_eq(sandbox.required_capability("path_create_directory"), some(sandbox.CapFSWrite))
+  assert_eq(sandbox.required_capability("path_rename"), some(sandbox.CapFSWrite))
+  assert_eq(sandbox.required_capability("path_unlink_file"), some(sandbox.CapFSWrite))
+  assert_eq(sandbox.required_capability("path_remove_directory"), some(sandbox.CapFSWrite))
+}
+
+test "required_capability: other categories" {
+  assert_eq(sandbox.required_capability("proc_exit"), some(sandbox.CapProcess))
+  assert_eq(sandbox.required_capability("environ_sizes_get"), some(sandbox.CapEnv))
+  assert_eq(sandbox.required_capability("environ_get"), some(sandbox.CapEnv))
+  assert_eq(sandbox.required_capability("clock_time_get"), some(sandbox.CapClock))
+  assert_eq(sandbox.required_capability("random_get"), some(sandbox.CapRandom))
+}
+
+test "required_capability: unknown returns none" {
+  assert_eq(sandbox.required_capability("unknown_func"), none)
+}
+
+// --- check_wasi_call ---
+
+test "check_wasi_call: allowed" {
+  let caps = sandbox.profile_ai_agent()
+  assert_eq(sandbox.check_wasi_call(caps, "fd_write"), ok(()))
+  assert_eq(sandbox.check_wasi_call(caps, "proc_exit"), ok(()))
+}
+
+test "check_wasi_call: denied" {
+  let caps = sandbox.profile_ai_agent()
+  assert(result.is_err(sandbox.check_wasi_call(caps, "clock_time_get")))
+  assert(result.is_err(sandbox.check_wasi_call(caps, "random_get")))
+  assert(result.is_err(sandbox.check_wasi_call(caps, "path_open")))
+}
+
+test "check_wasi_call: unknown function allowed" {
+  let caps = sandbox.empty()
+  assert_eq(sandbox.check_wasi_call(caps, "unknown_func"), ok(()))
+}
+
+// --- profiles ---
+
+test "profile_ai_agent: minimal capabilities" {
+  let caps = sandbox.profile_ai_agent()
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapProcess))
+  assert(not sandbox.has_capability(caps, sandbox.CapFS))
+  assert(not sandbox.has_capability(caps, sandbox.CapClock))
+  assert(not sandbox.has_capability(caps, sandbox.CapRandom))
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "profile_worker: IO + Process + Clock + Random" {
+  let caps = sandbox.profile_worker()
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapProcess))
+  assert(sandbox.has_capability(caps, sandbox.CapClock))
+  assert(sandbox.has_capability(caps, sandbox.CapRandom))
+  assert(not sandbox.has_capability(caps, sandbox.CapFS))
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "profile_full: all capabilities" {
+  let caps = sandbox.profile_full()
+  assert(sandbox.has_capability(caps, sandbox.CapIO))
+  assert(sandbox.has_capability(caps, sandbox.CapFS))
+  assert(sandbox.has_capability(caps, sandbox.CapFSWrite))
+  assert(sandbox.has_capability(caps, sandbox.CapProcess))
+  assert(sandbox.has_capability(caps, sandbox.CapEnv))
+  assert(sandbox.has_capability(caps, sandbox.CapClock))
+  assert(sandbox.has_capability(caps, sandbox.CapRandom))
+  assert(sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "empty: no capabilities" {
+  let caps = sandbox.empty()
+  assert(not sandbox.has_capability(caps, sandbox.CapIO))
+  assert(not sandbox.has_capability(caps, sandbox.CapProcess))
+}
+
+// --- validate_imports ---
+
+test "validate_imports: all allowed" {
+  let imports: List[binary.Import] = [
+    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: binary.ImportFunc(0)},
+    {mod_name: "wasi_snapshot_preview1", name: "proc_exit", desc: binary.ImportFunc(1)},
+  ]
+  let caps = sandbox.profile_ai_agent()
+  assert_eq(sandbox.validate_imports(imports, caps), ok(()))
+}
+
+test "validate_imports: denied import" {
+  let imports: List[binary.Import] = [
+    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: binary.ImportFunc(0)},
+    {mod_name: "wasi_snapshot_preview1", name: "path_open", desc: binary.ImportFunc(1)},
+  ]
+  let caps = sandbox.profile_ai_agent()
+  assert(result.is_err(sandbox.validate_imports(imports, caps)))
+}
+
+test "validate_imports: non-wasi imports always pass" {
+  let imports: List[binary.Import] = [
+    {mod_name: "env", name: "some_func", desc: binary.ImportFunc(0)},
+  ]
+  let caps = sandbox.empty()
+  assert_eq(sandbox.validate_imports(imports, caps), ok(()))
+}
+
+test "validate_imports: empty imports" {
+  assert_eq(sandbox.validate_imports([], sandbox.empty()), ok(()))
+}
