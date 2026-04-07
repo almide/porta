@@ -569,7 +569,16 @@ effect fn read_elems(p: Parser, remaining: Int, acc: List[ElemSegment]) -> Resul
         let indices_r = read_u32_vec(count_r.next, count_r.val, [])!
         read_elems(indices_r.next, remaining - 1, acc + [{table_idx: 0, offset: offset_r.val, func_indices: indices_r.val}])
       },
-      _ => err("unsupported element segment flags"),
+      2 => {
+        // Active with explicit table index + elemkind
+        let table_r = read_leb128_u(flags_r.next)!
+        let offset_r = read_init_expr(table_r.next)!
+        let _elemkind = read_u8(offset_r.next)!
+        let count_r = read_leb128_u(_elemkind.next)!
+        let indices_r = read_u32_vec(count_r.next, count_r.val, [])!
+        read_elems(indices_r.next, remaining - 1, acc + [{table_idx: table_r.val, offset: offset_r.val, func_indices: indices_r.val}])
+      },
+      _ => err("unsupported element segment flags: ${int.to_string(flags_r.val)}"),
     }
   }
 
