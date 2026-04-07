@@ -3,4 +3,4 @@ name = "porta"
 version = "0.1.0"
 
 [permissions]
-allow = ["FS.read", "FS.write", "IO.stdin", "IO.stdout", "IO.stderr", "Env.read", "Time"]
+allow = ["FS.read", "FS.write", "IO", "Env", "Time"]
