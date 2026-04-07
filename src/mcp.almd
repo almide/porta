@@ -29,6 +29,10 @@ effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Resu
     "notifications/initialized" => ok({server: {...server, state: Ready}, response: none}),
     "tools/list" => handle_tools_list(server, req),
     "tools/call" => handle_tools_call(server, req),
+    "resources/list" => handle_resources_list(server, req),
+    "resources/read" => handle_resources_read(server, req),
+    "prompts/list" => handle_prompts_list(server, req),
+    "prompts/get" => handle_prompts_get(server, req),
     "ping" => ok({server: server, response: some(jsonrpc.make_response(req.id, json.object([])))}),
     _ => ok({server: server, response: some(jsonrpc.make_error_response(req.id, -32601, "Method not found: ${req.method}"))}),
   }
@@ -41,9 +45,9 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
       ("version", json.from_string(server.manifest.version)),
     ])),
     ("capabilities", json.object([
-      ("tools", json.object([
-        ("listChanged", json.from_bool(false)),
-      ])),
+      ("tools", json.object([("listChanged", json.from_bool(false))])),
+      ("resources", json.object([("listChanged", json.from_bool(false))])),
+      ("prompts", json.object([("listChanged", json.from_bool(false))])),
     ])),
   ])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
@@ -137,6 +141,95 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
         },
       }
       ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+    },
+  }
+}
+
+// --- Resources ---
+
+effect fn handle_resources_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let resources_json = server.manifest.resources |> list.map((r) =>
+    json.object([
+      ("uri", json.from_string(r.uri)),
+      ("name", json.from_string(r.name)),
+      ("description", json.from_string(r.description)),
+      ("mimeType", json.from_string(r.mime_type)),
+    ])
+  )
+  let result = json.object([("resources", json.array(resources_json))])
+  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+}
+
+effect fn handle_resources_read(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let uri = json.get_string(req.params, "uri") ?? ""
+  let resource = server.manifest.resources |> list.find((r) => r.uri == uri)
+  match resource {
+    none => {
+      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown resource: '${uri}'")
+      ok({server: server, response: some(resp)})
+    },
+    some(r) => {
+      let args_json = json.stringify(json.object([("uri", json.from_string(uri))]))
+      let tool_result = dispatch.dispatch_tool(server.config, "_resource_read", args_json)!
+      let content = json.object([
+        ("contents", json.array([
+          json.object([
+            ("uri", json.from_string(uri)),
+            ("mimeType", json.from_string(r.mime_type)),
+            ("text", json.from_string(tool_result.stdout)),
+          ]),
+        ])),
+      ])
+      ok({server: server, response: some(jsonrpc.make_response(req.id, content))})
+    },
+  }
+}
+
+// --- Prompts ---
+
+effect fn handle_prompts_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let prompts_json = server.manifest.prompts |> list.map((p) => {
+    let args_json = p.arguments |> list.map((a) =>
+      json.object([
+        ("name", json.from_string(a.name)),
+        ("description", json.from_string(a.description)),
+        ("required", json.from_bool(a.required)),
+      ])
+    )
+    json.object([
+      ("name", json.from_string(p.name)),
+      ("description", json.from_string(p.description)),
+      ("arguments", json.array(args_json)),
+    ])
+  })
+  let result = json.object([("prompts", json.array(prompts_json))])
+  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+}
+
+effect fn handle_prompts_get(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+  let name = json.get_string(req.params, "name") ?? ""
+  let prompt = server.manifest.prompts |> list.find((p) => p.name == name)
+  match prompt {
+    none => {
+      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown prompt: '${name}'")
+      ok({server: server, response: some(resp)})
+    },
+    some(_p) => {
+      let arguments = json.get(req.params, "arguments") ?? json.object([])
+      let args_json = json.stringify(json.object([("prompt", json.from_string(name)), ("arguments", arguments)]))
+      let tool_result = dispatch.dispatch_tool(server.config, "_prompt_get", args_json)!
+      let content = json.object([
+        ("messages", json.array([
+          json.object([
+            ("role", json.from_string("user")),
+            ("content", json.object([
+              ("type", json.from_string("text")),
+              ("text", json.from_string(tool_result.stdout)),
+            ])),
+          ]),
+        ])),
+      ])
+      ok({server: server, response: some(jsonrpc.make_response(req.id, content))})
     },
   }
 }

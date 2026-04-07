@@ -197,6 +197,8 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
         description: "",
         capabilities: [],
         tools: export_tools,
+        resources: [],
+        prompts: [],
         wasi_imports: [],
         entry: "_start",
       }
