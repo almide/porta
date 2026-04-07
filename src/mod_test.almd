@@ -1,6 +1,6 @@
 import self.util
 import self.sandbox
-import self.wasm.interp
+import self.dispatch
 
 // --- parse_int ---
 

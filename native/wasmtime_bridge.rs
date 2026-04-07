@@ -23,8 +23,8 @@ static INSTANCES: Mutex<Vec<Option<WasmInstance>>> = Mutex::new(Vec::new());
 
 /// Create a WASM instance from a file path.
 /// Returns handle (>= 0) on success, -1 on error.
-pub fn wt_create(wasm_path: &str, fuel: i64) -> i64 {
-    let bytes = match std::fs::read(wasm_path) {
+pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
+    let bytes = match std::fs::read(wasm_path.as_ref()) {
         Ok(b) => b,
         Err(_) => return -1,
     };
@@ -68,10 +68,10 @@ fn wt_create_from_bytes(wasm_bytes: Vec<u8>, fuel: i64) -> i64 {
 }
 
 /// Set stdin data for an instance (must be called before wt_run).
-pub fn wt_set_stdin(handle: i64, data: &str) -> i64 {
+pub fn wt_set_stdin(handle: i64, data: impl AsRef<str>) -> i64 {
     let mut instances = INSTANCES.lock().unwrap();
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
-        Some(inst) => { inst.stdin_data = data.as_bytes().to_vec(); 0 }
+        Some(inst) => { inst.stdin_data = data.as_ref().as_bytes().to_vec(); 0 }
         None => -1,
     }
 }
@@ -85,11 +85,30 @@ pub fn wt_set_stdin_bytes(handle: i64, data: Vec<u8>) -> i64 {
     }
 }
 
-/// Add an environment variable (must be called before wt_run).
-pub fn wt_set_env(handle: i64, key: &str, value: &str) -> i64 {
+/// Set stdin as length-prefixed JSON tool command (for MCP tool dispatch).
+pub fn wt_set_tool_stdin(handle: i64, tool_name: impl AsRef<str>, args_json: impl AsRef<str>) -> i64 {
+    let cmd = format!("{{\"tool\":\"{}\",\"arguments\":{}}}", tool_name.as_ref(), args_json.as_ref());
+    let cmd_bytes = cmd.as_bytes();
+    let len = cmd_bytes.len() as u32;
+    let mut data = Vec::with_capacity(4 + cmd_bytes.len());
+    data.push((len & 0xFF) as u8);
+    data.push(((len >> 8) & 0xFF) as u8);
+    data.push(((len >> 16) & 0xFF) as u8);
+    data.push(((len >> 24) & 0xFF) as u8);
+    data.extend_from_slice(cmd_bytes);
+
     let mut instances = INSTANCES.lock().unwrap();
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
-        Some(inst) => { inst.env_vars.push((key.to_string(), value.to_string())); 0 }
+        Some(inst) => { inst.stdin_data = data; 0 }
+        None => -1,
+    }
+}
+
+/// Add an environment variable (must be called before wt_run).
+pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> i64 {
+    let mut instances = INSTANCES.lock().unwrap();
+    match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
+        Some(inst) => { inst.env_vars.push((key.as_ref().to_string(), value.as_ref().to_string())); 0 }
         None => -1,
     }
 }

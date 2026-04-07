@@ -1,0 +1,31 @@
+// Wasmtime bridge — @extern(rs) declarations for native WASM execution
+
+@extern(rs, "wasmtime_bridge", "wt_create")
+fn wt_create(wasm_path: String, fuel: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_set_stdin")
+fn wt_set_stdin(handle: Int, data: String) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_set_tool_stdin")
+fn wt_set_tool_stdin(handle: Int, tool_name: String, args_json: String) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_set_env")
+fn wt_set_env(handle: Int, key: String, value: String) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_run")
+fn wt_run(handle: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_get_stdout")
+fn wt_get_stdout(handle: Int) -> String
+
+@extern(rs, "wasmtime_bridge", "wt_get_stderr")
+fn wt_get_stderr(handle: Int) -> String
+
+@extern(rs, "wasmtime_bridge", "wt_get_fuel_consumed")
+fn wt_get_fuel_consumed(handle: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_get_exit_code")
+fn wt_get_exit_code(handle: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_destroy")
+fn wt_destroy(handle: Int) -> Int

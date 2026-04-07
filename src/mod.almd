@@ -4,7 +4,6 @@ import process
 import fs
 import json
 import self.wasm.binary
-import self.wasm.interp
 import self.dispatch
 import self.sandbox
 import self.observability
@@ -22,9 +21,9 @@ type Options = {
   restart: String,
   profile: String,
   manifest_path: String,
-  env_vars: List[interp.EnvVar],
+  env_vars: List[dispatch.EnvVar],
   env_file: String,
-  secrets: List[interp.EnvVar],
+  secrets: List[dispatch.EnvVar],
 }
 
 fn default_options() -> Options = {
@@ -68,7 +67,7 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
     }
   }
 
-effect fn load_env_file(path: String) -> Result[List[interp.EnvVar], String] = {
+effect fn load_env_file(path: String) -> Result[List[dispatch.EnvVar], String] = {
   let content = fs.read_text(path)!
   let lines = util.split_lines(string.to_bytes(content), 0, 0, [])
   ok(lines
@@ -76,7 +75,7 @@ effect fn load_env_file(path: String) -> Result[List[interp.EnvVar], String] = {
     |> list.filter_map((line) => util.split_at_eq(string.trim(line))))
 }
 
-effect fn resolve_env(opts: Options) -> Result[List[interp.EnvVar], String] = {
+effect fn resolve_env(opts: Options) -> Result[List[dispatch.EnvVar], String] = {
   let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
     else []
   // CLI --env overrides file values (dedup: keep last occurrence per key)
@@ -84,7 +83,7 @@ effect fn resolve_env(opts: Options) -> Result[List[interp.EnvVar], String] = {
   ok(dedup_env(combined, 0, []))
 }
 
-fn dedup_env(vars: List[interp.EnvVar], idx: Int, acc: List[interp.EnvVar]) -> List[interp.EnvVar] =
+fn dedup_env(vars: List[dispatch.EnvVar], idx: Int, acc: List[dispatch.EnvVar]) -> List[dispatch.EnvVar] =
   if idx >= list.len(vars) then acc
   else {
     let head = list.get(vars, idx) ?? {key: "", val: ""}
@@ -94,8 +93,8 @@ fn dedup_env(vars: List[interp.EnvVar], idx: Int, acc: List[interp.EnvVar]) -> L
     else dedup_env(vars, idx + 1, acc + [head])
   }
 
-fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet, env: List[interp.EnvVar]) -> dispatch.InstanceConfig = {
-  let config = dispatch.default_config(wasm, caps)
+fn build_config(wasm_path: String, wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet, env: List[dispatch.EnvVar]) -> dispatch.InstanceConfig = {
+  let config = dispatch.default_config(wasm_path, wasm, caps)
   {
     ...config,
     entry: opts.entry,
@@ -207,7 +206,7 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
   let wasm = binary.load(opts.path)!
   let caps = util.resolve_serve_caps(opts.profile, m.capabilities)
   let env = resolve_env(opts)!
-  let config = build_config(wasm, opts, caps, env)
+  let config = build_config(opts.path, wasm, opts, caps, env)
   let server = mcp.new_server(m, config)
   mcp.serve_loop(server)
 }
@@ -216,7 +215,7 @@ effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
   let wasm = binary.load(opts.path)!
   let caps = util.resolve_caps(opts.profile, [])
   let env = resolve_env(opts)!
-  let config = build_config(wasm, opts, caps, env)
+  let config = build_config(opts.path, wasm, opts, caps, env)
   let result = dispatch.run_instance(config)!
   if string.len(result.stdout) > 0 then println(result.stdout) else ()
   if string.len(result.stderr) > 0 then eprintln(result.stderr) else ()
