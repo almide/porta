@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "name": "noop-agent",
+  "version": "0.1.0",
+  "description": "A minimal porta agent for testing MCP integration",
+  "entry": "_start",
+  "capabilities": ["io", "process"],
+  "tools": [
+    {
+      "name": "ping",
+      "description": "Returns pong. Use this to verify the porta MCP bridge is working.",
+      "inputSchema": {"type": "object", "properties": {}}
+    }
+  ],
+  "resources": [],
+  "prompts": [],
+  "wasi_imports": ["fd_write", "proc_exit"]
+}

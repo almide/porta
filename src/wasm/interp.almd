@@ -618,16 +618,21 @@ effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: 
     "environ_sizes_get" => wasi_environ_sizes_get(m, ws),
     "environ_get" => wasi_environ_get(m, ws),
     "args_sizes_get" => {
+      // Return 1 arg ("porta\0" = 6 bytes)
       let buf_size_ptr = pop_i32(m)
       let count_ptr = pop_i32(buf_size_ptr.m)
-      let nm = memory.ms_store_i32(count_ptr.m.mem, 0, count_ptr.val, 0)!
-      let nm2 = memory.ms_store_i32(nm, 0, buf_size_ptr.val, 0)!
+      let nm = memory.ms_store_i32(count_ptr.m.mem, 0, count_ptr.val, 1)!
+      let nm2 = memory.ms_store_i32(nm, 0, buf_size_ptr.val, 6)!
       ok({r: Continue(push_i32({...count_ptr.m, mem: nm2}, 0)), ws: ws})
     },
     "args_get" => {
-      let _buf_ptr = pop_i32(m)
-      let _argv_ptr = pop_i32(_buf_ptr.m)
-      ok({r: Continue(push_i32(_argv_ptr.m, 0)), ws: ws})
+      // Write argv[0] = pointer to buf, buf = "porta\0"
+      let buf_ptr = pop_i32(m)
+      let argv_ptr = pop_i32(buf_ptr.m)
+      let m2 = argv_ptr.m
+      let nm = memory.ms_store_i32(m2.mem, 0, argv_ptr.val, buf_ptr.val)!
+      let nm2 = write_bytes_at(nm, buf_ptr.val, [112, 111, 114, 116, 97, 0], 0)!
+      ok({r: Continue(push_i32({...m2, mem: nm2}, 0)), ws: ws})
     },
     "fd_prestat_get" => wasi_fd_prestat_get(m, ws),
     "fd_prestat_dir_name" => wasi_fd_prestat_dir_name(m, ws),
