@@ -139,6 +139,8 @@ fn exec_cmp_f64(m: Machine, op: (Float, Float) -> Bool) -> ExecResult = {
 
 // --- WASI state ---
 
+type EnvVar = { key: String, val: String }
+
 type WasiState = {
   stdout_buf: String,
   stderr_buf: String,
@@ -147,22 +149,23 @@ type WasiState = {
   steps: Int,
   step_limit: Int,
   capabilities: sandbox.CapabilitySet,
+  env_vars: List[EnvVar],
   exit_code: Option[Int],
 }
 
-fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet) -> WasiState = {
+fn new_wasi_state(step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: [], stdin_pos: 0,
   steps: 0, step_limit: step_limit,
-  capabilities: caps,
+  capabilities: caps, env_vars: env,
   exit_code: none,
 }
 
-fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet) -> WasiState = {
+fn wasi_with_stdin(data: List[Int], step_limit: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> WasiState = {
   stdout_buf: "", stderr_buf: "",
   stdin_data: data, stdin_pos: 0,
   steps: 0, step_limit: step_limit,
-  capabilities: caps,
+  capabilities: caps, env_vars: env,
   exit_code: none,
 }
 
@@ -616,7 +619,89 @@ effect fn exec_wasi_impl(m: Machine, ws: WasiState, name: String) -> Result[{r: 
       let nm = memory.ms_store_i32(_fd.m.mem, 0, bup.val, 0)!
       ok({r: Continue(push_i32({..._fd.m, mem: nm}, 0)), ws: ws})
     },
+    "environ_sizes_get" => wasi_environ_sizes_get(m, ws),
+    "environ_get" => wasi_environ_get(m, ws),
+    "args_sizes_get" => {
+      let buf_size_ptr = pop_i32(m)
+      let count_ptr = pop_i32(buf_size_ptr.m)
+      let nm = memory.ms_store_i32(count_ptr.m.mem, 0, count_ptr.val, 0)!
+      let nm2 = memory.ms_store_i32(nm, 0, buf_size_ptr.val, 0)!
+      ok({r: Continue(push_i32({...count_ptr.m, mem: nm2}, 0)), ws: ws})
+    },
+    "args_get" => {
+      let _buf_ptr = pop_i32(m)
+      let _argv_ptr = pop_i32(_buf_ptr.m)
+      ok({r: Continue(push_i32(_argv_ptr.m, 0)), ws: ws})
+    },
+    "fd_prestat_get" => {
+      let _buf = pop_i32(m)
+      let _fd = pop_i32(_buf.m)
+      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
+    },
+    "fd_prestat_dir_name" => {
+      let _len = pop_i32(m)
+      let _buf = pop_i32(_len.m)
+      let _fd = pop_i32(_buf.m)
+      ok({r: Continue(push_i32(_fd.m, 8)), ws: ws})
+    },
+    "fd_fdstat_get" => {
+      let _buf = pop_i32(m)
+      let _fd = pop_i32(_buf.m)
+      ok({r: Continue(push_i32(_fd.m, 0)), ws: ws})
+    },
     _ => ok({r: Trap("unknown WASI: ${name}"), ws: ws}),
+  }
+
+// --- WASI environ ---
+
+fn env_entry_str(e: EnvVar) -> String = e.key + "=" + e.val
+
+fn env_buf_size(envs: List[EnvVar], idx: Int, acc: Int) -> Int =
+  if idx >= list.len(envs) then acc
+  else {
+    let e = list.get(envs, idx) ?? {key: "", val: ""}
+    env_buf_size(envs, idx + 1, acc + string.len(env_entry_str(e)) + 1)
+  }
+
+effect fn wasi_environ_sizes_get(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let buf_size_ptr = pop_i32(m)
+  let count_ptr = pop_i32(buf_size_ptr.m)
+  let m2 = count_ptr.m
+  let count = list.len(ws.env_vars)
+  let buf_size = env_buf_size(ws.env_vars, 0, 0)
+  let nm = memory.ms_store_i32(m2.mem, 0, count_ptr.val, count)!
+  let nm2 = memory.ms_store_i32(nm, 0, buf_size_ptr.val, buf_size)!
+  ok({r: Continue(push_i32({...m2, mem: nm2}, 0)), ws: ws})
+}
+
+effect fn wasi_environ_get(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
+  let buf_ptr = pop_i32(m)
+  let environ_ptr = pop_i32(buf_ptr.m)
+  let m2 = environ_ptr.m
+  let result = write_environ_entries(m2.mem, ws.env_vars, environ_ptr.val, buf_ptr.val, 0)!
+  ok({r: Continue(push_i32({...m2, mem: result}, 0)), ws: ws})
+}
+
+effect fn write_environ_entries(ms: memory.MemStore, envs: List[EnvVar], ptr_base: Int, buf_base: Int, idx: Int) -> Result[memory.MemStore, String] =
+  if idx >= list.len(envs) then ok(ms)
+  else {
+    let e = list.get(envs, idx) ?? {key: "", val: ""}
+    let entry = env_entry_str(e)
+    let bytes = string.to_bytes(entry)
+    // Write pointer to this entry
+    let ms2 = memory.ms_store_i32(ms, 0, ptr_base + idx * 4, buf_base)!
+    // Write "KEY=VALUE\0" into buffer
+    let ms3 = write_bytes_at(ms2, buf_base, bytes, 0)!
+    let ms4 = memory.ms_store_u8(ms3, 0, buf_base + list.len(bytes), 0)!
+    write_environ_entries(ms4, envs, ptr_base, buf_base + list.len(bytes) + 1, idx + 1)
+  }
+
+effect fn write_bytes_at(ms: memory.MemStore, base: Int, bytes: List[Int], idx: Int) -> Result[memory.MemStore, String] =
+  if idx >= list.len(bytes) then ok(ms)
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    let ms2 = memory.ms_store_u8(ms, 0, base + idx, b)!
+    write_bytes_at(ms2, base, bytes, idx + 1)
   }
 
 effect fn wasi_fd_write(m: Machine, ws: WasiState) -> Result[{r: ExecResult, ws: WasiState}, String] = {
@@ -699,9 +784,9 @@ fn fill_table(table: List[Int], offset: Int, indices: List[Int], idx: Int) -> Li
     fill_table(if pos < list.len(table) then list.set(table, pos, fi) else table, offset, indices, idx + 1)
   }
 
-effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet) -> Result[WasiState, String] = {
+effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> Result[WasiState, String] = {
   let m = init_module(wasm, max_memory_pages)!
-  let ws = new_wasi_state(step_limit, caps)
+  let ws = new_wasi_state(step_limit, caps, env)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,
@@ -714,7 +799,7 @@ effect fn run(wasm: binary.WasmModule, step_limit: Int, max_memory_pages: Int, c
   }
 }
 
-effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet) -> Result[WasiState, String] = {
+effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String, step_limit: Int, max_memory_pages: Int, caps: sandbox.CapabilitySet, env: List[EnvVar]) -> Result[WasiState, String] = {
   let m = init_module(wasm, max_memory_pages)!
   // Build stdin: length-prefixed JSON command
   let cmd = "{\"tool\":\"${tool_name}\",\"arguments\":${args_json}}"
@@ -726,7 +811,7 @@ effect fn run_tool(wasm: binary.WasmModule, tool_name: String, args_json: String
     int.band(int.bshr(len, 16), 0xFF),
     int.band(int.bshr(len, 24), 0xFF),
   ]
-  let ws = wasi_with_stdin(len_bytes + cmd_bytes, step_limit, caps)
+  let ws = wasi_with_stdin(len_bytes + cmd_bytes, step_limit, caps, env)
   let start_export = wasm.exports |> list.find((exp) => exp.name == "_start")
   let start_idx = match start_export {
     some(exp) => exp.index,

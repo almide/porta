@@ -24,6 +24,8 @@ type InstanceConfig = {
   max_memory_pages: Int,
   max_restarts: Int,
   capabilities: sandbox.CapabilitySet,
+  env_vars: List[interp.EnvVar],
+  secrets: List[interp.EnvVar],
 }
 
 type ToolResult = {
@@ -54,13 +56,16 @@ fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> Insta
   max_memory_pages: 0,
   max_restarts: 3,
   capabilities: caps,
+  env_vars: [],
+  secrets: [],
 }
 
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
   sandbox.validate_imports(config.wasm.imports, config.capabilities)!
-  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities)!
+  let env = config.env_vars + config.secrets
+  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env)!
   ok({
     stdout: ws.stdout_buf,
     stderr: ws.stderr_buf,
@@ -75,7 +80,8 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
 
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
   sandbox.validate_imports(config.wasm.imports, config.capabilities)!
-  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities)!
+  let env = config.env_vars + config.secrets
+  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities, env)!
   let exit_code = match ws.exit_code { some(c) => c, none => 0 }
   let should_restart = match config.restart_policy {
     Never => false,

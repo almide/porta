@@ -4,6 +4,7 @@ import process
 import fs
 import json
 import self.wasm.binary
+import self.wasm.interp
 import self.dispatch
 import self.sandbox
 import self.manifest
@@ -19,6 +20,9 @@ type Options = {
   restart: String,
   profile: String,
   manifest_path: String,
+  env_vars: List[interp.EnvVar],
+  env_file: String,
+  secrets: List[interp.EnvVar],
 }
 
 fn default_options() -> Options = {
@@ -29,6 +33,9 @@ fn default_options() -> Options = {
   restart: "no",
   profile: "",
   manifest_path: "",
+  env_vars: [],
+  env_file: "",
+  secrets: [],
 }
 
 fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
@@ -43,12 +50,57 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
       "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
       "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
       "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
+      "--env" => match split_at_eq(next) {
+        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
+        none => parse_options(args, idx + 2, opts),
+      },
+      "--env-file" => parse_options(args, idx + 2, {...opts, env_file: next}),
+      "--secret" => match split_at_eq(next) {
+        some(kv) => parse_options(args, idx + 2, {...opts, secrets: opts.secrets + [kv]}),
+        none => parse_options(args, idx + 2, opts),
+      },
       _ =>
         if string.starts_with(arg, "--") then parse_options(args, idx + 2, opts)
         else if opts.path == "" then parse_options(args, idx + 1, {...opts, path: arg})
         else parse_options(args, idx + 1, opts),
     }
   }
+
+// --- String helpers ---
+
+fn split_at_eq(s: String) -> Option[interp.EnvVar] =
+  find_eq_pos(string.to_bytes(s), 0, s)
+
+fn find_eq_pos(bytes: List[Int], idx: Int, s: String) -> Option[interp.EnvVar] =
+  if idx >= list.len(bytes) then none
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b == 61 then {
+      let key = string.from_bytes(list.take(bytes, idx))
+      let val = string.from_bytes(list.drop(bytes, idx + 1))
+      some({key: key, val: val})
+    }
+    else find_eq_pos(bytes, idx + 1, s)
+  }
+
+fn split_lines(bytes: List[Int], start: Int, idx: Int, acc: List[String]) -> List[String] =
+  if idx >= list.len(bytes) then {
+    if idx > start then acc + [string.from_bytes(list.slice(bytes, start, idx))]
+    else acc
+  }
+  else {
+    let b = list.get(bytes, idx) ?? 0
+    if b == 10 then split_lines(bytes, idx + 1, idx + 1, acc + [string.from_bytes(list.slice(bytes, start, idx))])
+    else split_lines(bytes, start, idx + 1, acc)
+  }
+
+effect fn load_env_file(path: String) -> Result[List[interp.EnvVar], String] = {
+  let content = fs.read_text(path)!
+  let lines = split_lines(string.to_bytes(content), 0, 0, [])
+  ok(lines
+    |> list.filter((line) => string.len(string.trim(line)) > 0 and not string.starts_with(string.trim(line), "#"))
+    |> list.filter_map((line) => split_at_eq(string.trim(line))))
+}
 
 fn parse_int(s: String) -> Int =
   parse_int_acc(string.to_bytes(s), 0, 0)
@@ -85,7 +137,14 @@ fn resolve_serve_caps(opts: Options, manifest_caps: List[String]) -> sandbox.Cap
   else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
   else sandbox.profile_ai_agent()
 
-fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet) -> dispatch.InstanceConfig = {
+effect fn resolve_env(opts: Options) -> Result[List[interp.EnvVar], String] = {
+  let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
+    else []
+  // CLI --env overrides file values
+  ok(file_env + opts.env_vars)
+}
+
+fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet, env: List[interp.EnvVar]) -> dispatch.InstanceConfig = {
   let config = dispatch.default_config(wasm, caps)
   {
     ...config,
@@ -93,6 +152,8 @@ fn build_config(wasm: binary.WasmModule, opts: Options, caps: sandbox.Capability
     step_limit: opts.step_limit,
     max_memory_pages: opts.max_memory_pages,
     restart_policy: dispatch.parse_restart_policy(opts.restart),
+    env_vars: env,
+    secrets: opts.secrets,
   }
 }
 
@@ -184,7 +245,8 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
     }
   let wasm = binary.load(opts.path)!
   let caps = resolve_serve_caps(opts, m.capabilities)
-  let config = build_config(wasm, opts, caps)
+  let env = resolve_env(opts)!
+  let config = build_config(wasm, opts, caps, env)
   let server = mcp.new_server(m, config)
   mcp.serve_loop(server)
 }
@@ -192,7 +254,8 @@ effect fn serve(opts: Options) -> Result[Unit, String] = {
 effect fn run_wasm(opts: Options) -> Result[Unit, String] = {
   let wasm = binary.load(opts.path)!
   let caps = resolve_caps(opts, [])
-  let config = build_config(wasm, opts, caps)
+  let env = resolve_env(opts)!
+  let config = build_config(wasm, opts, caps, env)
   let result = dispatch.run_instance(config)!
   if string.len(result.stdout) > 0 then println(result.stdout) else ()
   if string.len(result.stderr) > 0 then println(result.stderr) else ()
@@ -294,6 +357,9 @@ fn print_help(topic: String) -> Unit =
       println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
       println("  --restart <policy>      Restart policy: no, on-failure, always")
       println("  --profile <name>        Capability profile: ai-agent, worker, full")
+      println("  --env <KEY=VALUE>       Set environment variable (repeatable)")
+      println("  --env-file <path>       Load env vars from file")
+      println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
     },
     "serve" => {
       println("porta serve <agent.wasm> [options]")
@@ -306,6 +372,9 @@ fn print_help(topic: String) -> Unit =
       println("  --step-limit <n>        Max instructions per tool call (0 = unlimited)")
       println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
       println("  --profile <name>        Capability profile: ai-agent, worker, full")
+      println("  --env <KEY=VALUE>       Set environment variable (repeatable)")
+      println("  --env-file <path>       Load env vars from file")
+      println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
     },
     "validate" => {
       println("porta validate <agent.wasm> [options]")
