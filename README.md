@@ -1,14 +1,25 @@
-# Porta
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Porta" width="200">
+</p>
 
-A secure MCP bridge for Almide-compiled WASM agents. The gate between the sandbox and the world.
+<h1 align="center">Porta</h1>
 
-Written in [Almide](https://github.com/almide/almide) with a built-in WASM interpreter. No external runtime dependency.
+<p align="center">
+  A secure MCP bridge for Almide-compiled WASM agents.<br>
+  The gate between the sandbox and the world.
+</p>
+
+<p align="center">
+  Written in <a href="https://github.com/almide/almide">Almide</a> with a built-in WASM interpreter. No external runtime dependency.
+</p>
+
+---
 
 ## Install
 
 ```bash
 # From source
-almide build src/main.almd -o porta
+almide build src/mod.almd -o porta
 cp porta ~/.local/bin/
 ```
 
