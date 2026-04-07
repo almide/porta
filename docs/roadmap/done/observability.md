@@ -1,4 +1,5 @@
 <!-- description: Logs, health probes, metrics, and OpenTelemetry tracing -->
+<!-- done: 2026-04-07 -->
 
 # Observability
 

@@ -1,4 +1,5 @@
 <!-- description: Capability-based security with profiles, policy engine, network control -->
+<!-- done: 2026-04-07 -->
 
 # Sandbox Enforcement
 

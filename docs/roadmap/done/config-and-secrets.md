@@ -1,4 +1,5 @@
 <!-- description: Environment variables, config injection, and secret management -->
+<!-- done: 2026-04-07 -->
 
 # Configuration & Secrets
 

@@ -1,4 +1,5 @@
 <!-- description: CLI with run/serve/build and full lifecycle management -->
+<!-- done: 2026-04-07 -->
 
 # CLI
 
