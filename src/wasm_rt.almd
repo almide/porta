@@ -45,6 +45,9 @@ fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> String
 
 // --- Process management ---
 
+@extern(rs, "wasmtime_bridge", "wt_spawn")
+fn wt_spawn(cmd: String, args_json: String) -> Int
+
 @extern(rs, "wasmtime_bridge", "wt_home_dir")
 fn wt_home_dir() -> String
 

@@ -365,6 +365,29 @@ pub fn wt_kill(pid: i64, signal: i64) -> i64 {
     { -1 }
 }
 
+/// Spawn a detached process. Returns PID (>0) or -1 on error.
+pub fn wt_spawn(cmd: impl AsRef<str>, args_json: impl AsRef<str>) -> i64 {
+    let args: Vec<String> = if args_json.as_ref().is_empty() || args_json.as_ref() == "[]" {
+        Vec::new()
+    } else {
+        match serde_json::from_str::<Vec<String>>(args_json.as_ref()) {
+            Ok(a) => a,
+            Err(_) => return -1,
+        }
+    };
+
+    match std::process::Command::new(cmd.as_ref())
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child.id() as i64,
+        Err(_) => -1,
+    }
+}
+
 /// Get HOME directory path.
 pub fn wt_home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
