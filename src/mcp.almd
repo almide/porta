@@ -216,16 +216,23 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 // --- Host validation ---
 
 fn is_host_allowed(url: String, allowed: List[String]) -> Bool = {
-  // Extract host:port from URL, check against allowed list
-  // allowed entries are like "*:443", "api.example.com:443"
-  // For now, check if any allowed entry's port matches the URL scheme
+  // Extract host and port from URL
   let is_https = string.starts_with(url, "https://")
   let is_http = string.starts_with(url, "http://")
-  let port = if is_https then "443" else if is_http then "80" else ""
+  let scheme_len = if is_https then 8 else if is_http then 7 else 0
+  let after_scheme = string.drop(url, scheme_len)
+  let host_port_part = list.get(string.split(after_scheme, "/"), 0) ?? ""
+  let url_parts = string.split(host_port_part, ":")
+  let url_host = list.get(url_parts, 0) ?? ""
+  let url_port = if list.len(url_parts) > 1 then list.last(url_parts) ?? ""
+    else if is_https then "443" else if is_http then "80" else ""
   allowed |> list.any((h) => {
     let parts = string.split(h, ":")
+    let allowed_host = if list.len(parts) > 1 then string.join(list.take(parts, list.len(parts) - 1), ":") else list.get(parts, 0) ?? ""
     let allowed_port = list.last(parts) ?? ""
-    allowed_port == "*" or allowed_port == port
+    let host_match = allowed_host == "*" or allowed_host == url_host
+    let port_match = allowed_port == "*" or allowed_port == url_port
+    host_match and port_match
   })
 }
 

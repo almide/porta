@@ -4,13 +4,19 @@ import self.dispatch
 
 // --- is_host_allowed ---
 
-test "is_host_allowed: https matches port 443" {
+test "is_host_allowed: wildcard host matches any host on port" {
   assert(mcp.is_host_allowed("https://api.example.com/path", ["*:443"]))
+  assert(mcp.is_host_allowed("https://other.host.com/path", ["*:443"]))
 }
 
-test "is_host_allowed: wildcard port matches anything" {
-  assert(mcp.is_host_allowed("https://api.example.com/path", ["*:*"]))
-  assert(mcp.is_host_allowed("http://api.example.com/path", ["*:*"]))
+test "is_host_allowed: specific host only matches that host" {
+  assert(mcp.is_host_allowed("https://api.example.com/path", ["api.example.com:443"]))
+  assert(not mcp.is_host_allowed("https://evil.com/path", ["api.example.com:443"]))
+}
+
+test "is_host_allowed: wildcard port matches any port" {
+  assert(mcp.is_host_allowed("https://api.example.com/path", ["api.example.com:*"]))
+  assert(mcp.is_host_allowed("http://api.example.com/path", ["api.example.com:*"]))
 }
 
 test "is_host_allowed: http on 443-only denied" {
@@ -22,8 +28,13 @@ test "is_host_allowed: empty list denies all" {
 }
 
 test "is_host_allowed: multiple entries" {
-  assert(mcp.is_host_allowed("https://api.example.com", ["*:80", "*:443"]))
-  assert(not mcp.is_host_allowed("https://api.example.com", ["*:80", "*:8080"]))
+  assert(mcp.is_host_allowed("https://api.example.com", ["other.com:443", "api.example.com:443"]))
+  assert(not mcp.is_host_allowed("https://evil.com", ["other.com:443", "api.example.com:443"]))
+}
+
+test "is_host_allowed: explicit port in URL" {
+  assert(mcp.is_host_allowed("http://localhost:8080/api", ["localhost:8080"]))
+  assert(not mcp.is_host_allowed("http://localhost:9090/api", ["localhost:8080"]))
 }
 
 // --- Capability enforcement: porta.exec requires CapExec ---

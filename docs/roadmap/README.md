@@ -4,11 +4,10 @@
 
 ## Active
 
-4 items
+3 items
 
 | Item | Description |
 |------|-------------|
-| [porta.http Host-Based Allowlist](active/02-http-host-allowlist.md) | Make porta.http allowlist check hostname, not just port |
 | [Run Mode Manifest Capabilities](active/03-run-manifest-caps.md) | Make run mode respect manifest capabilities like serve does |
 | [Detach Option Forwarding](active/04-detach-options.md) | Forward all CLI options to detached daemon child process |
 | [Sandbox Honesty](active/05-sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
@@ -29,14 +28,15 @@
 
 ## Done
 
-15 items
+16 items
 
 <details>
-<summary>Show all 15 completed items</summary>
+<summary>Show all 16 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
 | 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
+| 2026-04-08 | [porta.http Host-Based Allowlist](done/http-host-allowlist.md) | Make porta.http allowlist check hostname, not just port |
 | 2026-04-08 | [porta.exec Sandboxing](done/exec-sandbox.md) | Make porta.exec truly sandboxed and fix command injection in sh -c |
 | 2026-04-08 | [Native Sandbox Deny-by-Default](done/native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
 | 2026-04-08 | [JSON-RPC Proper Framing](done/jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
