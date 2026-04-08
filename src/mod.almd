@@ -7,28 +7,37 @@ import self.ops
 import self.build
 import self.project
 
+fn has_help_flag(args: List[String]) -> Bool =
+  args |> list.any((a) => a == "--help" or a == "-h")
+
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
   let cmd = list.get(args, 1) ?? "help"
 
   match cmd {
+    "--version" => {
+      println("porta 0.1.0")
+      ok(())
+    },
+    "--help" => {
+      cli.print_help("")
+      ok(())
+    },
     "serve" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta serve <agent.wasm> [options]")
-        println("  run 'porta help serve' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("serve"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("serve"); ok(()) }
+        else engine.serve(opts)
       }
-      else engine.serve(opts)
     },
     "run" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta run <agent.wasm> [options]")
-        println("  run 'porta help run' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("run"); ok(()) }
+        else engine.run_wasm(opts)
       }
-      else engine.run_wasm(opts)
     },
     "up" => {
       let rest = list.drop(args, 2)
@@ -41,37 +50,36 @@ effect fn main() -> Result[Unit, String] = {
       project.porta_init(runtime_type, command)
     },
     "run-native" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta run-native <command> [options] -- [args...]")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("run-native"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("run-native"); ok(()) }
+        else engine.run_native(opts)
       }
-      else engine.run_native(opts)
     },
     "inspect" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta inspect <agent.wasm>")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("inspect"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("inspect"); ok(()) }
+        else engine.inspect(opts.path)
       }
-      else engine.inspect(opts.path)
     },
     "validate" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta validate <agent.wasm> [--profile <name>]")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("validate"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("validate"); ok(()) }
+        else engine.validate(opts)
       }
-      else engine.validate(opts)
     },
     "build" => {
-      let opts = cli.parse_options(args, 2, cli.default_options())
-      if opts.path == "" then {
-        println("usage: porta build <agent.wasm> [--manifest <path>]")
-        println("  run 'porta help build' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("build"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("build"); ok(()) }
+        else build.build_package(opts)
       }
-      else build.build_package(opts)
     },
     "help" => {
       let topic = list.get(args, 2) ?? ""
