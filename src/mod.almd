@@ -9,6 +9,7 @@ import self.sandbox
 import self.observability
 import self.util
 import self.wasm_rt
+import self.config
 import self.manifest
 import self.mcp
 
@@ -29,6 +30,7 @@ type Options = {
   daemon_id: String,
   wasm_args: List[String],
   preopen_dirs: List[String],
+  allow_net: List[String],
 }
 
 fn default_options() -> Options = {
@@ -46,6 +48,7 @@ fn default_options() -> Options = {
   daemon_id: "",
   wasm_args: [],
   preopen_dirs: [],
+  allow_net: [],
 }
 
 fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
@@ -70,10 +73,10 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
         none => parse_options(args, idx + 2, opts),
       },
       "-v" => {
-        // -v /host/path maps to preopen dir
         let dir = next
         parse_options(args, idx + 2, {...opts, preopen_dirs: opts.preopen_dirs + [dir]})
       },
+      "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
       "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
@@ -174,6 +177,24 @@ effect fn main() -> Result[Unit, String] = {
         ok(())
       }
       else run_wasm(opts)
+    },
+    "up" => {
+      let rest = list.drop(args, 2)
+      let extra_args = if list.get(rest, 0) ?? "" == "--" then list.drop(rest, 1) else rest
+      porta_up(extra_args)
+    },
+    "init" => {
+      let runtime_type = list.get(args, 2) ?? "native"
+      let command = list.get(args, 3) ?? "claude"
+      porta_init(runtime_type, command)
+    },
+    "run-native" => {
+      let opts = parse_options(args, 2, default_options())
+      if opts.path == "" then {
+        println("usage: porta run-native <command> [options] -- [args...]")
+        ok(())
+      }
+      else run_native(opts)
     },
     "inspect" => {
       let opts = parse_options(args, 2, default_options())
@@ -302,7 +323,7 @@ effect fn run_detached(opts: Options) -> Result[Unit, String] = {
   // Build args for daemon child: porta run --_daemon <id> <path> [original flags minus -d]
   let child_args = ["run", "--_daemon", id, opts.path, "--profile", if opts.profile != "" then opts.profile else "full"]
   let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
-  let pid = wasm_rt.wt_spawn(self_path, args_json)
+  let pid = wasm_rt.wt_spawn(self_path, args_json)!
   if pid < 0 then err("failed to spawn daemon")
   else {
     register_instance(id, opts.path, pid)!
@@ -539,7 +560,7 @@ effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
     let pid = json.get_int(v, "pid") ?? 0
     if pid == 0 then { println("no PID for instance: " + id); ok(()) }
     else {
-      let result = wasm_rt.wt_kill(pid, signal)
+      let result = wasm_rt.wt_kill(pid, signal)!
       if result == 0 then {
         println(if signal == 9 then "killed: " + id else "stopped: " + id)
         // Update status
@@ -579,6 +600,120 @@ effect fn remove_instance(id: String) -> Result[Unit, String] = {
   }
   else println("instance not found: " + id)
   ok(())
+}
+
+// --- Help ---
+
+// --- porta up / init ---
+
+effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
+  let config_path = if fs.exists("porta.toml") then "porta.toml" else ".porta.toml"
+  if not fs.exists(config_path) then {
+    println("No porta.toml found. Run 'porta init' to create one.")
+    ok(())
+  }
+  else {
+    let cfg = config.load_porta_config(config_path)!
+    let env_list = cfg.env_vars
+    let secret_list = cfg.secrets
+    let all_args = cfg.args + extra_args
+
+    if cfg.runtime_type == "native" then {
+      let cmd = cfg.command
+      let args_json = json.stringify(json.array(all_args |> list.map(json.from_string)))
+      let dirs_json = json.stringify(json.array(cfg.mounts |> list.map(json.from_string)))
+      let net_json = json.stringify(json.array(cfg.network |> list.map(json.from_string)))
+      let all_env = env_list + secret_list
+      let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
+      let env_json = json.stringify(json.array(env_pairs))
+      let cwd = string.replace(list.get(cfg.mounts, 0) ?? ".", ":ro", "")
+
+      let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
+      let parsed = json.parse(result_json)!
+      let error = json.get_string(parsed, "error") ?? ""
+      if error != "" then eprintln(error)
+      else {
+        let stdout = json.get_string(parsed, "stdout") ?? ""
+        let stderr = json.get_string(parsed, "stderr") ?? ""
+        if string.len(stdout) > 0 then println(stdout) else ()
+        if string.len(stderr) > 0 then eprintln(stderr) else ()
+      }
+      ok(())
+    }
+    else {
+      // WASM runtime
+      let wasm_path = cfg.wasm_path
+      let opts: Options = {
+        ...default_options(),
+        path: wasm_path,
+        entry: cfg.entry,
+        step_limit: cfg.step_limit,
+        max_memory_pages: cfg.max_memory,
+        restart: cfg.restart,
+        profile: cfg.profile,
+        env_vars: env_list,
+        secrets: secret_list,
+        preopen_dirs: cfg.mounts,
+        wasm_args: all_args,
+      }
+      run_wasm(opts)
+    }
+  }
+}
+
+effect fn porta_init(runtime_type: String, command: String) -> Result[Unit, String] = {
+  if fs.exists("porta.toml") then {
+    println("porta.toml already exists.")
+    ok(())
+  }
+  else {
+    let content = if runtime_type == "native" then config.generate_native_toml(command)
+      else config.generate_wasm_toml(command)
+    fs.write("porta.toml", content)!
+    println("Created porta.toml")
+    println("")
+    println("Edit porta.toml to configure your sandbox, then run:")
+    println("  porta up")
+    ok(())
+  }
+}
+
+// --- Native sandbox execution ---
+
+effect fn run_native(opts: Options) -> Result[Unit, String] = {
+  let cmd = opts.path
+  let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
+  let dirs = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
+  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
+
+  // Collect --allow-net values
+  let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
+
+  // Build env: merge env_vars + secrets
+  let env = resolve_env(opts)!
+  let all_env = env + opts.secrets
+  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
+  let env_json = json.stringify(json.array(env_pairs))
+
+  let first_dir = list.get(dirs, 0) ?? "."
+  let cwd = string.replace(first_dir, ":ro", "")
+
+  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
+  let parsed = json.parse(result_json)!
+  let error = json.get_string(parsed, "error") ?? ""
+  if error != "" then {
+    eprintln(error)
+    ok(())
+  }
+  else {
+    let stdout = json.get_string(parsed, "stdout") ?? ""
+    let stderr = json.get_string(parsed, "stderr") ?? ""
+    let exit_code = json.get_int(parsed, "exit_code") ?? 0
+    if string.len(stdout) > 0 then println(stdout) else ()
+    if string.len(stderr) > 0 then eprintln(stderr) else ()
+    if exit_code != 0 then eprintln("exit code: " + int.to_string(exit_code)) else ()
+    ok(())
+  }
 }
 
 // --- Help ---
@@ -636,6 +771,8 @@ fn print_help(topic: String) -> Unit =
       println("porta — WASM agent MCP bridge")
       println("")
       println("usage:")
+      println("  porta up                      Run from porta.toml")
+      println("  porta init [native|wasm] [cmd] Create porta.toml")
       println("  porta run <agent.wasm>        Execute WASM binary")
       println("  porta serve <agent.wasm>      Start MCP server")
       println("  porta build <agent.wasm>      Generate manifest.json")

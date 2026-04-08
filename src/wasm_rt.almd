@@ -1,4 +1,10 @@
-// Wasmtime bridge — @extern(rs) declarations for native WASM execution
+// Wasmtime bridge + pure Almide system functions
+
+import process
+import json
+import http
+
+// --- Wasmtime (must stay in Rust) ---
 
 @extern(rs, "wasmtime_bridge", "wt_create")
 fn wt_create(wasm_path: String, fuel: Int) -> Int
@@ -36,29 +42,79 @@ fn wt_preopen_dir(handle: Int, host_path: String, guest_path: String) -> Int
 @extern(rs, "wasmtime_bridge", "wt_destroy")
 fn wt_destroy(handle: Int) -> Int
 
-// --- HTTP ---
-
-@extern(rs, "wasmtime_bridge", "wt_http_request")
-fn wt_http_request(method: String, url: String, headers_json: String, body: String) -> String
-
-// --- exec ---
-
-@extern(rs, "wasmtime_bridge", "wt_exec_command")
-fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> String
-
-// --- Process management ---
-
 @extern(rs, "wasmtime_bridge", "wt_inspect")
 fn wt_inspect(wasm_path: String) -> String
 
-@extern(rs, "wasmtime_bridge", "wt_spawn")
-fn wt_spawn(cmd: String, args_json: String) -> Int
+// --- HTTP (pure Almide) ---
 
-@extern(rs, "wasmtime_bridge", "wt_home_dir")
-fn wt_home_dir() -> String
+effect fn wt_http_request(method: String, url: String, headers_json: String, body: String) -> Result[String, String] = {
+  let headers_map = json.to_map(json.parse(headers_json) ?? json.object([])) ?? map.new()
+  let result = http.request(method, url, body, headers_map)
+  match result {
+    ok(resp_body) => ok("{\"status\":200,\"body\":" + json.stringify(json.from_string(resp_body)) + "}"),
+    err(e) => ok("{\"error\":" + json.stringify(json.from_string(e)) + "}"),
+  }
+}
 
-@extern(rs, "wasmtime_bridge", "wt_getpid")
-fn wt_getpid() -> Int
+// --- exec (pure Almide) ---
 
-@extern(rs, "wasmtime_bridge", "wt_kill")
-fn wt_kill(pid: Int, signal: Int) -> Int
+effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result[String, String] = {
+  let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let result = process.exec(cmd, args)
+  match result {
+    ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(json.from_string(stdout)) + ",\"stderr\":\"\"}"),
+    err(e) => ok("{\"error\":" + json.stringify(json.from_string(e)) + "}"),
+  }
+}
+
+// --- Sandboxed exec (pure Almide) ---
+
+effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> Result[String, String] = {
+  let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let allowed_dirs = json.as_array(json.parse(allowed_dirs_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let allowed_net = json.as_array(json.parse(allowed_net_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let profile = build_sandbox_profile(allowed_dirs, allowed_net)
+  let sandbox_args = ["-p", profile, cmd] + args
+  let result = process.exec("sandbox-exec", sandbox_args)
+  match result {
+    ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(json.from_string(stdout)) + ",\"stderr\":\"\"}"),
+    err(e) => ok("{\"error\":" + json.stringify(json.from_string(e)) + "}"),
+  }
+}
+
+fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) -> String = {
+  let home = process.env("HOME") ?? "/tmp"
+  let p = "(version 1)\n(allow default)\n"
+  let p = p + "(deny file-write*)\n"
+  let p = allowed_dirs |> list.fold(p, (acc, dir) => {
+    let clean = string.replace(dir, ":ro", "")
+    if string.ends_with(dir, ":ro") then acc
+    else acc + "(allow file-write* (subpath \"" + clean + "\"))\n"
+  })
+  let p = p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
+  let p = p + "(allow file-write* (subpath \"" + home + "/Library\"))\n(allow file-write* (subpath \"" + home + "/.config\"))\n(allow file-write* (subpath \"" + home + "/.cache\"))\n(allow file-write* (subpath \"" + home + "/.npm\"))\n(allow file-write* (subpath \"" + home + "/.claude\"))\n"
+  let p = p + "(deny file-read-data (subpath \"" + home + "/.ssh\"))\n(deny file-read-data (subpath \"" + home + "/.gnupg\"))\n(deny file-read-data (subpath \"" + home + "/.aws\"))\n(deny file-read-data (subpath \"" + home + "/.kube\"))\n(deny file-read-data (subpath \"" + home + "/.docker\"))\n(deny file-read-data (subpath \"" + home + "/Documents\"))\n(deny file-read-data (subpath \"" + home + "/Desktop\"))\n(deny file-read-data (subpath \"" + home + "/Downloads\"))\n(deny file-read-data (subpath \"" + home + "/Pictures\"))\n"
+  if list.len(allowed_net) > 0 then {
+    let p = p + "(deny network-outbound)\n(allow network-outbound (local udp))\n(allow network-outbound (remote unix-socket))\n"
+    allowed_net |> list.fold(p, (acc, host) => {
+      let parts = string.split(host, ":")
+      let port = list.last(parts) ?? "*"
+      acc + "(allow network-outbound (remote tcp \"*:" + port + "\"))\n"
+    })
+  }
+  else p
+}
+
+// --- Process management (pure Almide) ---
+
+fn wt_home_dir() -> String = process.env("HOME") ?? "/tmp"
+
+fn wt_getpid() -> Int = process.pid()
+
+effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
+  match process.kill(pid, signal) { ok(_) => ok(0), err(e) => ok(-1) }
+
+effect fn wt_spawn(cmd: String, args_json: String) -> Result[Int, String] = {
+  let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  match process.spawn(cmd, args) { ok(pid) => ok(pid), err(_) => ok(-1) }
+}

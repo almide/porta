@@ -1,0 +1,3 @@
+# almide.lock — auto-generated, do not edit
+
+toml = { git = "https://github.com/almide/toml", ref = "main", commit = "14db4aba8b7b5bcc2d2a0f1f36a1c3529a820be7" }

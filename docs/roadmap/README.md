@@ -4,10 +4,11 @@
 
 ## Active
 
-1 items
+2 items
 
 | Item | Description |
 |------|-------------|
+| [Full Almide Migration](active/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
 | [Replace Interpreter with wasmtime](active/wasmtime-migration.md) | Replace hand-rolled WASM interpreter with wasmtime via FFI |
 
 ## On Hold
