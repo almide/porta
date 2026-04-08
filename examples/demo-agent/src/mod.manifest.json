@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "name": "demo-agent",
+  "version": "0.1.0",
+  "description": "Demo MCP agent with file and utility tools",
+  "entry": "_start",
+  "capabilities": ["io", "fs", "fs.write", "process", "clock", "random"],
+  "tools": [
+    {
+      "name": "hello",
+      "description": "Say hello to someone",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Name to greet" }
+        }
+      }
+    },
+    {
+      "name": "add",
+      "description": "Add two numbers",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "First number" },
+          "b": { "type": "number", "description": "Second number" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read the contents of a file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "File path to read" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "list_files",
+      "description": "List files in a directory",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "directory": { "type": "string", "description": "Directory path (default: .)" }
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Write content to a file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "File path to write" },
+          "content": { "type": "string", "description": "Content to write" }
+        },
+        "required": ["path", "content"]
+      }
+    }
+  ],
+  "wasi_imports": ["fd_write", "fd_read", "fd_close", "path_open", "proc_exit"]
+}
