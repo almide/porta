@@ -507,6 +507,59 @@ pub fn wt_kill(pid: i64, signal: i64) -> i64 {
     { -1 }
 }
 
+/// Inspect a WASM module: extract imports and exports as JSON.
+/// Returns JSON string with {imports: [...], exports: [...]}
+pub fn wt_inspect(wasm_path: impl AsRef<str>) -> String {
+    let bytes = match std::fs::read(wasm_path.as_ref()) {
+        Ok(b) => b,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let engine = Engine::default();
+
+    let module = match Module::from_binary(&engine, &bytes) {
+        Ok(m) => m,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let imports: Vec<String> = module.imports().map(|imp| {
+        let kind = match imp.ty() {
+            ExternType::Func(_) => "func",
+            ExternType::Table(_) => "table",
+            ExternType::Memory(_) => "memory",
+            ExternType::Global(_) => "global",
+            _ => "unknown",
+        };
+        format!("{{\"module\":\"{}\",\"name\":\"{}\",\"kind\":\"{}\"}}", imp.module(), imp.name(), kind)
+    }).collect();
+
+    let exports: Vec<String> = module.exports().map(|exp| {
+        let kind = match exp.ty() {
+            ExternType::Func(_) => "func",
+            ExternType::Table(_) => "table",
+            ExternType::Memory(_) => "memory",
+            ExternType::Global(_) => "global",
+            _ => "unknown",
+        };
+        format!("{{\"name\":\"{}\",\"kind\":\"{}\"}}", exp.name(), kind)
+    }).collect();
+
+    let types_count = module.imports().count() + module.exports().count();
+    let memories: Vec<String> = module.exports().filter_map(|exp| {
+        match exp.ty() {
+            ExternType::Memory(m) => Some(format!("{{\"min\":{}}}", m.minimum())),
+            _ => None,
+        }
+    }).collect();
+
+    format!(
+        "{{\"imports\":[{}],\"exports\":[{}],\"memories\":[{}]}}",
+        imports.join(","),
+        exports.join(","),
+        memories.join(","),
+    )
+}
+
 /// Spawn a detached process. Returns PID (>0) or -1 on error.
 pub fn wt_spawn(cmd: impl AsRef<str>, args_json: impl AsRef<str>) -> i64 {
     let args: Vec<String> = if args_json.as_ref().is_empty() || args_json.as_ref() == "[]" {

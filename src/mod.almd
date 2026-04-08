@@ -314,10 +314,9 @@ effect fn run_detached(opts: Options) -> Result[Unit, String] = {
 effect fn run_as_daemon(opts: Options) -> Result[Unit, String] = {
   let id = opts.daemon_id
   let dir = instance_dir(id)
-  let wasm = binary.load(opts.path)!
   let caps = util.resolve_caps(opts.profile, [])
   let env = resolve_env(opts)!
-  let config = build_config(opts.path, wasm, opts, caps, env)
+  let config = build_run_config(opts.path, opts, caps, env)
   let result = dispatch.run_instance(config)!
   // Write logs
   if string.len(result.stdout) > 0 then fs.write(dir + "/stdout.log", result.stdout)! else ()
@@ -335,22 +334,33 @@ effect fn run_as_daemon(opts: Options) -> Result[Unit, String] = {
 }
 
 effect fn build_package(opts: Options) -> Result[Unit, String] = {
-  let wasm = binary.load(opts.path)!
   let output_path = if opts.manifest_path != "" then opts.manifest_path
     else string.replace(opts.path, ".wasm", ".manifest.json")
 
-  let export_tools = wasm.exports
-    |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
-    |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
-    |> list.map((exp) => json.object([
-      ("name", json.from_string(exp.name)),
-      ("description", json.from_string(exp.name)),
-      ("inputSchema", json.object([("type", json.from_string("object"))])),
-    ]))
+  // Use native inspect
+  let info_json = wasm_rt.wt_inspect(opts.path)
+  let info = json.parse(info_json)!
+  let all_exports = json.get_array(info, "exports") ?? []
+  let all_imports = json.get_array(info, "imports") ?? []
 
-  let wasi_imports = wasm.imports
-    |> list.filter((imp) => imp.mod_name == "wasi_snapshot_preview1")
-    |> list.map((imp) => json.from_string(imp.name))
+  let export_tools = all_exports
+    |> list.filter((exp) => json.get_string(exp, "kind") ?? "" == "func")
+    |> list.filter((exp) => {
+      let name = json.get_string(exp, "name") ?? ""
+      name != "_start" and name != "__alloc" and name != "memory"
+    })
+    |> list.map((exp) => {
+      let name = json.get_string(exp, "name") ?? ""
+      json.object([
+        ("name", json.from_string(name)),
+        ("description", json.from_string(name)),
+        ("inputSchema", json.object([("type", json.from_string("object"))])),
+      ])
+    })
+
+  let wasi_imports = all_imports
+    |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
+    |> list.map((imp) => json.from_string(json.get_string(imp, "name") ?? ""))
 
   let manifest_json = json.object([
     ("schema_version", json.from_string("1.0")),
@@ -372,7 +382,6 @@ effect fn build_package(opts: Options) -> Result[Unit, String] = {
 }
 
 effect fn validate(opts: Options) -> Result[Unit, String] = {
-  let wasm = binary.load(opts.path)!
   println("Validating: ${opts.path}")
 
   let manifest_path = if opts.manifest_path != "" then opts.manifest_path
@@ -393,62 +402,77 @@ effect fn validate(opts: Options) -> Result[Unit, String] = {
   }
   else sandbox.profile_full()
 
-  let wasi_imports = wasm.imports
-    |> list.filter((imp) => imp.mod_name == "wasi_snapshot_preview1")
+  // Use native inspect for any size WASM
+  let info_json = wasm_rt.wt_inspect(opts.path)
+  let info = json.parse(info_json)!
+  let all_imports = json.get_array(info, "imports") ?? []
+  let wasi_imports = all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
 
   println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
+  let _has_fail = false
   for imp in wasi_imports {
-    let req = sandbox.required_capability(imp.name)
+    let name = json.get_string(imp, "name") ?? ""
+    let req = sandbox.required_capability(name)
     let status = match req {
       none => "  ok",
       some(cap) =>
         if sandbox.has_capability(caps, cap) then "  ok"
         else "  DENIED (requires ${sandbox.cap_name(cap)})",
     }
-    println("    ${imp.name}${status}")
+    println("    ${name}${status}")
   }
 
-  let result = sandbox.validate_imports(wasm.imports, caps)
-  match result {
-    ok(_) => {
-      println("  Result: PASS")
-      ok(())
-    },
-    err(msg) => {
-      println("  Result: FAIL — ${msg}")
-      ok(())
-    },
+  // Check for denied imports
+  let denied = wasi_imports |> list.filter((imp) => {
+    let name = json.get_string(imp, "name") ?? ""
+    match sandbox.required_capability(name) {
+      none => false,
+      some(cap) => not sandbox.has_capability(caps, cap),
+    }
+  })
+  if list.len(denied) > 0 then {
+    let first_name = json.get_string(list.get(denied, 0) ?? json.object([]), "name") ?? ""
+    println("  Result: FAIL — capability denied for '${first_name}'")
   }
+  else println("  Result: PASS")
+  ok(())
 }
 
 effect fn inspect(path: String) -> Result[Unit, String] = {
-  let wasm = binary.load(path)!
+  let info_json = wasm_rt.wt_inspect(path)
+  let info = json.parse(info_json)!
+  let error = json.get_string(info, "error") ?? ""
+  if error != "" then err(error)
+  else {
+    let imports = json.get_array(info, "imports") ?? []
+    let exports = json.get_array(info, "exports") ?? []
+    let memories = json.get_array(info, "memories") ?? []
 
-  println("Module: ${path}")
-  println("  Types:     ${int.to_string(list.len(wasm.types))}")
-  println("  Imports:   ${int.to_string(list.len(wasm.imports))}")
-  println("  Functions: ${int.to_string(list.len(wasm.func_type_indices))}")
-  println("  Exports:   ${int.to_string(list.len(wasm.exports))}")
-  println("  Memories:  ${int.to_string(list.len(wasm.memories))}")
-  println("  Globals:   ${int.to_string(list.len(wasm.globals))}")
-  println("  Tables:    ${int.to_string(list.len(wasm.tables))}")
-  println("  Data:      ${int.to_string(list.len(wasm.data_segments))} segments")
-  println("  Code:      ${int.to_string(list.len(wasm.code))} bodies")
+    println("Module: ${path}")
+    println("  Imports:   ${int.to_string(list.len(imports))}")
+    println("  Exports:   ${int.to_string(list.len(exports))}")
+    println("  Memories:  ${int.to_string(list.len(memories))}")
 
-  println("")
-  println("Imports:")
-  for entry in list.enumerate(wasm.imports) {
-    let (idx, imp) = entry
-    println("  [${int.to_string(idx)}] ${imp.mod_name}.${imp.name}")
+    println("")
+    println("Imports:")
+    for entry in list.enumerate(imports) {
+      let (idx, imp) = entry
+      let mod_name = json.get_string(imp, "module") ?? ""
+      let name = json.get_string(imp, "name") ?? ""
+      let kind = json.get_string(imp, "kind") ?? ""
+      println("  [${int.to_string(idx)}] ${mod_name}.${name} (${kind})")
+    }
+
+    println("")
+    println("Exports:")
+    for exp in exports {
+      let name = json.get_string(exp, "name") ?? ""
+      let kind = json.get_string(exp, "kind") ?? ""
+      println("  ${name} (${kind})")
+    }
+
+    ok(())
   }
-
-  println("")
-  println("Exports:")
-  for exp in wasm.exports {
-    println("  ${exp.name} (idx=${int.to_string(exp.index)})")
-  }
-
-  ok(())
 }
 
 // --- Help ---
