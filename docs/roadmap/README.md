@@ -4,12 +4,17 @@
 
 ## Active
 
-2 items
+7 items
 
 | Item | Description |
 |------|-------------|
+| [Builtin Tool Security](active/01-builtin-tool-security.md) | Enforce capability checks on porta.exec and porta.http builtin tools |
+| [Always Validate Imports](active/02-validate-always.md) | Always validate WASM imports, never skip on empty module |
+| [JSON-RPC Proper Framing](active/03-jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
+| [Config Honesty](active/04-config-honesty.md) | Remove or implement config options that exist but don't work |
+| [Native Sandbox Deny-by-Default](active/05-native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
+| [Test Coverage for Security Paths](active/06-test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
 | [Full Almide Migration](active/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
-| [Replace Interpreter with wasmtime](active/wasmtime-migration.md) | Replace hand-rolled WASM interpreter with wasmtime via FFI |
 
 ## On Hold
 
@@ -26,10 +31,10 @@
 
 ## Done
 
-7 items
+8 items
 
 <details>
-<summary>Show all 7 completed items</summary>
+<summary>Show all 8 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
