@@ -109,7 +109,7 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
 }
 
 fn generate_native_toml(command: String) -> String =
-  "[runtime]\ntype = \"native\"\ncommand = \"" + command + "\"\n\n[sandbox]\nmounts = [\".\"]\nnetwork = [\"*:443\"]\n\n[env]\n\n[secrets]\n"
+  "[runtime]\ntype = \"native\"\ncommand = \"" + command + "\"\n\n[sandbox]\n# Writable directories (the command can write here)\nmounts = [\".\"]\n# Add more as needed, e.g.:\n#   \"~/.config\"\n#   \"~/.cache\"\n#   \"~/Library\"\n#   \"/some/path:ro\"   (read-only)\n\n# Network restrictions (empty = all open, like Docker)\n# network = [\"*:443\"]   # HTTPS only\n# network = [\"*:80\", \"*:443\"]   # HTTP + HTTPS\n\n[env]\n\n[secrets]\n# key = \"value\"\n# key = { from-env = true }   # read from host environment\n"
 
 fn generate_wasm_toml(wasm_path: String) -> String =
   "[runtime]\ntype = \"wasm\"\nwasm = \"" + wasm_path + "\"\nentry = \"_start\"\n\n[sandbox]\nmounts = [\".\"]\nprofile = \"full\"\n\n[env]\n\n[secrets]\n"
