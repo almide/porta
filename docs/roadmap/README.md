@@ -4,11 +4,10 @@
 
 ## Active
 
-5 items
+4 items
 
 | Item | Description |
 |------|-------------|
-| [JSON-RPC Proper Framing](active/03-jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
 | [Config Honesty](active/04-config-honesty.md) | Remove or implement config options that exist but don't work |
 | [Native Sandbox Deny-by-Default](active/05-native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
 | [Test Coverage for Security Paths](active/06-test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
@@ -29,13 +28,14 @@
 
 ## Done
 
-10 items
+11 items
 
 <details>
-<summary>Show all 10 completed items</summary>
+<summary>Show all 11 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-04-08 | [JSON-RPC Proper Framing](done/jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
 | 2026-04-08 | [Builtin Tool Security](done/builtin-tool-security.md) | Enforce capability checks on porta.exec and porta.http builtin tools |
 | 2026-04-08 | [Always Validate Imports](done/validate-always.md) | Always validate WASM imports, never skip on empty module |
 | 2026-04-07 | [Sandbox Enforcement](done/sandbox-enforcement.md) | Capability-based security with profiles, policy engine, network control |
