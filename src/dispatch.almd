@@ -24,7 +24,6 @@ type RestartPolicy =
 
 type InstanceConfig = {
   wasm_path: String,
-  wasm: binary.WasmModule,
   entry: String,
   restart_policy: RestartPolicy,
   step_limit: Int,
@@ -61,9 +60,8 @@ fn parse_restart_policy(s: String) -> RestartPolicy =
     _ => Never,
   }
 
-fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+fn default_config(wasm_path: String, caps: sandbox.CapabilitySet) -> InstanceConfig = {
   wasm_path: wasm_path,
-  wasm: wasm,
   entry: "_start",
   restart_policy: Never,
   step_limit: 0,
@@ -103,10 +101,26 @@ fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
   ()
 }
 
+effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] = {
+  let info_json = wasm_rt.wt_inspect(config.wasm_path)
+  let info = json.parse(info_json)!
+  let all_imports = json.get_array(info, "imports") ?? []
+  let imports = all_imports |> list.map((imp) => {
+    let i: binary.Import = {
+      mod_name: json.get_string(imp, "module") ?? "",
+      name: json.get_string(imp, "name") ?? "",
+      desc: binary.ImportFunc(0),
+    }
+    i
+  })
+  if list.len(imports) > 0 then sandbox.validate_imports(imports, config.capabilities)
+  else ok(())
+}
+
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
-  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  validate_wasm_imports(config)!
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
@@ -140,7 +154,7 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
   run_with_restarts(config, 0)
 
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
-  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  validate_wasm_imports(config)!
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")

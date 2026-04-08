@@ -1,4 +1,5 @@
 <!-- description: Enforce capability checks on porta.exec and porta.http builtin tools -->
+<!-- done: 2026-04-08 -->
 
 # Builtin Tool Security
 

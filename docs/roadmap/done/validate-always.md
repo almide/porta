@@ -1,4 +1,5 @@
 <!-- description: Always validate WASM imports, never skip on empty module -->
+<!-- done: 2026-04-08 -->
 
 # Always Validate Imports
 

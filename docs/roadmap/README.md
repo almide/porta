@@ -4,12 +4,10 @@
 
 ## Active
 
-7 items
+5 items
 
 | Item | Description |
 |------|-------------|
-| [Builtin Tool Security](active/01-builtin-tool-security.md) | Enforce capability checks on porta.exec and porta.http builtin tools |
-| [Always Validate Imports](active/02-validate-always.md) | Always validate WASM imports, never skip on empty module |
 | [JSON-RPC Proper Framing](active/03-jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
 | [Config Honesty](active/04-config-honesty.md) | Remove or implement config options that exist but don't work |
 | [Native Sandbox Deny-by-Default](active/05-native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
@@ -31,13 +29,15 @@
 
 ## Done
 
-8 items
+10 items
 
 <details>
-<summary>Show all 8 completed items</summary>
+<summary>Show all 10 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-04-08 | [Builtin Tool Security](done/builtin-tool-security.md) | Enforce capability checks on porta.exec and porta.http builtin tools |
+| 2026-04-08 | [Always Validate Imports](done/validate-always.md) | Always validate WASM imports, never skip on empty module |
 | 2026-04-07 | [Sandbox Enforcement](done/sandbox-enforcement.md) | Capability-based security with profiles, policy engine, network control |
 | 2026-04-07 | [Observability](done/observability.md) | Logs, health probes, metrics, and OpenTelemetry tracing |
 | 2026-04-07 | [MCP Protocol Implementation](done/mcp-protocol.md) | MCP protocol implementation over JSON-RPC 2.0 stdio |
