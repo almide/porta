@@ -2,21 +2,14 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
-## Active
-
-1 items
-
-| Item | Description |
-|------|-------------|
-| [Full Almide Migration](active/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
-
 ## On Hold
 
-6 items
+7 items
 
 | Item | Description |
 |------|-------------|
 | [Compose](on-hold/compose.md) | Multi-service orchestration with dependency and health management |
+| [Full Almide Migration](on-hold/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
 | [Image Distribution](on-hold/image-distribution.md) | OCI-compatible image push/pull for porta agent distribution |
 | [Networking](on-hold/networking.md) | Port publishing, service discovery, and capability-routed networking |
 | [Self-Hosted WASM Runtime](on-hold/self-hosted-wasm-runtime.md) | Build Almide-native WASM runtime to eventually replace wasmtime |
