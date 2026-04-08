@@ -2,6 +2,18 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
+## Active
+
+5 items
+
+| Item | Description |
+|------|-------------|
+| [porta.exec Sandboxing](active/01-exec-sandbox.md) | Make porta.exec truly sandboxed and fix command injection in sh -c |
+| [porta.http Host-Based Allowlist](active/02-http-host-allowlist.md) | Make porta.http allowlist check hostname, not just port |
+| [Run Mode Manifest Capabilities](active/03-run-manifest-caps.md) | Make run mode respect manifest capabilities like serve does |
+| [Detach Option Forwarding](active/04-detach-options.md) | Forward all CLI options to detached daemon child process |
+| [Sandbox Honesty](active/05-sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
+
 ## On Hold
 
 7 items
