@@ -186,6 +186,75 @@ porta serve agent.wasm --profile full
 }
 ```
 
+## How It Works: Claude Code in Porta
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Porta
+    participant Sandbox as sandbox-exec
+    participant Claude as Claude Code
+    participant API as Anthropic API
+
+    User->>Porta: porta up -- "Fix the bug"
+    Porta->>Porta: Load porta.toml
+    Porta->>Porta: Generate sandbox profile
+    Porta->>Sandbox: sandbox-exec -p profile claude --print "Fix the bug"
+    Sandbox->>Claude: Launch (sandboxed)
+    Claude->>API: Messages API (allowed: *:443)
+    API-->>Claude: Response with tool_use
+    Claude->>Sandbox: Write file (allowed: -v dirs only)
+    Sandbox-->>Claude: ✅ OK
+    Claude->>Sandbox: Read ~/.ssh/id_rsa
+    Sandbox-->>Claude: ❌ Operation not permitted
+    Claude->>Sandbox: curl evil.com
+    Sandbox-->>Claude: ❌ Network denied
+    Claude-->>Porta: Exit
+    Porta-->>User: Output
+```
+
+### What Porta Controls
+
+```mermaid
+graph LR
+    subgraph "Porta Sandbox"
+        CC[Claude Code]
+        CC -->|"✅ Write"| WD["-v ./workspace"]
+        CC -->|"❌ Write"| HD["~/Desktop, /etc"]
+        CC -->|"✅ Read"| WD
+        CC -->|"❌ Read"| SSH["~/.ssh, ~/.aws"]
+        CC -->|"✅ HTTPS"| API["api.anthropic.com:443"]
+        CC -->|"❌ Any"| Evil["evil.com, 0.0.0.0"]
+    end
+```
+
+### WASM Agent Mode
+
+```mermaid
+graph TB
+    subgraph "Porta"
+        MCP["MCP Server<br/>JSON-RPC 2.0 / stdio"]
+        D["Dispatch"]
+        S["Sandbox<br/>Capability Check"]
+        
+        subgraph "wasmtime"
+            W["WASM Agent"]
+            WASI["WASI Preview 1"]
+            HF["Host Functions<br/>porta.http_request<br/>porta.exec_command"]
+        end
+        
+        BT["Built-in Tools<br/>porta.exec / porta.http"]
+    end
+    
+    Client["MCP Client<br/>(Claude Code, Cursor)"] -->|"tools/call"| MCP
+    MCP --> D
+    D --> S
+    S -->|"Agent tool"| W
+    S -->|"Built-in tool"| BT
+    W --> WASI
+    W --> HF
+```
+
 ## Architecture
 
 ```
