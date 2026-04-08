@@ -75,6 +75,7 @@ effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
   let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
   let dirs = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
   let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
+  // Native commands: network open by default (like Docker). Use --no-net to block.
   let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
   let env = cli.resolve_env(opts)!
   let all_env = env + opts.secrets

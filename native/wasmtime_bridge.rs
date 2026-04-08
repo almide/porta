@@ -844,10 +844,11 @@ fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> 
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
     }
-    profile.push_str("(deny network-outbound)\n");
-    profile.push_str("(allow network-outbound (local udp))\n");
-    profile.push_str("(allow network-outbound (remote unix-socket))\n");
+    // Network: open by default (like Docker). --allow-net restricts to listed ports only.
     if !allowed_net.is_empty() {
+        profile.push_str("(deny network-outbound)\n");
+        profile.push_str("(allow network-outbound (local udp))\n");
+        profile.push_str("(allow network-outbound (remote unix-socket))\n");
         for host in allowed_net {
             if let Some(colon) = host.rfind(':') {
                 let port = &host[colon + 1..];

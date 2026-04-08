@@ -41,15 +41,15 @@ porta up -- --print "Fix the bug in main.rs"
 ### Verify network restrictions
 
 ```bash
-# All network blocked (no --allow-net)
+# Network open by default (like Docker)
 porta run curl -- https://example.com
-# → exit status: 7 (blocked by sandbox)
+# → works
 
-# Only HTTPS allowed
+# Restrict to HTTPS only
 porta run curl --allow-net '*:443' -- https://example.com
 # → works
 
-# Specific port only — HTTPS blocked
+# Restrict to port 80 — HTTPS blocked
 porta run curl --allow-net '*:80' -- https://example.com
 # → exit status: 7 (port 443 not allowed)
 ```
@@ -76,7 +76,7 @@ command = "claude"         # Command to run (native mode)
 [sandbox]
 mounts = ["."]            # Directories the command can write to
 # mounts = [".:ro"]       # Read-only mount
-network = ["*:443"]       # Allowed outbound ports (empty = all blocked)
+network = ["*:443"]       # Restrict to these ports (empty = all open)
 
 [env]
 NODE_ENV = "production"
@@ -163,7 +163,7 @@ Uses `sandbox-exec` to enforce:
 |---------|----------|
 | **FS write** | Denied everywhere except `-v` mounted dirs |
 | **FS read** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures` denied |
-| **Network** | **All blocked by default.** `--allow-net "*:443"` → allow HTTPS port only |
+| **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
 | **Read-only** | `-v ./data:ro` → read OK, write denied |
 
 > Note: macOS sandbox-exec supports port-based filtering only. Host-based filtering (`api.example.com:443`) is enforced at the MCP layer for builtin tools.

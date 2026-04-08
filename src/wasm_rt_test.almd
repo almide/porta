@@ -89,8 +89,13 @@ test "wt_inspect: invalid path" {
 
 // --- build_sandbox_profile ---
 
-test "build_sandbox_profile: empty allowed_net denies all outbound" {
+test "build_sandbox_profile: empty allowed_net means network open" {
   let profile = wasm_rt.build_sandbox_profile(["."], [])
+  assert(not string.contains(profile, "(deny network-outbound)"))
+}
+
+test "build_sandbox_profile: allow_net restricts to listed ports" {
+  let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"])
   assert(string.contains(profile, "(deny network-outbound)"))
   assert(string.contains(profile, "(allow network-outbound (local udp))"))
 }
