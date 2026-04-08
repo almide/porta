@@ -9,6 +9,9 @@ fn wt_set_stdin(handle: Int, data: String) -> Int
 @extern(rs, "wasmtime_bridge", "wt_set_tool_stdin")
 fn wt_set_tool_stdin(handle: Int, tool_name: String, args_json: String) -> Int
 
+@extern(rs, "wasmtime_bridge", "wt_set_args")
+fn wt_set_args(handle: Int, args_json: String) -> Int
+
 @extern(rs, "wasmtime_bridge", "wt_set_env")
 fn wt_set_env(handle: Int, key: String, value: String) -> Int
 

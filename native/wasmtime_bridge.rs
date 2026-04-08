@@ -13,6 +13,7 @@ struct WasmInstance {
     engine: Engine,
     module: Module,
     stdin_data: Vec<u8>,
+    wasi_args: Vec<String>,
     env_vars: Vec<(String, String)>,
     preopen_dirs: Vec<(String, String)>,
     fuel: u64,
@@ -27,16 +28,12 @@ static INSTANCES: Mutex<Vec<Option<WasmInstance>>> = Mutex::new(Vec::new());
 /// Create a WASM instance from a file path.
 /// Returns handle (>= 0) on success, -1 on error.
 pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
-    let bytes = match std::fs::read(wasm_path.as_ref()) {
+    let path = wasm_path.as_ref();
+    let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(_) => return -1,
     };
-    wt_create_from_bytes(bytes, fuel)
-}
 
-/// Create a WASM instance from raw bytes.
-/// Returns handle (>= 0) on success, -1 on error.
-fn wt_create_from_bytes(wasm_bytes: Vec<u8>, fuel: i64) -> i64 {
     let mut config = Config::new();
     if fuel > 0 {
         config.consume_fuel(true);
@@ -47,15 +44,35 @@ fn wt_create_from_bytes(wasm_bytes: Vec<u8>, fuel: i64) -> i64 {
         Ok(e) => e,
         Err(_) => return -1,
     };
-    let module = match Module::from_binary(&engine, &wasm_bytes) {
-        Ok(m) => m,
-        Err(_) => return -1,
+
+    // Try loading precompiled cache
+    let cache_path = format!("{}.porta-cache", path);
+    let module = if let Ok(cached) = std::fs::read(&cache_path) {
+        unsafe { Module::deserialize(&engine, &cached) }.ok()
+    } else {
+        None
+    };
+    let module = match module {
+        Some(m) => m,
+        None => {
+            // Compile and cache
+            match Module::from_binary(&engine, &bytes) {
+                Ok(m) => {
+                    if let Ok(serialized) = m.serialize() {
+                        let _ = std::fs::write(&cache_path, &serialized);
+                    }
+                    m
+                }
+                Err(_) => return -1,
+            }
+        }
     };
 
     let inst = WasmInstance {
         engine,
         module,
         stdin_data: Vec::new(),
+        wasi_args: Vec::new(),
         env_vars: Vec::new(),
         preopen_dirs: Vec::new(),
         fuel: if fuel > 0 { fuel as u64 } else { 0 },
@@ -108,6 +125,20 @@ pub fn wt_set_tool_stdin(handle: i64, tool_name: impl AsRef<str>, args_json: imp
     }
 }
 
+/// Set WASI command-line arguments (must be called before wt_run).
+/// args_json: JSON array of strings, e.g. ["python.wasm", "script.py"]
+pub fn wt_set_args(handle: i64, args_json: impl AsRef<str>) -> i64 {
+    let args: Vec<String> = match serde_json::from_str(args_json.as_ref()) {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    let mut instances = INSTANCES.lock().unwrap();
+    match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
+        Some(inst) => { inst.wasi_args = args; 0 }
+        None => -1,
+    }
+}
+
 /// Add an environment variable (must be called before wt_run).
 pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> i64 {
     let mut instances = INSTANCES.lock().unwrap();
@@ -141,12 +172,14 @@ pub fn wt_run(handle: i64) -> i64 {
 
     // Build WASI context
     let mut wasi = WasiCtxBuilder::new();
+    if !inst.wasi_args.is_empty() {
+        wasi.args(&inst.wasi_args);
+    }
     for (k, v) in &inst.env_vars {
         wasi.env(k, v);
     }
-    if !inst.stdin_data.is_empty() {
-        wasi.stdin(MemoryInputPipe::new(inst.stdin_data.clone()));
-    }
+    // Always set stdin (empty = immediate EOF for non-interactive mode)
+    wasi.stdin(MemoryInputPipe::new(inst.stdin_data.clone()));
     for (host, guest) in &inst.preopen_dirs {
         let _ = wasi.preopened_dir(
             host, guest,

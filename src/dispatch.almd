@@ -1,5 +1,6 @@
 // Instance Lifecycle & Dispatch
 
+import json
 import self.wasm.binary
 import self.wasm_rt
 import self.sandbox
@@ -33,6 +34,7 @@ type InstanceConfig = {
   env_vars: List[EnvVar],
   secrets: List[EnvVar],
   preopen_dirs: List[String],
+  wasm_args: List[String],
 }
 
 type ToolResult = {
@@ -69,6 +71,7 @@ fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.Capa
   env_vars: [],
   secrets: [],
   preopen_dirs: ["."],
+  wasm_args: [],
 }
 
 // --- Helpers ---
@@ -89,10 +92,17 @@ fn setup_dirs(handle: Int, dirs: List[String], idx: Int) -> Unit =
     setup_dirs(handle, dirs, idx + 1)
   }
 
+fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
+  let full_args = [wasm_path] + args
+  let args_json = json.stringify(json.array(full_args |> list.map(json.from_string)))
+  let _ = wasm_rt.wt_set_args(handle, args_json)
+  ()
+}
+
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
-  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
@@ -126,7 +136,7 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
   run_with_restarts(config, 0)
 
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
-  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
+  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
@@ -134,6 +144,7 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
     let env = config.env_vars + config.secrets
     setup_env(h, env, 0)
     setup_dirs(h, config.preopen_dirs, 0)
+    setup_args(h, config.wasm_path, config.wasm_args)
     let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
     let stderr = wasm_rt.wt_get_stderr(h)
