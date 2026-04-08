@@ -101,7 +101,7 @@ effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: St
     setup_env(h, env, 0)
     setup_dirs(h, config.preopen_dirs, 0)
     let _ = wasm_rt.wt_set_tool_stdin(h, tool_name, args_json)
-    let _ = wasm_rt.wt_run(h)
+    let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
     let stderr = wasm_rt.wt_get_stderr(h)
     let exit_code = wasm_rt.wt_get_exit_code(h)
@@ -109,7 +109,9 @@ effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: St
     let _ = wasm_rt.wt_destroy(h)
     let m = observability.empty_metrics()
     let metrics = {...m, steps: steps}
-    ok({
+    if run_result < 0 and string.len(stderr) > 0 then
+      err("WASM execution failed: ${stderr}")
+    else ok({
       stdout: stdout,
       stderr: stderr,
       exit_code: if exit_code >= 0 then some(exit_code) else none,
@@ -132,12 +134,14 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
     let env = config.env_vars + config.secrets
     setup_env(h, env, 0)
     setup_dirs(h, config.preopen_dirs, 0)
-    let _ = wasm_rt.wt_run(h)
+    let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
     let stderr = wasm_rt.wt_get_stderr(h)
     let exit_code = wasm_rt.wt_get_exit_code(h)
     let steps = wasm_rt.wt_get_fuel_consumed(h)
     let _ = wasm_rt.wt_destroy(h)
+    if run_result < 0 and string.len(stderr) > 0 then err("WASM execution failed: ${stderr}")
+    else {
     let should_restart = match config.restart_policy {
       Never => false,
       OnFailure => exit_code != 0 and restarts < config.max_restarts,
@@ -148,6 +152,7 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
       let m = observability.empty_metrics()
       let metrics = {...m, steps: steps, restarts: restarts}
       ok({exit_code: exit_code, stdout: stdout, stderr: stderr, restarts: restarts, metrics: metrics})
+    }
     }
   }
 }
