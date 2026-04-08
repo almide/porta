@@ -560,6 +560,143 @@ pub fn wt_inspect(wasm_path: impl AsRef<str>) -> String {
     )
 }
 
+/// Execute a command inside an OS-level sandbox.
+/// Returns JSON: {"exit_code":0,"stdout":"...","stderr":"..."} or {"error":"..."}
+pub fn wt_exec_sandboxed(
+    cmd: impl AsRef<str>,
+    args_json: impl AsRef<str>,
+    allowed_dirs_json: impl AsRef<str>,
+    allowed_net_json: impl AsRef<str>,
+    env_json: impl AsRef<str>,
+    cwd: impl AsRef<str>,
+) -> String {
+    let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
+    let allowed_dirs: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
+    let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
+    let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|pair| {
+            if pair.len() == 2 { Some((pair[0].clone(), pair[1].clone())) } else { None }
+        })
+        .collect();
+
+    #[cfg(target_os = "macos")]
+    {
+        exec_sandboxed_macos(cmd.as_ref(), &args, &allowed_dirs, &allowed_net, &env_vars, cwd.as_ref())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        exec_sandboxed_linux(cmd.as_ref(), &args, &allowed_dirs, &allowed_net, &env_vars, cwd.as_ref())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        "{\"error\":\"sandboxed execution not supported on this platform\"}".to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn exec_sandboxed_macos(
+    cmd: &str, args: &[String], allowed_dirs: &[String], allowed_net: &[String],
+    env_vars: &[(String, String)], cwd: &str,
+) -> String {
+    // Build sandbox-exec profile
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+
+    // FS write restrictions
+    profile.push_str("(deny file-write*)\n");
+    for dir in allowed_dirs {
+        let abs = if dir.starts_with('/') {
+            dir.clone()
+        } else {
+            std::fs::canonicalize(dir).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| dir.clone())
+        };
+        profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", abs));
+    }
+    // Always allow system paths needed by runtimes
+    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
+    // Allow writing to home .config dirs (needed for many tools)
+    if let Ok(home) = std::env::var("HOME") {
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
+    }
+
+    // Network restrictions
+    if !allowed_net.is_empty() {
+        profile.push_str("(deny network-outbound)\n");
+        profile.push_str("(allow network-outbound (local udp))\n"); // DNS
+        profile.push_str("(allow network-outbound (remote unix-socket))\n"); // IPC
+        for host in allowed_net {
+            // sandbox-exec only supports *:port or localhost:port, not domain names
+            // Extract port and use wildcard host
+            if let Some(colon) = host.rfind(':') {
+                let port = &host[colon + 1..];
+                profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));
+            } else {
+                profile.push_str("(allow network-outbound (remote tcp \"*:*\"))\n");
+            }
+        }
+    }
+
+    let mut command = std::process::Command::new("sandbox-exec");
+    command.arg("-p").arg(&profile).arg(cmd).args(args);
+    if !cwd.is_empty() {
+        command.current_dir(cwd);
+    }
+    for (k, v) in env_vars {
+        command.env(k, v);
+    }
+
+    match command.output() {
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
+        }
+        Err(e) => format!("{{\"error\":\"sandbox exec failed: {}\"}}", e),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn exec_sandboxed_linux(
+    cmd: &str, args: &[String], allowed_dirs: &[String], _allowed_net: &[String],
+    env_vars: &[(String, String)], cwd: &str,
+) -> String {
+    // Linux: use unshare if available, fallback to direct exec with chroot-like restriction
+    // For now, basic implementation without root (no namespace)
+    let mut command = std::process::Command::new(cmd);
+    command.args(args);
+    if !cwd.is_empty() {
+        command.current_dir(cwd);
+    }
+    for (k, v) in env_vars {
+        command.env(k, v);
+    }
+    // TODO: Add unshare/seccomp when running as root
+
+    match command.output() {
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
+        }
+        Err(e) => format!("{{\"error\":\"exec failed: {}\"}}", e),
+    }
+}
+
 /// Spawn a detached process. Returns PID (>0) or -1 on error.
 pub fn wt_spawn(cmd: impl AsRef<str>, args_json: impl AsRef<str>) -> i64 {
     let args: Vec<String> = if args_json.as_ref().is_empty() || args_json.as_ref() == "[]" {

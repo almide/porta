@@ -48,6 +48,9 @@ fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> String
 
 // --- Process management ---
 
+@extern(rs, "wasmtime_bridge", "wt_exec_sandboxed")
+fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> String
+
 @extern(rs, "wasmtime_bridge", "wt_inspect")
 fn wt_inspect(wasm_path: String) -> String
 
