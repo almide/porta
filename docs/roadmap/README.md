@@ -2,6 +2,14 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
+## Active
+
+1 items
+
+| Item | Description |
+|------|-------------|
+| [HTTP Proxy Filtering](active/01-http-proxy-filtering.md) | Host-level HTTP filtering via local CONNECT proxy |
+
 ## On Hold
 
 7 items
