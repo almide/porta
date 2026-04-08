@@ -140,12 +140,29 @@ test "profile_full: all capabilities" {
   assert(sandbox.has_capability(caps, sandbox.CapClock))
   assert(sandbox.has_capability(caps, sandbox.CapRandom))
   assert(sandbox.has_capability(caps, sandbox.CapNet))
+  assert(sandbox.has_capability(caps, sandbox.CapExec))
 }
 
 test "empty: no capabilities" {
   let caps = sandbox.empty()
   assert(not sandbox.has_capability(caps, sandbox.CapIO))
   assert(not sandbox.has_capability(caps, sandbox.CapProcess))
+  assert(not sandbox.has_capability(caps, sandbox.CapExec))
+}
+
+// --- CapExec ---
+
+test "parse_capability: exec" {
+  assert_eq(sandbox.parse_capability("exec"), some(sandbox.CapExec))
+}
+
+test "cap_name: exec roundtrip" {
+  assert_eq(sandbox.cap_name(sandbox.CapExec), "exec")
+}
+
+test "cap_eq: exec" {
+  assert(sandbox.has_capability(sandbox.from_manifest(["exec"]), sandbox.CapExec))
+  assert(not sandbox.has_capability(sandbox.from_manifest(["io"]), sandbox.CapExec))
 }
 
 // --- validate_imports ---

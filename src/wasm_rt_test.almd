@@ -1,0 +1,98 @@
+import json
+import self.wasm_rt
+
+// --- wt_http_request ---
+
+test "wt_http_request: GET httpbin" {
+  let resp = wasm_rt.wt_http_request("GET", "https://httpbin.org/ip", "{}", "")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let status = json.get_int(v, "status") ?? 0
+      assert_eq(status, 200)
+    },
+    err(_) => assert(false),
+  }
+}
+
+test "wt_http_request: invalid URL" {
+  let resp = wasm_rt.wt_http_request("GET", "http://invalid.invalid.invalid", "{}", "")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let error = json.get_string(v, "error") ?? ""
+      assert(string.len(error) > 0)
+    },
+    err(_) => assert(false),
+  }
+}
+
+// --- wt_exec_command ---
+
+test "wt_exec_command: echo" {
+  let resp = wasm_rt.wt_exec_command("echo", "[\"hello\"]", ".")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let exit_code = json.get_int(v, "exit_code") ?? -1
+      assert_eq(exit_code, 0)
+      let stdout = json.get_string(v, "stdout") ?? ""
+      assert(string.len(stdout) > 0)
+    },
+    err(_) => assert(false),
+  }
+}
+
+test "wt_exec_command: invalid command" {
+  let resp = wasm_rt.wt_exec_command("nonexistent_command_xyz", "[]", ".")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let error = json.get_string(v, "error") ?? ""
+      assert(string.len(error) > 0)
+    },
+    err(_) => assert(false),
+  }
+}
+
+// --- wt_inspect ---
+
+test "wt_inspect: demo agent" {
+  let resp = wasm_rt.wt_inspect("examples/demo-agent/src/mod.wasm")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let imports = json.get_array(v, "imports") ?? []
+      let exports = json.get_array(v, "exports") ?? []
+      assert(list.len(imports) > 0)
+      assert(list.len(exports) > 0)
+    },
+    err(_) => assert(false),
+  }
+}
+
+test "wt_inspect: invalid path" {
+  let resp = wasm_rt.wt_inspect("nonexistent.wasm")
+  let parsed = json.parse(resp)
+  match parsed {
+    ok(v) => {
+      let error = json.get_string(v, "error") ?? ""
+      assert(string.len(error) > 0)
+    },
+    err(_) => assert(false),
+  }
+}
+
+// --- wt_getpid ---
+
+test "wt_getpid: returns positive" {
+  let pid = wasm_rt.wt_getpid()
+  assert(pid > 0)
+}
+
+// --- wt_home_dir ---
+
+test "wt_home_dir: returns non-empty" {
+  let home = wasm_rt.wt_home_dir()
+  assert(string.len(home) > 0)
+}
