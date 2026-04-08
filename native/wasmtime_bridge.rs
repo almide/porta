@@ -365,6 +365,11 @@ pub fn wt_kill(pid: i64, signal: i64) -> i64 {
     { -1 }
 }
 
+/// Get HOME directory path.
+pub fn wt_home_dir() -> String {
+    std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+}
+
 /// Destroy an instance and free resources.
 pub fn wt_destroy(handle: i64) -> i64 {
     let mut instances = INSTANCES.lock().unwrap();

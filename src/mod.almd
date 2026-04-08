@@ -8,6 +8,7 @@ import self.dispatch
 import self.sandbox
 import self.observability
 import self.util
+import self.wasm_rt
 import self.manifest
 import self.mcp
 
@@ -160,6 +161,29 @@ effect fn main() -> Result[Unit, String] = {
       let topic = list.get(args, 2) ?? ""
       print_help(topic)
       ok(())
+    },
+    "ps" => {
+      list_instances()
+    },
+    "stop" => {
+      let id = list.get(args, 2) ?? ""
+      if id == "" then { println("usage: porta stop <instance-id>"); ok(()) }
+      else signal_instance(id, 15)
+    },
+    "kill" => {
+      let id = list.get(args, 2) ?? ""
+      if id == "" then { println("usage: porta kill <instance-id>"); ok(()) }
+      else signal_instance(id, 9)
+    },
+    "logs" => {
+      let id = list.get(args, 2) ?? ""
+      if id == "" then { println("usage: porta logs <instance-id>"); ok(()) }
+      else show_logs(id)
+    },
+    "rm" => {
+      let id = list.get(args, 2) ?? ""
+      if id == "" then { println("usage: porta rm <instance-id>"); ok(()) }
+      else remove_instance(id)
     },
     "version" => {
       println("porta 0.1.0")
@@ -342,6 +366,112 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
 
 // --- Help ---
 
+// --- Instance management ---
+
+fn porta_dir() -> String = wasm_rt.wt_home_dir() + "/.porta/instances"
+
+fn instance_dir(id: String) -> String = porta_dir() + "/" + id
+
+fn generate_id() -> String = {
+  let pid = wasm_rt.wt_getpid()
+  let ts = int.to_string(pid)
+  "p-" + ts
+}
+
+effect fn ensure_porta_dir() -> Result[Unit, String] = {
+  if not fs.exists(porta_dir()) then fs.mkdir_p(porta_dir())! else ()
+  ok(())
+}
+
+effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[Unit, String] = {
+  ensure_porta_dir()!
+  let dir = instance_dir(id)
+  fs.mkdir_p(dir)!
+  let info = json.stringify(json.object([
+    ("id", json.from_string(id)),
+    ("wasm", json.from_string(wasm_path)),
+    ("pid", json.from_int(pid)),
+    ("status", json.from_string("running")),
+  ]))
+  fs.write(dir + "/instance.json", info)!
+  ok(())
+}
+
+effect fn list_instances() -> Result[Unit, String] = {
+  ensure_porta_dir()!
+  let dirs = fs.list_dir(porta_dir())!
+  println("ID\tSTATUS\tWASM")
+  for d in dirs {
+    let info_path = porta_dir() + "/" + d + "/instance.json"
+    if fs.exists(info_path) then {
+      let content = fs.read_text(info_path)!
+      let v = json.parse(content)!
+      let id = json.get_string(v, "id") ?? d
+      let status = json.get_string(v, "status") ?? "unknown"
+      let wasm = json.get_string(v, "wasm") ?? ""
+      println(id + "\t" + status + "\t" + wasm)
+    }
+    else ()
+  }
+  ok(())
+}
+
+effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
+  let info_path = instance_dir(id) + "/instance.json"
+  if not fs.exists(info_path) then {
+    println("instance not found: " + id)
+    ok(())
+  }
+  else {
+    let content = fs.read_text(info_path)!
+    let v = json.parse(content)!
+    let pid = json.get_int(v, "pid") ?? 0
+    if pid == 0 then { println("no PID for instance: " + id); ok(()) }
+    else {
+      let result = wasm_rt.wt_kill(pid, signal)
+      if result == 0 then {
+        println(if signal == 9 then "killed: " + id else "stopped: " + id)
+        // Update status
+        let updated = json.stringify(json.object([
+          ("id", json.from_string(id)),
+          ("wasm", json.from_string(json.get_string(v, "wasm") ?? "")),
+          ("pid", json.from_int(pid)),
+          ("status", json.from_string("stopped")),
+        ]))
+        fs.write(info_path, updated)!
+        ok(())
+      }
+      else { println("failed to signal process " + int.to_string(pid)); ok(()) }
+    }
+  }
+}
+
+effect fn show_logs(id: String) -> Result[Unit, String] = {
+  let stdout_path = instance_dir(id) + "/stdout.log"
+  let stderr_path = instance_dir(id) + "/stderr.log"
+  if fs.exists(stdout_path) then {
+    let content = fs.read_text(stdout_path)!
+    if string.len(content) > 0 then println(content) else ()
+  } else ()
+  if fs.exists(stderr_path) then {
+    let content = fs.read_text(stderr_path)!
+    if string.len(content) > 0 then eprintln(content) else ()
+  } else ()
+  ok(())
+}
+
+effect fn remove_instance(id: String) -> Result[Unit, String] = {
+  let dir = instance_dir(id)
+  if fs.exists(dir) then {
+    fs.remove_all(dir)!
+    println("removed: " + id)
+  }
+  else println("instance not found: " + id)
+  ok(())
+}
+
+// --- Help ---
+
 fn print_help(topic: String) -> Unit =
   match topic {
     "run" => {
@@ -400,6 +530,11 @@ fn print_help(topic: String) -> Unit =
       println("  porta build <agent.wasm>      Generate manifest.json")
       println("  porta inspect <agent.wasm>    Show module info")
       println("  porta validate <agent.wasm>   Validate WASI imports")
+      println("  porta ps                      List instances")
+      println("  porta stop <id>               Stop instance (SIGTERM)")
+      println("  porta kill <id>               Kill instance (SIGKILL)")
+      println("  porta logs <id>               View instance logs")
+      println("  porta rm <id>                 Remove stopped instance")
       println("  porta version                 Show version")
       println("  porta help [command]          Show help")
       println("")
