@@ -37,7 +37,7 @@ effect fn build_package(opts: cli.Options) -> Result[Unit, String] = {
   let manifest_json = json.object([
     ("schema_version", json.from_string("1.0")),
     ("name", json.from_string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
-    ("version", json.from_string("0.1.0")),
+    ("version", json.from_string("0.4.0")),
     ("description", json.from_string("")),
     ("entry", json.from_string("_start")),
     ("capabilities", json.array([])),

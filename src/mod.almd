@@ -16,7 +16,7 @@ effect fn main() -> Result[Unit, String] = {
 
   match cmd {
     "--version" => {
-      println("porta 0.1.0")
+      println("porta 0.4.0")
       ok(())
     },
     "--help" => {
@@ -112,7 +112,7 @@ effect fn main() -> Result[Unit, String] = {
       else ops.remove_instance(id)
     },
     "version" => {
-      println("porta 0.1.0")
+      println("porta 0.4.0")
       ok(())
     },
     _ => {

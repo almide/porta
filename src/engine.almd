@@ -32,7 +32,7 @@ effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
       let m: manifest.Manifest = {
         schema_version: "1.0",
         name: "agent",
-        version: "0.1.0",
+        version: "0.4.0",
         description: "",
         capabilities: [],
         tools: export_tools,
