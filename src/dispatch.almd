@@ -24,7 +24,6 @@ type RestartPolicy =
 
 type InstanceConfig = {
   wasm_path: String,
-  wasm: binary.WasmModule,
   entry: String,
   restart_policy: RestartPolicy,
   step_limit: Int,
@@ -35,6 +34,8 @@ type InstanceConfig = {
   secrets: List[EnvVar],
   preopen_dirs: List[String],
   wasm_args: List[String],
+  allowed_commands: List[String],
+  allowed_hosts: List[String],
 }
 
 type ToolResult = {
@@ -59,9 +60,8 @@ fn parse_restart_policy(s: String) -> RestartPolicy =
     _ => Never,
   }
 
-fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+fn default_config(wasm_path: String, caps: sandbox.CapabilitySet) -> InstanceConfig = {
   wasm_path: wasm_path,
-  wasm: wasm,
   entry: "_start",
   restart_policy: Never,
   step_limit: 0,
@@ -72,6 +72,8 @@ fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.Capa
   secrets: [],
   preopen_dirs: ["."],
   wasm_args: [],
+  allowed_commands: [],
+  allowed_hosts: [],
 }
 
 // --- Helpers ---
@@ -99,17 +101,39 @@ fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
   ()
 }
 
+effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] = {
+  let info_json = wasm_rt.wt_inspect(config.wasm_path)
+  let info = json.parse(info_json)!
+  let all_imports = json.get_array(info, "imports") ?? []
+  let imports = all_imports |> list.map((imp) => {
+    let i: binary.Import = {
+      mod_name: json.get_string(imp, "module") ?? "",
+      name: json.get_string(imp, "name") ?? "",
+      desc: binary.ImportFunc(0),
+    }
+    i
+  })
+  if list.len(imports) > 0 then sandbox.validate_imports(imports, config.capabilities)
+  else ok(())
+}
+
+fn configure_instance(h: Int, config: InstanceConfig) -> Unit = {
+  let env = config.env_vars + config.secrets
+  setup_env(h, env, 0)
+  setup_dirs(h, config.preopen_dirs, 0)
+  if config.max_memory_pages > 0 then { let _ = wasm_rt.wt_set_max_memory(h, config.max_memory_pages); () } else ()
+  if config.entry != "_start" then { let _ = wasm_rt.wt_set_entry(h, config.entry); () } else ()
+}
+
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
-  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  validate_wasm_imports(config)!
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
   else {
-    let env = config.env_vars + config.secrets
-    setup_env(h, env, 0)
-    setup_dirs(h, config.preopen_dirs, 0)
+    configure_instance(h, config)
     let _ = wasm_rt.wt_set_tool_stdin(h, tool_name, args_json)
     let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
@@ -136,14 +160,12 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
   run_with_restarts(config, 0)
 
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
-  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  validate_wasm_imports(config)!
   let fuel = if config.step_limit > 0 then config.step_limit else 0
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
   else {
-    let env = config.env_vars + config.secrets
-    setup_env(h, env, 0)
-    setup_dirs(h, config.preopen_dirs, 0)
+    configure_instance(h, config)
     setup_args(h, config.wasm_path, config.wasm_args)
     let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)

@@ -5,8 +5,8 @@
 <h1 align="center">Porta</h1>
 
 <p align="center">
-  Sandboxed runtime for AI agents and native commands.<br>
-  WASM isolation for agents. OS-level sandbox for everything else.
+  A secure MCP bridge for AI agents and native commands.<br>
+  WASM isolation for agents. OS-level restrictions for everything else.
 </p>
 
 <p align="center">
@@ -17,25 +17,42 @@
 
 ## What is Porta?
 
-Porta is a sandboxed runtime that controls what programs can access — filesystem, network, commands — using capability-based security.
+Porta controls what programs can access — filesystem, network, commands — using capability-based security.
 
 Two execution modes:
 - **WASM sandbox** — Almide/Rust/C agents compiled to WASM run inside wasmtime with mathematical isolation
-- **Native sandbox** — Any command (Claude Code, Python, Node.js) runs inside an OS-level sandbox (macOS sandbox-exec, Linux namespaces)
+- **Native restrictions** — Any command (Claude Code, Python, Node.js) runs with OS-level filesystem and network restrictions (macOS sandbox-exec)
 
 ## Quick Start
 
-### Run Claude Code in a sandbox
+### Run Claude Code with restrictions
+
+```bash
+porta run claude --allow-net '*:443' -v . -e "HOME=$HOME" -- --print "Fix the bug"
+```
+
+Or declaratively:
 
 ```bash
 porta init native claude
 porta up -- --print "Fix the bug in main.rs"
 ```
 
-This creates a `porta.toml` and runs Claude Code with:
-- Filesystem writes restricted to the current directory
-- Sensitive directories (~/.ssh, ~/.aws, ~/Documents) unreadable
-- Network limited to HTTPS only
+### Verify network restrictions
+
+```bash
+# Network open by default (like Docker)
+porta run curl -- https://example.com
+# → works
+
+# Restrict to HTTPS only
+porta run curl --allow-net '*:443' -- https://example.com
+# → works
+
+# Restrict to port 80 — HTTPS blocked
+porta run curl --allow-net '*:80' -- https://example.com
+# → exit status: 7 (port 443 not allowed)
+```
 
 ### Run a WASM agent
 
@@ -44,15 +61,11 @@ porta run agent.wasm --profile full -v ./workspace
 porta serve agent.wasm   # Start as MCP server
 ```
 
-### Run Python in WASM sandbox
-
-```bash
-porta run python.wasm --env PYTHONHOME=/path/to/lib -v /path/to/lib -- script.py
-```
+`porta run` auto-detects mode: `.wasm` files run in WASM sandbox, everything else runs as a native command with OS-level restrictions.
 
 ## porta.toml
 
-Declarative configuration for sandboxed execution.
+Declarative configuration for restricted execution.
 
 ```toml
 [runtime]
@@ -63,13 +76,15 @@ command = "claude"         # Command to run (native mode)
 [sandbox]
 mounts = ["."]            # Directories the command can write to
 # mounts = [".:ro"]       # Read-only mount
-network = ["*:443"]       # Allowed outbound ports (empty = allow all)
+network = ["*:443"]       # Restrict to these ports (empty = all open)
 
 [env]
 NODE_ENV = "production"
 
 [secrets]
-# API_KEY = "sk-..."
+API_KEY = "sk-..."
+# Or read from host environment:
+# API_KEY = { from-env = true }
 ```
 
 ```bash
@@ -80,16 +95,30 @@ porta up -- --print "hi"   # Pass arguments to the command
 
 ## CLI Reference
 
-### Execution
+### Project
 
 | Command | Description |
 |---------|-------------|
-| `porta up` | Run from porta.toml |
-| `porta run <agent.wasm>` | Execute WASM binary |
-| `porta run-native <cmd>` | Execute native command in sandbox |
+| `porta init [native\|wasm] [cmd]` | Create porta.toml |
+| `porta up [-- args...]` | Run from porta.toml |
+
+### Runtime
+
+| Command | Description |
+|---------|-------------|
+| `porta run <target>` | Execute WASM (.wasm) or native command |
+| `porta run -d <agent.wasm>` | Run WASM as background daemon |
 | `porta serve <agent.wasm>` | Start MCP server on stdio |
 
-### Lifecycle
+### Development
+
+| Command | Description |
+|---------|-------------|
+| `porta build <agent.wasm>` | Generate manifest.json |
+| `porta inspect <agent.wasm>` | Show module info |
+| `porta validate <agent.wasm>` | Check WASI imports against profile |
+
+### Instances
 
 | Command | Description |
 |---------|-------------|
@@ -98,47 +127,50 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `porta kill <id>` | Kill instance (SIGKILL) |
 | `porta logs <id>` | View instance logs |
 | `porta rm <id>` | Remove stopped instance |
-| `porta run -d <agent.wasm>` | Run in background |
-
-### Tooling
-
-| Command | Description |
-|---------|-------------|
-| `porta init [native\|wasm] [cmd]` | Create porta.toml |
-| `porta build <agent.wasm>` | Generate manifest.json |
-| `porta inspect <agent.wasm>` | Show module info (any size) |
-| `porta validate <agent.wasm>` | Check WASI imports against profile |
 
 ### Common Options
 
 | Flag | Description |
 |------|-------------|
+| `-e`, `--env <KEY=VALUE>` | Set environment variable |
+| `--env-file <path>` | Load env vars from file |
+| `--secret <KEY=VALUE>` | Inject secret as env var |
 | `-v <path>` | Mount directory (writable) |
 | `-v <path>:ro` | Mount directory (read-only) |
-| `--allow-net <host:port>` | Allow outbound network |
+| `--allow-net <host:port>` | Allow outbound network (repeatable) |
+| `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
-| `--env <KEY=VALUE>` | Set environment variable |
-| `--secret <KEY=VALUE>` | Inject secret (redacted in inspect) |
 | `--step-limit <n>` | Max WASM instructions |
 | `--max-memory <pages>` | Max WASM memory pages |
 | `--restart <policy>` | `no`, `on-failure`, `always` |
+| `-d`, `--detach` | Run as background daemon |
+| `--help`, `-h` | Show help for any command |
 
 ## Security Model
 
-### Native Sandbox (macOS)
+### Two-Layer Enforcement
+
+Porta enforces restrictions at two levels:
+
+1. **OS layer** (sandbox-exec) — Process-level port-based network control and filesystem restrictions. Cannot be bypassed by the child process.
+2. **MCP layer** — Application-level host+port URL filtering and capability checks on `porta.exec` and `porta.http` builtin tools.
+
+### Native Restrictions (macOS)
 
 Uses `sandbox-exec` to enforce:
 
 | Control | Behavior |
 |---------|----------|
 | **FS write** | Denied everywhere except `-v` mounted dirs |
-| **FS read** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/Documents`, `~/Desktop`, `~/Downloads` denied |
-| **Network** | `--allow-net "*:443"` → HTTPS only. No flag = allow all |
+| **FS read** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures` denied |
+| **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
 | **Read-only** | `-v ./data:ro` → read OK, write denied |
+
+> Note: macOS sandbox-exec supports port-based filtering only. Host-based filtering (`api.example.com:443`) is enforced at the MCP layer for builtin tools.
 
 ### WASM Sandbox
 
-Deny-by-default capability system:
+Deny-by-default capability system. Every WASI import is validated against the capability set before execution.
 
 | Capability | Controls |
 |------------|----------|
@@ -154,6 +186,8 @@ Deny-by-default capability system:
 
 Built-in profiles: `ai-agent` (IO + Process), `worker` (+Clock +Random), `full` (all).
 
+Manifest capabilities are respected in both `serve` and `run` modes.
+
 ## MCP Server
 
 ```bash
@@ -162,11 +196,11 @@ porta serve agent.wasm --profile full
 
 ### Built-in Tools
 
-| Tool | Description |
-|------|-------------|
-| `porta.exec` | Execute shell commands (sandboxed) |
-| `porta.http` | Make HTTP requests |
-| Agent tools | Dispatched to WASM agent |
+| Tool | Requires | Description |
+|------|----------|-------------|
+| `porta.exec` | `CapExec` + `--allow-exec` | Execute a command with filesystem and network restrictions |
+| `porta.http` | `CapNet` + `--allow-net` | Make HTTP requests to allowed hosts |
+| Agent tools | — | Dispatched to WASM agent |
 
 ### Supported MCP Methods
 
@@ -177,10 +211,10 @@ porta serve agent.wasm --profile full
 ```json
 {
   "mcpServers": {
-    "sandbox": {
+    "agent": {
       "type": "stdio",
       "command": "porta",
-      "args": ["serve", "agent.wasm", "--profile", "full"]
+      "args": ["serve", "agent.wasm", "--profile", "full", "--allow-net", "*:443"]
     }
   }
 }
@@ -190,37 +224,35 @@ porta serve agent.wasm --profile full
 
 ```
 porta
-├── WASM Runtime (wasmtime 42)
-│   ├── Module cache (instant second-run startup)
-│   ├── WASI Preview 1 (filesystem, env, args, clock)
-│   ├── Host functions (porta.http_request, porta.exec_command)
-│   └── Fuel-based instruction limiting
+├── cli.almd            — Options, arg parsing, help
+├── mod.almd            — Command dispatch (entry point)
 │
-├── Native Sandbox
-│   ├── macOS: sandbox-exec profiles
-│   └── Linux: namespace isolation (planned)
+├── engine.almd         — serve, run, validate, inspect
+├── dispatch.almd       — WASM instance lifecycle & tool dispatch
+├── mcp.almd            — MCP protocol (JSON-RPC 2.0 / stdio)
+├── jsonrpc.almd        — Content-Length framed JSON-RPC
+├── sandbox.almd        — Capability-based security
 │
-├── MCP Server
-│   ├── JSON-RPC 2.0 / stdio
-│   ├── Built-in tools (exec, http)
-│   └── Agent tool dispatch
+├── ops.almd            — Daemon management (ps/stop/kill/logs/rm)
+├── build.almd          — Manifest generation
+├── project.almd        — porta.toml (up/init)
 │
-├── Instance Management
-│   ├── Daemon mode (-d)
-│   ├── ps / stop / kill / logs / rm
-│   └── ~/.porta/instances/
+├── wasm_rt.almd        — Wasmtime bridge + runtime functions
+├── config.almd         — porta.toml parser
+├── manifest.almd       — manifest.json parser
+├── observability.almd  — Execution metrics
+├── util.almd           — CLI utilities
 │
-└── Config
-    ├── porta.toml (declarative)
-    ├── manifest.json (agent metadata)
-    └── Capability profiles
+└── wasm/
+    ├── binary.almd     — WASM binary parser
+    └── wasi.almd       — WASI Preview 1 host functions
 ```
 
 ## Install
 
 ```bash
 # From source (requires Almide >= 0.12.0)
-almide build
+almide build src/mod.almd -o porta
 cp porta ~/.local/bin/
 ```
 
@@ -230,8 +262,8 @@ cp porta ~/.local/bin/
 |---------|--------|---------|
 | Almide → WASM | Full support | `porta run agent.wasm` |
 | Python 3.14 | Runs in WASM | `porta run python.wasm -- script.py` |
-| Native commands | OS sandbox | `porta run-native claude -- --print "hi"` |
+| Native commands | OS restrictions | `porta run claude -- --print "hi"` |
 
 ## License
 
-MIT
+Apache-2.0

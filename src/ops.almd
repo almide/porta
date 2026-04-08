@@ -1,0 +1,174 @@
+// Instance lifecycle: daemon management, ps, stop, kill, logs, rm
+
+import process
+import fs
+import json
+import self.cli
+import self.dispatch
+import self.util
+import self.sandbox
+import self.wasm_rt
+import self.observability
+
+// --- Instance registry ---
+
+fn porta_dir() -> String = wasm_rt.wt_home_dir() + "/.porta/instances"
+
+fn instance_dir(id: String) -> String = porta_dir() + "/" + id
+
+fn generate_id() -> String = {
+  let pid = wasm_rt.wt_getpid()
+  let ts = int.to_string(pid)
+  "p-" + ts
+}
+
+effect fn ensure_porta_dir() -> Result[Unit, String] = {
+  if not fs.exists(porta_dir()) then fs.mkdir_p(porta_dir())! else ()
+  ok(())
+}
+
+effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[Unit, String] = {
+  ensure_porta_dir()!
+  let dir = instance_dir(id)
+  fs.mkdir_p(dir)!
+  let info = json.stringify(json.object([
+    ("id", json.from_string(id)),
+    ("wasm", json.from_string(wasm_path)),
+    ("pid", json.from_int(pid)),
+    ("status", json.from_string("running")),
+  ]))
+  fs.write(dir + "/instance.json", info)!
+  ok(())
+}
+
+// --- Daemon execution ---
+
+fn serialize_opts(opts: cli.Options) -> List[String] = {
+  let args: List[String] = []
+  let args = if opts.profile != "" then args + ["--profile", opts.profile] else args
+  let args = if opts.entry != "_start" then args + ["--entry", opts.entry] else args
+  let args = if opts.step_limit > 0 then args + ["--step-limit", int.to_string(opts.step_limit)] else args
+  let args = if opts.max_memory_pages > 0 then args + ["--max-memory", int.to_string(opts.max_memory_pages)] else args
+  let args = if opts.restart != "no" then args + ["--restart", opts.restart] else args
+  let args = if opts.manifest_path != "" then args + ["--manifest", opts.manifest_path] else args
+  let args = if opts.env_file != "" then args + ["--env-file", opts.env_file] else args
+  let args = opts.env_vars |> list.fold(args, (acc, e) => acc + ["--env", e.key + "=" + e.val])
+  let args = opts.secrets |> list.fold(args, (acc, e) => acc + ["--secret", e.key + "=" + e.val])
+  let args = opts.preopen_dirs |> list.fold(args, (acc, d) => acc + ["-v", d])
+  let args = opts.allow_net |> list.fold(args, (acc, h) => acc + ["--allow-net", h])
+  let args = opts.allow_exec |> list.fold(args, (acc, c) => acc + ["--allow-exec", c])
+  let args = if list.len(opts.wasm_args) > 0 then args + ["--"] + opts.wasm_args else args
+  args
+}
+
+effect fn run_detached(opts: cli.Options) -> Result[Unit, String] = {
+  let id = generate_id()
+  ensure_porta_dir()!
+  let self_path = list.get(process.args(), 0) ?? "porta"
+  let child_args = ["run", "--_daemon", id, opts.path] + serialize_opts(opts)
+  let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
+  let pid = wasm_rt.wt_spawn(self_path, args_json)!
+  if pid < 0 then err("failed to spawn daemon")
+  else {
+    register_instance(id, opts.path, pid)!
+    println(id)
+    ok(())
+  }
+}
+
+effect fn run_as_daemon(opts: cli.Options) -> Result[Unit, String] = {
+  let id = opts.daemon_id
+  let dir = instance_dir(id)
+  let caps = cli.resolve_run_caps(opts)!
+  let env = cli.resolve_env(opts)!
+  let config = cli.build_config(opts.path, opts, caps, env)
+  let result = dispatch.run_instance(config)!
+  // Write logs
+  if string.len(result.stdout) > 0 then fs.write(dir + "/stdout.log", result.stdout)! else ()
+  if string.len(result.stderr) > 0 then fs.write(dir + "/stderr.log", result.stderr)! else ()
+  // Update status
+  let info = json.stringify(json.object([
+    ("id", json.from_string(id)),
+    ("wasm", json.from_string(opts.path)),
+    ("pid", json.from_int(wasm_rt.wt_getpid())),
+    ("status", json.from_string("exited")),
+    ("exit_code", json.from_int(result.exit_code)),
+  ]))
+  fs.write(dir + "/instance.json", info)!
+  ok(())
+}
+
+// --- Instance operations ---
+
+effect fn list_instances() -> Result[Unit, String] = {
+  ensure_porta_dir()!
+  let dirs = fs.list_dir(porta_dir())!
+  println("ID\tSTATUS\tWASM")
+  for d in dirs {
+    let info_path = porta_dir() + "/" + d + "/instance.json"
+    if fs.exists(info_path) then {
+      let content = fs.read_text(info_path)!
+      let v = json.parse(content)!
+      let id = json.get_string(v, "id") ?? d
+      let status = json.get_string(v, "status") ?? "unknown"
+      let wasm = json.get_string(v, "wasm") ?? ""
+      println(id + "\t" + status + "\t" + wasm)
+    }
+    else ()
+  }
+  ok(())
+}
+
+effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
+  let info_path = instance_dir(id) + "/instance.json"
+  if not fs.exists(info_path) then {
+    println("instance not found: " + id)
+    ok(())
+  }
+  else {
+    let content = fs.read_text(info_path)!
+    let v = json.parse(content)!
+    let pid = json.get_int(v, "pid") ?? 0
+    if pid == 0 then { println("no PID for instance: " + id); ok(()) }
+    else {
+      let result = wasm_rt.wt_kill(pid, signal)!
+      if result == 0 then {
+        println(if signal == 9 then "killed: " + id else "stopped: " + id)
+        // Update status
+        let updated = json.stringify(json.object([
+          ("id", json.from_string(id)),
+          ("wasm", json.from_string(json.get_string(v, "wasm") ?? "")),
+          ("pid", json.from_int(pid)),
+          ("status", json.from_string("stopped")),
+        ]))
+        fs.write(info_path, updated)!
+        ok(())
+      }
+      else { println("failed to signal process " + int.to_string(pid)); ok(()) }
+    }
+  }
+}
+
+effect fn show_logs(id: String) -> Result[Unit, String] = {
+  let stdout_path = instance_dir(id) + "/stdout.log"
+  let stderr_path = instance_dir(id) + "/stderr.log"
+  if fs.exists(stdout_path) then {
+    let content = fs.read_text(stdout_path)!
+    if string.len(content) > 0 then println(content) else ()
+  } else ()
+  if fs.exists(stderr_path) then {
+    let content = fs.read_text(stderr_path)!
+    if string.len(content) > 0 then eprintln(content) else ()
+  } else ()
+  ok(())
+}
+
+effect fn remove_instance(id: String) -> Result[Unit, String] = {
+  let dir = instance_dir(id)
+  if fs.exists(dir) then {
+    fs.remove_all(dir)!
+    println("removed: " + id)
+  }
+  else println("instance not found: " + id)
+  ok(())
+}

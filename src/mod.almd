@@ -1,253 +1,115 @@
 // Porta — WASM agent MCP bridge
 
 import process
-import fs
-import json
-import self.wasm.binary
-import self.dispatch
-import self.sandbox
-import self.observability
-import self.util
-import self.wasm_rt
-import self.config
-import self.manifest
-import self.mcp
+import self.cli
+import self.engine
+import self.ops
+import self.build
+import self.project
 
-// --- Options ---
-
-type Options = {
-  path: String,
-  entry: String,
-  step_limit: Int,
-  max_memory_pages: Int,
-  restart: String,
-  profile: String,
-  manifest_path: String,
-  env_vars: List[dispatch.EnvVar],
-  env_file: String,
-  secrets: List[dispatch.EnvVar],
-  detach: Bool,
-  daemon_id: String,
-  wasm_args: List[String],
-  preopen_dirs: List[String],
-  allow_net: List[String],
-}
-
-fn default_options() -> Options = {
-  path: "",
-  entry: "_start",
-  step_limit: 0,
-  max_memory_pages: 0,
-  restart: "no",
-  profile: "",
-  manifest_path: "",
-  env_vars: [],
-  env_file: "",
-  secrets: [],
-  detach: false,
-  daemon_id: "",
-  wasm_args: [],
-  preopen_dirs: [],
-  allow_net: [],
-}
-
-fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
-  if idx >= list.len(args) then opts
-  else {
-    let arg = list.get(args, idx) ?? ""
-    let next = list.get(args, idx + 1) ?? ""
-    match arg {
-      "--entry" => parse_options(args, idx + 2, {...opts, entry: next}),
-      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: util.parse_int(next)}),
-      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: util.parse_int(next)}),
-      "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
-      "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
-      "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
-      "--env" => match util.split_at_eq(next) {
-        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
-        none => parse_options(args, idx + 2, opts),
-      },
-      "--env-file" => parse_options(args, idx + 2, {...opts, env_file: next}),
-      "--secret" => match util.split_at_eq(next) {
-        some(kv) => parse_options(args, idx + 2, {...opts, secrets: opts.secrets + [kv]}),
-        none => parse_options(args, idx + 2, opts),
-      },
-      "-v" => {
-        let dir = next
-        parse_options(args, idx + 2, {...opts, preopen_dirs: opts.preopen_dirs + [dir]})
-      },
-      "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
-      "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
-      "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
-      "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
-      "--" => {...opts, wasm_args: list.drop(args, idx + 1)},
-      _ =>
-        if string.starts_with(arg, "--") then parse_options(args, idx + 2, opts)
-        else if opts.path == "" then parse_options(args, idx + 1, {...opts, path: arg})
-        else parse_options(args, idx + 1, opts),
-    }
-  }
-
-effect fn load_env_file(path: String) -> Result[List[dispatch.EnvVar], String] = {
-  let content = fs.read_text(path)!
-  let lines = util.split_lines(string.to_bytes(content), 0, 0, [])
-  ok(lines
-    |> list.filter((line) => string.len(string.trim(line)) > 0 and not string.starts_with(string.trim(line), "#"))
-    |> list.filter_map((line) => util.split_at_eq(string.trim(line))))
-}
-
-effect fn resolve_env(opts: Options) -> Result[List[dispatch.EnvVar], String] = {
-  let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
-    else []
-  // CLI --env overrides file values (dedup: keep last occurrence per key)
-  let combined = file_env + opts.env_vars
-  ok(dedup_env(combined, 0, []))
-}
-
-fn dedup_env(vars: List[dispatch.EnvVar], idx: Int, acc: List[dispatch.EnvVar]) -> List[dispatch.EnvVar] =
-  if idx >= list.len(vars) then acc
-  else {
-    let head = list.get(vars, idx) ?? {key: "", val: ""}
-    let tail = list.drop(vars, idx + 1)
-    let rest_has_key = tail |> list.any((e) => e.key == head.key)
-    if rest_has_key then dedup_env(vars, idx + 1, acc)
-    else dedup_env(vars, idx + 1, acc + [head])
-  }
-
-fn empty_wasm() -> binary.WasmModule = {
-  let m: binary.WasmModule = {
-    types: [], imports: [], func_type_indices: [], tables: [],
-    memories: [], globals: [], exports: [], start: none,
-    elements: [], code: [], data_segments: [],
-  }
-  m
-}
-
-fn build_run_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, env: List[dispatch.EnvVar]) -> dispatch.InstanceConfig = {
-  let config = dispatch.default_config(wasm_path, empty_wasm(), caps)
-  {
-    ...config,
-    entry: opts.entry,
-    step_limit: opts.step_limit,
-    max_memory_pages: opts.max_memory_pages,
-    restart_policy: dispatch.parse_restart_policy(opts.restart),
-    env_vars: env,
-    secrets: opts.secrets,
-    wasm_args: opts.wasm_args,
-    preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
-  }
-}
-
-fn build_config(wasm_path: String, wasm: binary.WasmModule, opts: Options, caps: sandbox.CapabilitySet, env: List[dispatch.EnvVar]) -> dispatch.InstanceConfig = {
-  let config = dispatch.default_config(wasm_path, wasm, caps)
-  {
-    ...config,
-    entry: opts.entry,
-    step_limit: opts.step_limit,
-    max_memory_pages: opts.max_memory_pages,
-    restart_policy: dispatch.parse_restart_policy(opts.restart),
-    env_vars: env,
-    secrets: opts.secrets,
-    wasm_args: opts.wasm_args,
-    preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
-  }
-}
-
-// --- Main ---
+fn has_help_flag(args: List[String]) -> Bool =
+  args |> list.any((a) => a == "--help" or a == "-h")
 
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
   let cmd = list.get(args, 1) ?? "help"
 
   match cmd {
+    "--version" => {
+      println("porta 0.1.0")
+      ok(())
+    },
+    "--help" => {
+      cli.print_help("")
+      ok(())
+    },
     "serve" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta serve <agent.wasm> [options]")
-        println("  run 'porta help serve' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("serve"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("serve"); ok(()) }
+        else engine.serve(opts)
       }
-      else serve(opts)
     },
     "run" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta run <agent.wasm> [options]")
-        println("  run 'porta help run' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("run"); ok(()) }
+        else if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
+        else engine.run_native(opts)
       }
-      else run_wasm(opts)
     },
     "up" => {
       let rest = list.drop(args, 2)
       let extra_args = if list.get(rest, 0) ?? "" == "--" then list.drop(rest, 1) else rest
-      porta_up(extra_args)
+      project.porta_up(extra_args)
     },
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
       let command = list.get(args, 3) ?? "claude"
-      porta_init(runtime_type, command)
+      project.porta_init(runtime_type, command)
     },
     "run-native" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta run-native <command> [options] -- [args...]")
-        ok(())
+      // Alias: porta run-native is equivalent to porta run <non-wasm>
+      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("run"); ok(()) }
+        else engine.run_native(opts)
       }
-      else run_native(opts)
     },
     "inspect" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta inspect <agent.wasm>")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("inspect"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("inspect"); ok(()) }
+        else engine.inspect(opts.path)
       }
-      else inspect(opts.path)
     },
     "validate" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta validate <agent.wasm> [--profile <name>]")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("validate"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("validate"); ok(()) }
+        else engine.validate(opts)
       }
-      else validate(opts)
     },
     "build" => {
-      let opts = parse_options(args, 2, default_options())
-      if opts.path == "" then {
-        println("usage: porta build <agent.wasm> [--manifest <path>]")
-        println("  run 'porta help build' for options")
-        ok(())
+      if has_help_flag(args) then { cli.print_help("build"); ok(()) }
+      else {
+        let opts = cli.parse_options(args, 2, cli.default_options())
+        if opts.path == "" then { cli.print_help("build"); ok(()) }
+        else build.build_package(opts)
       }
-      else build_package(opts)
     },
     "help" => {
       let topic = list.get(args, 2) ?? ""
-      print_help(topic)
+      cli.print_help(topic)
       ok(())
     },
     "ps" => {
-      list_instances()
+      ops.list_instances()
     },
     "stop" => {
       let id = list.get(args, 2) ?? ""
       if id == "" then { println("usage: porta stop <instance-id>"); ok(()) }
-      else signal_instance(id, 15)
+      else ops.signal_instance(id, 15)
     },
     "kill" => {
       let id = list.get(args, 2) ?? ""
       if id == "" then { println("usage: porta kill <instance-id>"); ok(()) }
-      else signal_instance(id, 9)
+      else ops.signal_instance(id, 9)
     },
     "logs" => {
       let id = list.get(args, 2) ?? ""
       if id == "" then { println("usage: porta logs <instance-id>"); ok(()) }
-      else show_logs(id)
+      else ops.show_logs(id)
     },
     "rm" => {
       let id = list.get(args, 2) ?? ""
       if id == "" then { println("usage: porta rm <instance-id>"); ok(()) }
-      else remove_instance(id)
+      else ops.remove_instance(id)
     },
     "version" => {
       println("porta 0.1.0")
@@ -260,532 +122,3 @@ effect fn main() -> Result[Unit, String] = {
     },
   }
 }
-
-// --- Commands ---
-
-effect fn serve(opts: Options) -> Result[Unit, String] = {
-  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
-    else string.replace(opts.path, ".wasm", ".manifest.json")
-  let has_manifest = fs.exists(manifest_path)
-  let m = if has_manifest then manifest.load_manifest(manifest_path)!
-    else {
-      let wasm = binary.load(opts.path)!
-      let export_tools = wasm.exports
-        |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
-        |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
-        |> list.map((exp) => {
-          let tool: manifest.ToolDef = {name: exp.name, description: exp.name, input_schema: json.object([])}
-          tool
-        })
-      let m: manifest.Manifest = {
-        schema_version: "1.0",
-        name: "agent",
-        version: "0.1.0",
-        description: "",
-        capabilities: [],
-        tools: export_tools,
-        resources: [],
-        prompts: [],
-        wasi_imports: [],
-        entry: "_start",
-      }
-      m
-    }
-  let wasm = if has_manifest then empty_wasm() else binary.load(opts.path)!
-  let caps = util.resolve_serve_caps(opts.profile, m.capabilities)
-  let env = resolve_env(opts)!
-  let config = build_config(opts.path, wasm, opts, caps, env)
-  let server = mcp.new_server(m, config)
-  mcp.serve_loop(server)
-}
-
-effect fn run_wasm(opts: Options) -> Result[Unit, String] =
-  if opts.detach then run_detached(opts)
-  else if opts.daemon_id != "" then run_as_daemon(opts)
-  else run_foreground(opts)
-
-effect fn run_foreground(opts: Options) -> Result[Unit, String] = {
-  let caps = util.resolve_caps(opts.profile, [])
-  let env = resolve_env(opts)!
-  let config = build_run_config(opts.path, opts, caps, env)
-  let result = dispatch.run_instance(config)!
-  if string.len(result.stdout) > 0 then println(result.stdout) else ()
-  if string.len(result.stderr) > 0 then eprintln(result.stderr) else ()
-  eprintln(observability.format_summary(result.metrics))
-  ok(())
-}
-
-effect fn run_detached(opts: Options) -> Result[Unit, String] = {
-  let id = generate_id()
-  ensure_porta_dir()!
-  // Get porta binary path from args[0]
-  let self_path = list.get(process.args(), 0) ?? "porta"
-  // Build args for daemon child: porta run --_daemon <id> <path> [original flags minus -d]
-  let child_args = ["run", "--_daemon", id, opts.path, "--profile", if opts.profile != "" then opts.profile else "full"]
-  let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
-  let pid = wasm_rt.wt_spawn(self_path, args_json)!
-  if pid < 0 then err("failed to spawn daemon")
-  else {
-    register_instance(id, opts.path, pid)!
-    println(id)
-    ok(())
-  }
-}
-
-effect fn run_as_daemon(opts: Options) -> Result[Unit, String] = {
-  let id = opts.daemon_id
-  let dir = instance_dir(id)
-  let caps = util.resolve_caps(opts.profile, [])
-  let env = resolve_env(opts)!
-  let config = build_run_config(opts.path, opts, caps, env)
-  let result = dispatch.run_instance(config)!
-  // Write logs
-  if string.len(result.stdout) > 0 then fs.write(dir + "/stdout.log", result.stdout)! else ()
-  if string.len(result.stderr) > 0 then fs.write(dir + "/stderr.log", result.stderr)! else ()
-  // Update status
-  let info = json.stringify(json.object([
-    ("id", json.from_string(id)),
-    ("wasm", json.from_string(opts.path)),
-    ("pid", json.from_int(wasm_rt.wt_getpid())),
-    ("status", json.from_string("exited")),
-    ("exit_code", json.from_int(result.exit_code)),
-  ]))
-  fs.write(dir + "/instance.json", info)!
-  ok(())
-}
-
-effect fn build_package(opts: Options) -> Result[Unit, String] = {
-  let output_path = if opts.manifest_path != "" then opts.manifest_path
-    else string.replace(opts.path, ".wasm", ".manifest.json")
-
-  // Use native inspect
-  let info_json = wasm_rt.wt_inspect(opts.path)
-  let info = json.parse(info_json)!
-  let all_exports = json.get_array(info, "exports") ?? []
-  let all_imports = json.get_array(info, "imports") ?? []
-
-  let export_tools = all_exports
-    |> list.filter((exp) => json.get_string(exp, "kind") ?? "" == "func")
-    |> list.filter((exp) => {
-      let name = json.get_string(exp, "name") ?? ""
-      name != "_start" and name != "__alloc" and name != "memory"
-    })
-    |> list.map((exp) => {
-      let name = json.get_string(exp, "name") ?? ""
-      json.object([
-        ("name", json.from_string(name)),
-        ("description", json.from_string(name)),
-        ("inputSchema", json.object([("type", json.from_string("object"))])),
-      ])
-    })
-
-  let wasi_imports = all_imports
-    |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
-    |> list.map((imp) => json.from_string(json.get_string(imp, "name") ?? ""))
-
-  let manifest_json = json.object([
-    ("schema_version", json.from_string("1.0")),
-    ("name", json.from_string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
-    ("version", json.from_string("0.1.0")),
-    ("description", json.from_string("")),
-    ("entry", json.from_string("_start")),
-    ("capabilities", json.array([])),
-    ("tools", json.array(export_tools)),
-    ("wasi_imports", json.array(wasi_imports)),
-  ])
-
-  let content = json.stringify(manifest_json)
-  fs.write(output_path, content)!
-  println("Built ${output_path}")
-  println("  Tools: ${int.to_string(list.len(export_tools))}")
-  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
-  ok(())
-}
-
-effect fn validate(opts: Options) -> Result[Unit, String] = {
-  println("Validating: ${opts.path}")
-
-  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
-    else string.replace(opts.path, ".wasm", ".manifest.json")
-  let has_manifest = fs.exists(manifest_path)
-
-  let caps = if opts.profile != "" then
-    match opts.profile {
-      "ai-agent" => sandbox.profile_ai_agent(),
-      "worker" => sandbox.profile_worker(),
-      "full" => sandbox.profile_full(),
-      _ => sandbox.profile_ai_agent(),
-    }
-  else if has_manifest then {
-    let m = manifest.load_manifest(manifest_path)!
-    if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
-    else sandbox.profile_full()
-  }
-  else sandbox.profile_full()
-
-  // Use native inspect for any size WASM
-  let info_json = wasm_rt.wt_inspect(opts.path)
-  let info = json.parse(info_json)!
-  let all_imports = json.get_array(info, "imports") ?? []
-  let wasi_imports = all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
-
-  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
-  let _has_fail = false
-  for imp in wasi_imports {
-    let name = json.get_string(imp, "name") ?? ""
-    let req = sandbox.required_capability(name)
-    let status = match req {
-      none => "  ok",
-      some(cap) =>
-        if sandbox.has_capability(caps, cap) then "  ok"
-        else "  DENIED (requires ${sandbox.cap_name(cap)})",
-    }
-    println("    ${name}${status}")
-  }
-
-  // Check for denied imports
-  let denied = wasi_imports |> list.filter((imp) => {
-    let name = json.get_string(imp, "name") ?? ""
-    match sandbox.required_capability(name) {
-      none => false,
-      some(cap) => not sandbox.has_capability(caps, cap),
-    }
-  })
-  if list.len(denied) > 0 then {
-    let first_name = json.get_string(list.get(denied, 0) ?? json.object([]), "name") ?? ""
-    println("  Result: FAIL — capability denied for '${first_name}'")
-  }
-  else println("  Result: PASS")
-  ok(())
-}
-
-effect fn inspect(path: String) -> Result[Unit, String] = {
-  let info_json = wasm_rt.wt_inspect(path)
-  let info = json.parse(info_json)!
-  let error = json.get_string(info, "error") ?? ""
-  if error != "" then err(error)
-  else {
-    let imports = json.get_array(info, "imports") ?? []
-    let exports = json.get_array(info, "exports") ?? []
-    let memories = json.get_array(info, "memories") ?? []
-
-    println("Module: ${path}")
-    println("  Imports:   ${int.to_string(list.len(imports))}")
-    println("  Exports:   ${int.to_string(list.len(exports))}")
-    println("  Memories:  ${int.to_string(list.len(memories))}")
-
-    println("")
-    println("Imports:")
-    for entry in list.enumerate(imports) {
-      let (idx, imp) = entry
-      let mod_name = json.get_string(imp, "module") ?? ""
-      let name = json.get_string(imp, "name") ?? ""
-      let kind = json.get_string(imp, "kind") ?? ""
-      println("  [${int.to_string(idx)}] ${mod_name}.${name} (${kind})")
-    }
-
-    println("")
-    println("Exports:")
-    for exp in exports {
-      let name = json.get_string(exp, "name") ?? ""
-      let kind = json.get_string(exp, "kind") ?? ""
-      println("  ${name} (${kind})")
-    }
-
-    ok(())
-  }
-}
-
-// --- Help ---
-
-// --- Instance management ---
-
-fn porta_dir() -> String = wasm_rt.wt_home_dir() + "/.porta/instances"
-
-fn instance_dir(id: String) -> String = porta_dir() + "/" + id
-
-fn generate_id() -> String = {
-  let pid = wasm_rt.wt_getpid()
-  let ts = int.to_string(pid)
-  "p-" + ts
-}
-
-effect fn ensure_porta_dir() -> Result[Unit, String] = {
-  if not fs.exists(porta_dir()) then fs.mkdir_p(porta_dir())! else ()
-  ok(())
-}
-
-effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[Unit, String] = {
-  ensure_porta_dir()!
-  let dir = instance_dir(id)
-  fs.mkdir_p(dir)!
-  let info = json.stringify(json.object([
-    ("id", json.from_string(id)),
-    ("wasm", json.from_string(wasm_path)),
-    ("pid", json.from_int(pid)),
-    ("status", json.from_string("running")),
-  ]))
-  fs.write(dir + "/instance.json", info)!
-  ok(())
-}
-
-effect fn list_instances() -> Result[Unit, String] = {
-  ensure_porta_dir()!
-  let dirs = fs.list_dir(porta_dir())!
-  println("ID\tSTATUS\tWASM")
-  for d in dirs {
-    let info_path = porta_dir() + "/" + d + "/instance.json"
-    if fs.exists(info_path) then {
-      let content = fs.read_text(info_path)!
-      let v = json.parse(content)!
-      let id = json.get_string(v, "id") ?? d
-      let status = json.get_string(v, "status") ?? "unknown"
-      let wasm = json.get_string(v, "wasm") ?? ""
-      println(id + "\t" + status + "\t" + wasm)
-    }
-    else ()
-  }
-  ok(())
-}
-
-effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
-  let info_path = instance_dir(id) + "/instance.json"
-  if not fs.exists(info_path) then {
-    println("instance not found: " + id)
-    ok(())
-  }
-  else {
-    let content = fs.read_text(info_path)!
-    let v = json.parse(content)!
-    let pid = json.get_int(v, "pid") ?? 0
-    if pid == 0 then { println("no PID for instance: " + id); ok(()) }
-    else {
-      let result = wasm_rt.wt_kill(pid, signal)!
-      if result == 0 then {
-        println(if signal == 9 then "killed: " + id else "stopped: " + id)
-        // Update status
-        let updated = json.stringify(json.object([
-          ("id", json.from_string(id)),
-          ("wasm", json.from_string(json.get_string(v, "wasm") ?? "")),
-          ("pid", json.from_int(pid)),
-          ("status", json.from_string("stopped")),
-        ]))
-        fs.write(info_path, updated)!
-        ok(())
-      }
-      else { println("failed to signal process " + int.to_string(pid)); ok(()) }
-    }
-  }
-}
-
-effect fn show_logs(id: String) -> Result[Unit, String] = {
-  let stdout_path = instance_dir(id) + "/stdout.log"
-  let stderr_path = instance_dir(id) + "/stderr.log"
-  if fs.exists(stdout_path) then {
-    let content = fs.read_text(stdout_path)!
-    if string.len(content) > 0 then println(content) else ()
-  } else ()
-  if fs.exists(stderr_path) then {
-    let content = fs.read_text(stderr_path)!
-    if string.len(content) > 0 then eprintln(content) else ()
-  } else ()
-  ok(())
-}
-
-effect fn remove_instance(id: String) -> Result[Unit, String] = {
-  let dir = instance_dir(id)
-  if fs.exists(dir) then {
-    fs.remove_all(dir)!
-    println("removed: " + id)
-  }
-  else println("instance not found: " + id)
-  ok(())
-}
-
-// --- Help ---
-
-// --- porta up / init ---
-
-effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
-  let config_path = if fs.exists("porta.toml") then "porta.toml" else ".porta.toml"
-  if not fs.exists(config_path) then {
-    println("No porta.toml found. Run 'porta init' to create one.")
-    ok(())
-  }
-  else {
-    let cfg = config.load_porta_config(config_path)!
-    let env_list = cfg.env_vars
-    let secret_list = cfg.secrets
-    let all_args = cfg.args + extra_args
-
-    if cfg.runtime_type == "native" then {
-      let cmd = cfg.command
-      let args_json = json.stringify(json.array(all_args |> list.map(json.from_string)))
-      let dirs_json = json.stringify(json.array(cfg.mounts |> list.map(json.from_string)))
-      let net_json = json.stringify(json.array(cfg.network |> list.map(json.from_string)))
-      let all_env = env_list + secret_list
-      let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
-      let env_json = json.stringify(json.array(env_pairs))
-      let cwd = string.replace(list.get(cfg.mounts, 0) ?? ".", ":ro", "")
-
-      let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
-      let parsed = json.parse(result_json)!
-      let error = json.get_string(parsed, "error") ?? ""
-      if error != "" then eprintln(error)
-      else {
-        let stdout = json.get_string(parsed, "stdout") ?? ""
-        let stderr = json.get_string(parsed, "stderr") ?? ""
-        if string.len(stdout) > 0 then println(stdout) else ()
-        if string.len(stderr) > 0 then eprintln(stderr) else ()
-      }
-      ok(())
-    }
-    else {
-      // WASM runtime
-      let wasm_path = cfg.wasm_path
-      let opts: Options = {
-        ...default_options(),
-        path: wasm_path,
-        entry: cfg.entry,
-        step_limit: cfg.step_limit,
-        max_memory_pages: cfg.max_memory,
-        restart: cfg.restart,
-        profile: cfg.profile,
-        env_vars: env_list,
-        secrets: secret_list,
-        preopen_dirs: cfg.mounts,
-        wasm_args: all_args,
-      }
-      run_wasm(opts)
-    }
-  }
-}
-
-effect fn porta_init(runtime_type: String, command: String) -> Result[Unit, String] = {
-  if fs.exists("porta.toml") then {
-    println("porta.toml already exists.")
-    ok(())
-  }
-  else {
-    let content = if runtime_type == "native" then config.generate_native_toml(command)
-      else config.generate_wasm_toml(command)
-    fs.write("porta.toml", content)!
-    println("Created porta.toml")
-    println("")
-    println("Edit porta.toml to configure your sandbox, then run:")
-    println("  porta up")
-    ok(())
-  }
-}
-
-// --- Native sandbox execution ---
-
-effect fn run_native(opts: Options) -> Result[Unit, String] = {
-  let cmd = opts.path
-  let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
-  let dirs = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
-  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
-
-  // Collect --allow-net values
-  let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
-
-  // Build env: merge env_vars + secrets
-  let env = resolve_env(opts)!
-  let all_env = env + opts.secrets
-  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
-  let env_json = json.stringify(json.array(env_pairs))
-
-  let first_dir = list.get(dirs, 0) ?? "."
-  let cwd = string.replace(first_dir, ":ro", "")
-
-  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
-  let parsed = json.parse(result_json)!
-  let error = json.get_string(parsed, "error") ?? ""
-  if error != "" then {
-    eprintln(error)
-    ok(())
-  }
-  else {
-    let stdout = json.get_string(parsed, "stdout") ?? ""
-    let stderr = json.get_string(parsed, "stderr") ?? ""
-    let exit_code = json.get_int(parsed, "exit_code") ?? 0
-    if string.len(stdout) > 0 then println(stdout) else ()
-    if string.len(stderr) > 0 then eprintln(stderr) else ()
-    if exit_code != 0 then eprintln("exit code: " + int.to_string(exit_code)) else ()
-    ok(())
-  }
-}
-
-// --- Help ---
-
-fn print_help(topic: String) -> Unit =
-  match topic {
-    "run" => {
-      println("porta run <agent.wasm> [options]")
-      println("")
-      println("Execute a WASM binary.")
-      println("")
-      println("options:")
-      println("  --entry <name>          Entry point (default: _start)")
-      println("  --step-limit <n>        Max instructions (0 = unlimited)")
-      println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
-      println("  --restart <policy>      Restart policy: no, on-failure, always")
-      println("  --profile <name>        Capability profile: ai-agent, worker, full")
-      println("  --env <KEY=VALUE>       Set environment variable (repeatable)")
-      println("  --env-file <path>       Load env vars from file")
-      println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
-    },
-    "serve" => {
-      println("porta serve <agent.wasm> [options]")
-      println("")
-      println("Start MCP server on stdio (JSON-RPC 2.0).")
-      println("")
-      println("options:")
-      println("  --manifest <path>       Path to manifest.json")
-      println("  --entry <name>          Entry point (default: _start)")
-      println("  --step-limit <n>        Max instructions per tool call (0 = unlimited)")
-      println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
-      println("  --profile <name>        Capability profile: ai-agent, worker, full")
-      println("  --env <KEY=VALUE>       Set environment variable (repeatable)")
-      println("  --env-file <path>       Load env vars from file")
-      println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
-    },
-    "validate" => {
-      println("porta validate <agent.wasm> [options]")
-      println("")
-      println("Check WASI imports against capability profile.")
-      println("")
-      println("options:")
-      println("  --manifest <path>       Path to manifest.json")
-      println("  --profile <name>        Capability profile: ai-agent, worker, full")
-    },
-    "build" => {
-      println("porta build <agent.wasm> [options]")
-      println("")
-      println("Generate manifest.json from WASM binary.")
-      println("")
-      println("options:")
-      println("  --manifest <path>       Output path (default: <agent>.manifest.json)")
-    },
-    _ => {
-      println("porta — WASM agent MCP bridge")
-      println("")
-      println("usage:")
-      println("  porta up                      Run from porta.toml")
-      println("  porta init [native|wasm] [cmd] Create porta.toml")
-      println("  porta run <agent.wasm>        Execute WASM binary")
-      println("  porta serve <agent.wasm>      Start MCP server")
-      println("  porta build <agent.wasm>      Generate manifest.json")
-      println("  porta inspect <agent.wasm>    Show module info")
-      println("  porta validate <agent.wasm>   Validate WASI imports")
-      println("  porta ps                      List instances")
-      println("  porta stop <id>               Stop instance (SIGTERM)")
-      println("  porta kill <id>               Kill instance (SIGKILL)")
-      println("  porta logs <id>               View instance logs")
-      println("  porta rm <id>                 Remove stopped instance")
-      println("  porta version                 Show version")
-      println("  porta help [command]          Show help")
-      println("")
-      println("Run 'porta help <command>' for command-specific options.")
-    },
-  }

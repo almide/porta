@@ -17,10 +17,17 @@ struct WasmInstance {
     env_vars: Vec<(String, String)>,
     preopen_dirs: Vec<(String, String)>,
     fuel: u64,
+    max_memory_bytes: usize,
+    entry_point: String,
     stdout_result: String,
     stderr_result: String,
     exit_code: i64,
     fuel_consumed: u64,
+}
+
+struct PortaCtx {
+    wasi: WasiP1Ctx,
+    limits: StoreLimits,
 }
 
 static INSTANCES: Mutex<Vec<Option<WasmInstance>>> = Mutex::new(Vec::new());
@@ -76,6 +83,8 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
         env_vars: Vec::new(),
         preopen_dirs: Vec::new(),
         fuel: if fuel > 0 { fuel as u64 } else { 0 },
+        max_memory_bytes: 0,
+        entry_point: "_start".to_string(),
         stdout_result: String::new(),
         stderr_result: String::new(),
         exit_code: 0,
@@ -148,6 +157,27 @@ pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> 
     }
 }
 
+/// Set maximum memory in WASM pages (64KB each). 0 = unlimited.
+pub fn wt_set_max_memory(handle: i64, pages: i64) -> i64 {
+    let mut instances = INSTANCES.lock().unwrap();
+    match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
+        Some(inst) => {
+            inst.max_memory_bytes = if pages > 0 { pages as usize * 65536 } else { 0 };
+            0
+        }
+        None => -1,
+    }
+}
+
+/// Set entry point function name (default: "_start"). Must be called before wt_run.
+pub fn wt_set_entry(handle: i64, name: impl AsRef<str>) -> i64 {
+    let mut instances = INSTANCES.lock().unwrap();
+    match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
+        Some(inst) => { inst.entry_point = name.as_ref().to_string(); 0 }
+        None => -1,
+    }
+}
+
 /// Add a preopened directory (must be called before wt_run).
 /// host_path: actual path on the host filesystem.
 /// guest_path: path the WASM agent sees (e.g., "." or "/work").
@@ -193,14 +223,21 @@ pub fn wt_run(handle: i64) -> i64 {
     wasi.stderr(stderr_pipe.clone());
 
     let wasi_ctx = wasi.build_p1();
-    let mut store = Store::new(&inst.engine, wasi_ctx);
+    let limits = if inst.max_memory_bytes > 0 {
+        StoreLimitsBuilder::new().memory_size(inst.max_memory_bytes).build()
+    } else {
+        StoreLimitsBuilder::new().build()
+    };
+    let ctx = PortaCtx { wasi: wasi_ctx, limits };
+    let mut store = Store::new(&inst.engine, ctx);
+    store.limiter(|ctx| &mut ctx.limits);
 
     if inst.fuel > 0 {
         let _ = store.set_fuel(inst.fuel);
     }
 
     let mut linker = Linker::new(&inst.engine);
-    if let Err(e) = p1::add_to_linker_sync(&mut linker, |ctx| ctx) {
+    if let Err(e) = p1::add_to_linker_sync(&mut linker, |ctx: &mut PortaCtx| &mut ctx.wasi) {
         inst.stderr_result = format!("linker setup failed: {}", e);
         inst.exit_code = -1;
         return -1;
@@ -212,7 +249,7 @@ pub fn wt_run(handle: i64) -> i64 {
     let _ = linker.func_wrap(
         "porta",
         "http_request",
-        |mut caller: Caller<'_, WasiP1Ctx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
+        |mut caller: Caller<'_, PortaCtx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
             let memory = match caller.get_export("memory") {
                 Some(Extern::Memory(m)) => m,
                 _ => return -1,
@@ -276,7 +313,7 @@ pub fn wt_run(handle: i64) -> i64 {
     let _ = linker.func_wrap(
         "porta",
         "exec_command",
-        |mut caller: Caller<'_, WasiP1Ctx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
+        |mut caller: Caller<'_, PortaCtx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
             let memory = match caller.get_export("memory") {
                 Some(Extern::Memory(m)) => m,
                 _ => return -1,
@@ -325,12 +362,13 @@ pub fn wt_run(handle: i64) -> i64 {
     };
 
     // Try () -> () first, then () -> i32 (for effect fn main returning Result)
-    let result = if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+    let entry = &inst.entry_point;
+    let result = if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, entry) {
         start.call(&mut store, ())
-    } else if let Ok(start) = instance.get_typed_func::<(), (i32,)>(&mut store, "_start") {
+    } else if let Ok(start) = instance.get_typed_func::<(), (i32,)>(&mut store, entry) {
         start.call(&mut store, ()).map(|_| ())
     } else {
-        inst.stderr_result = "_start function not found".to_string();
+        inst.stderr_result = format!("{} function not found", entry);
         inst.exit_code = -1;
         return -1;
     };
@@ -719,6 +757,108 @@ fn exec_sandboxed_linux(
         }
         Err(e) => format!("{{\"error\":\"exec failed: {}\"}}", e),
     }
+}
+
+/// Replace the current process with a sandboxed command (Unix exec).
+/// This function never returns on success — porta becomes the sandboxed process.
+/// On failure, returns a JSON error string.
+pub fn wt_exec_replace(
+    cmd: impl AsRef<str>,
+    args_json: impl AsRef<str>,
+    allowed_dirs_json: impl AsRef<str>,
+    allowed_net_json: impl AsRef<str>,
+    env_json: impl AsRef<str>,
+    cwd: impl AsRef<str>,
+) -> String {
+    let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
+    let allowed_dirs_raw: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
+    let allowed_dirs: Vec<String> = allowed_dirs_raw.iter().map(|d| {
+        let clean = d.trim_end_matches(":ro");
+        let abs = if clean.starts_with('/') {
+            clean.to_string()
+        } else {
+            std::fs::canonicalize(clean).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| clean.to_string())
+        };
+        if d.ends_with(":ro") { format!("{}:ro", abs) } else { abs }
+    }).collect();
+    let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
+    let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|pair| {
+            if pair.len() == 2 { Some((pair[0].clone(), pair[1].clone())) } else { None }
+        })
+        .collect();
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        let profile = build_sandbox_profile_rs(&allowed_dirs, &allowed_net);
+        let mut command = std::process::Command::new("sandbox-exec");
+        command.arg("-p").arg(&profile).arg(cmd.as_ref()).args(&args);
+        if !cwd.as_ref().is_empty() && cwd.as_ref() != "." {
+            command.current_dir(cwd.as_ref());
+        }
+        for (k, v) in &env_vars {
+            command.env(k, v);
+        }
+        // exec() replaces the current process — never returns on success
+        let err = command.exec();
+        format!("{{\"error\":\"exec failed: {}\"}}", err)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("{{\"error\":\"exec_replace not supported on this platform\"}}")
+    }
+}
+
+/// Shared sandbox profile builder for Rust-side exec functions.
+#[cfg(target_os = "macos")]
+fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> String {
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+    profile.push_str("(deny file-write*)\n");
+    for dir in allowed_dirs.iter() {
+        let clean = dir.trim_end_matches(":ro");
+        if !dir.ends_with(":ro") {
+            profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+        }
+    }
+    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
+    if let Ok(home) = std::env::var("HOME") {
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.kube\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.docker\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Documents\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Desktop\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
+    }
+    // Network: open by default (like Docker). --allow-net restricts to listed ports only.
+    if !allowed_net.is_empty() {
+        profile.push_str("(deny network-outbound)\n");
+        profile.push_str("(allow network-outbound (local udp))\n");
+        profile.push_str("(allow network-outbound (remote unix-socket))\n");
+        for host in allowed_net {
+            if let Some(colon) = host.rfind(':') {
+                let port = &host[colon + 1..];
+                profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));
+            } else {
+                profile.push_str("(allow network-outbound (remote tcp \"*:*\"))\n");
+            }
+        }
+    }
+    profile
 }
 
 /// Spawn a detached process. Returns PID (>0) or -1 on error.

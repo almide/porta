@@ -1,0 +1,54 @@
+// Build: manifest and package generation
+
+import fs
+import json
+import self.cli
+import self.wasm_rt
+
+effect fn build_package(opts: cli.Options) -> Result[Unit, String] = {
+  let output_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+
+  // Use native inspect
+  let info_json = wasm_rt.wt_inspect(opts.path)
+  let info = json.parse(info_json)!
+  let all_exports = json.get_array(info, "exports") ?? []
+  let all_imports = json.get_array(info, "imports") ?? []
+
+  let export_tools = all_exports
+    |> list.filter((exp) => json.get_string(exp, "kind") ?? "" == "func")
+    |> list.filter((exp) => {
+      let name = json.get_string(exp, "name") ?? ""
+      name != "_start" and name != "__alloc" and name != "memory"
+    })
+    |> list.map((exp) => {
+      let name = json.get_string(exp, "name") ?? ""
+      json.object([
+        ("name", json.from_string(name)),
+        ("description", json.from_string(name)),
+        ("inputSchema", json.object([("type", json.from_string("object"))])),
+      ])
+    })
+
+  let wasi_imports = all_imports
+    |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
+    |> list.map((imp) => json.from_string(json.get_string(imp, "name") ?? ""))
+
+  let manifest_json = json.object([
+    ("schema_version", json.from_string("1.0")),
+    ("name", json.from_string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
+    ("version", json.from_string("0.1.0")),
+    ("description", json.from_string("")),
+    ("entry", json.from_string("_start")),
+    ("capabilities", json.array([])),
+    ("tools", json.array(export_tools)),
+    ("wasi_imports", json.array(wasi_imports)),
+  ])
+
+  let content = json.stringify(manifest_json)
+  fs.write(output_path, content)!
+  println("Built ${output_path}")
+  println("  Tools: ${int.to_string(list.len(export_tools))}")
+  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
+  ok(())
+}

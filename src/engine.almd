@@ -1,0 +1,190 @@
+// Engine: WASM/native execution, MCP serve, validate, inspect
+
+import fs
+import json
+import self.cli
+import self.ops
+import self.dispatch
+import self.sandbox
+import self.observability
+import self.util
+import self.wasm_rt
+import self.wasm.binary
+import self.manifest
+import self.mcp
+
+// --- Serve ---
+
+effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+  let has_manifest = fs.exists(manifest_path)
+  let m = if has_manifest then manifest.load_manifest(manifest_path)!
+    else {
+      let wasm = binary.load(opts.path)!
+      let export_tools = wasm.exports
+        |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
+        |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
+        |> list.map((exp) => {
+          let tool: manifest.ToolDef = {name: exp.name, description: exp.name, input_schema: json.object([])}
+          tool
+        })
+      let m: manifest.Manifest = {
+        schema_version: "1.0",
+        name: "agent",
+        version: "0.1.0",
+        description: "",
+        capabilities: [],
+        tools: export_tools,
+        resources: [],
+        prompts: [],
+        wasi_imports: [],
+        entry: "_start",
+      }
+      m
+    }
+  let caps = util.resolve_serve_caps(opts.profile, m.capabilities)
+  let env = cli.resolve_env(opts)!
+  let config = cli.build_config(opts.path, opts, caps, env)
+  let server = mcp.new_server(m, config)
+  mcp.serve_loop(server)
+}
+
+// --- Run ---
+
+effect fn run_wasm(opts: cli.Options) -> Result[Unit, String] =
+  if opts.detach then ops.run_detached(opts)
+  else if opts.daemon_id != "" then ops.run_as_daemon(opts)
+  else run_foreground(opts)
+
+effect fn run_foreground(opts: cli.Options) -> Result[Unit, String] = {
+  let caps = cli.resolve_run_caps(opts)!
+  let env = cli.resolve_env(opts)!
+  let config = cli.build_config(opts.path, opts, caps, env)
+  let result = dispatch.run_instance(config)!
+  if string.len(result.stdout) > 0 then println(result.stdout) else ()
+  if string.len(result.stderr) > 0 then eprintln(result.stderr) else ()
+  eprintln(observability.format_summary(result.metrics))
+  ok(())
+}
+
+// --- Native sandbox execution ---
+
+effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
+  let cmd = opts.path
+  let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
+  let dirs = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
+  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
+  // Native commands: network open by default (like Docker). Use --no-net to block.
+  let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
+  let env = cli.resolve_env(opts)!
+  let all_env = env + opts.secrets
+  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
+  let env_json = json.stringify(json.array(env_pairs))
+  let first_dir = list.get(dirs, 0) ?? "."
+  let cwd = string.replace(first_dir, ":ro", "")
+
+  // exec() replaces this process — terminal is inherited, never returns on success
+  let error_json = wasm_rt.wt_exec_replace(cmd, args_json, dirs_json, net_json, env_json, cwd)
+  let parsed = json.parse(error_json)!
+  let error = json.get_string(parsed, "error") ?? "unknown error"
+  err(error)
+}
+
+// --- Validate ---
+
+effect fn validate(opts: cli.Options) -> Result[Unit, String] = {
+  println("Validating: ${opts.path}")
+
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+  let has_manifest = fs.exists(manifest_path)
+
+  let caps = if opts.profile != "" then
+    match opts.profile {
+      "ai-agent" => sandbox.profile_ai_agent(),
+      "worker" => sandbox.profile_worker(),
+      "full" => sandbox.profile_full(),
+      _ => sandbox.profile_ai_agent(),
+    }
+  else if has_manifest then {
+    let m = manifest.load_manifest(manifest_path)!
+    if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
+    else sandbox.profile_full()
+  }
+  else sandbox.profile_full()
+
+  // Use native inspect for any size WASM
+  let info_json = wasm_rt.wt_inspect(opts.path)
+  let info = json.parse(info_json)!
+  let all_imports = json.get_array(info, "imports") ?? []
+  let wasi_imports = all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
+
+  println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
+  let _has_fail = false
+  for imp in wasi_imports {
+    let name = json.get_string(imp, "name") ?? ""
+    let req = sandbox.required_capability(name)
+    let status = match req {
+      none => "  ok",
+      some(cap) =>
+        if sandbox.has_capability(caps, cap) then "  ok"
+        else "  DENIED (requires ${sandbox.cap_name(cap)})",
+    }
+    println("    ${name}${status}")
+  }
+
+  // Check for denied imports
+  let denied = wasi_imports |> list.filter((imp) => {
+    let name = json.get_string(imp, "name") ?? ""
+    match sandbox.required_capability(name) {
+      none => false,
+      some(cap) => not sandbox.has_capability(caps, cap),
+    }
+  })
+  if list.len(denied) > 0 then {
+    let first_name = json.get_string(list.get(denied, 0) ?? json.object([]), "name") ?? ""
+    println("  Result: FAIL — capability denied for '${first_name}'")
+  }
+  else println("  Result: PASS")
+  ok(())
+}
+
+// --- Inspect ---
+
+effect fn inspect(path: String) -> Result[Unit, String] = {
+  let info_json = wasm_rt.wt_inspect(path)
+  let info = json.parse(info_json)!
+  let error = json.get_string(info, "error") ?? ""
+  if error != "" then err(error)
+  else {
+    let imports = json.get_array(info, "imports") ?? []
+    let exports = json.get_array(info, "exports") ?? []
+    let memories = json.get_array(info, "memories") ?? []
+
+    println("Module: ${path}")
+    println("  Imports:   ${int.to_string(list.len(imports))}")
+    println("  Exports:   ${int.to_string(list.len(exports))}")
+    println("  Memories:  ${int.to_string(list.len(memories))}")
+
+    println("")
+    println("Imports:")
+    for entry in list.enumerate(imports) {
+      let (idx, imp) = entry
+      let mod_name = json.get_string(imp, "module") ?? ""
+      let name = json.get_string(imp, "name") ?? ""
+      let kind = json.get_string(imp, "kind") ?? ""
+      println("  [${int.to_string(idx)}] ${mod_name}.${name} (${kind})")
+    }
+
+    println("")
+    println("Exports:")
+    for exp in exports {
+      let name = json.get_string(exp, "name") ?? ""
+      let kind = json.get_string(exp, "kind") ?? ""
+      println("  ${name} (${kind})")
+    }
+
+    ok(())
+  }
+}

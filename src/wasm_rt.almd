@@ -36,6 +36,12 @@ fn wt_get_fuel_consumed(handle: Int) -> Int
 @extern(rs, "wasmtime_bridge", "wt_get_exit_code")
 fn wt_get_exit_code(handle: Int) -> Int
 
+@extern(rs, "wasmtime_bridge", "wt_set_max_memory")
+fn wt_set_max_memory(handle: Int, pages: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_set_entry")
+fn wt_set_entry(handle: Int, name: String) -> Int
+
 @extern(rs, "wasmtime_bridge", "wt_preopen_dir")
 fn wt_preopen_dir(handle: Int, host_path: String, guest_path: String) -> Int
 
@@ -44,6 +50,9 @@ fn wt_destroy(handle: Int) -> Int
 
 @extern(rs, "wasmtime_bridge", "wt_inspect")
 fn wt_inspect(wasm_path: String) -> String
+
+@extern(rs, "wasmtime_bridge", "wt_exec_replace")
+fn wt_exec_replace(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> String
 
 // --- HTTP (pure Almide) ---
 
@@ -73,8 +82,16 @@ effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: S
   let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
   let allowed_dirs = json.as_array(json.parse(allowed_dirs_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
   let allowed_net = json.as_array(json.parse(allowed_net_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let env_pairs = json.as_array(json.parse(env_json) ?? json.array([])) ?? []
+    |> list.filter_map((pair) => {
+      let arr = json.as_array(pair) ?? []
+      let k = json.as_string(list.get(arr, 0) ?? json.null())
+      let v = json.as_string(list.get(arr, 1) ?? json.null())
+      match (k, v) { (some(ek), some(ev)) => some(ek + "=" + ev), _ => none }
+    })
   let profile = build_sandbox_profile(allowed_dirs, allowed_net)
-  let sandbox_args = ["-p", profile, cmd] + args
+  let env_prefix = if list.len(env_pairs) > 0 then ["/usr/bin/env"] + env_pairs else []
+  let sandbox_args = ["-p", profile] + env_prefix + [cmd] + args
   let result = process.exec("sandbox-exec", sandbox_args)
   match result {
     ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(json.from_string(stdout)) + ",\"stderr\":\"\"}"),
@@ -82,6 +99,9 @@ effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: S
   }
 }
 
+// Build a macOS sandbox-exec profile.
+// Uses (allow default) base — read access is broad, write and network are restricted.
+// This is a constrained environment, not a full deny-by-default sandbox.
 fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) -> String = {
   let home = process.env("HOME") ?? "/tmp"
   let p = "(version 1)\n(allow default)\n"
@@ -94,6 +114,7 @@ fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) 
   let p = p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
   let p = p + "(allow file-write* (subpath \"" + home + "/Library\"))\n(allow file-write* (subpath \"" + home + "/.config\"))\n(allow file-write* (subpath \"" + home + "/.cache\"))\n(allow file-write* (subpath \"" + home + "/.npm\"))\n(allow file-write* (subpath \"" + home + "/.claude\"))\n"
   let p = p + "(deny file-read-data (subpath \"" + home + "/.ssh\"))\n(deny file-read-data (subpath \"" + home + "/.gnupg\"))\n(deny file-read-data (subpath \"" + home + "/.aws\"))\n(deny file-read-data (subpath \"" + home + "/.kube\"))\n(deny file-read-data (subpath \"" + home + "/.docker\"))\n(deny file-read-data (subpath \"" + home + "/Documents\"))\n(deny file-read-data (subpath \"" + home + "/Desktop\"))\n(deny file-read-data (subpath \"" + home + "/Downloads\"))\n(deny file-read-data (subpath \"" + home + "/Pictures\"))\n"
+  // Network: open by default (like Docker). --allow-net restricts to listed ports.
   if list.len(allowed_net) > 0 then {
     let p = p + "(deny network-outbound)\n(allow network-outbound (local udp))\n(allow network-outbound (remote unix-socket))\n"
     allowed_net |> list.fold(p, (acc, host) => {

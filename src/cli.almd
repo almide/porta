@@ -1,0 +1,268 @@
+// CLI types, argument parsing, and shared configuration builders
+
+import fs
+import self.dispatch
+import self.sandbox
+import self.manifest
+import self.util
+
+// --- Options ---
+
+type Options = {
+  path: String,
+  entry: String,
+  step_limit: Int,
+  max_memory_pages: Int,
+  restart: String,
+  profile: String,
+  manifest_path: String,
+  env_vars: List[dispatch.EnvVar],
+  env_file: String,
+  secrets: List[dispatch.EnvVar],
+  detach: Bool,
+  daemon_id: String,
+  wasm_args: List[String],
+  preopen_dirs: List[String],
+  allow_net: List[String],
+  allow_exec: List[String],
+}
+
+fn default_options() -> Options = {
+  path: "",
+  entry: "_start",
+  step_limit: 0,
+  max_memory_pages: 0,
+  restart: "no",
+  profile: "",
+  manifest_path: "",
+  env_vars: [],
+  env_file: "",
+  secrets: [],
+  detach: false,
+  daemon_id: "",
+  wasm_args: [],
+  preopen_dirs: [],
+  allow_net: [],
+  allow_exec: [],
+}
+
+fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
+  if idx >= list.len(args) then opts
+  else {
+    let arg = list.get(args, idx) ?? ""
+    let next = list.get(args, idx + 1) ?? ""
+    match arg {
+      "--entry" => parse_options(args, idx + 2, {...opts, entry: next}),
+      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: util.parse_int(next)}),
+      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: util.parse_int(next)}),
+      "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
+      "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
+      "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
+      "-e" => match util.split_at_eq(next) {
+        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
+        none => parse_options(args, idx + 2, opts),
+      },
+      "--env" => match util.split_at_eq(next) {
+        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
+        none => parse_options(args, idx + 2, opts),
+      },
+      "--env-file" => parse_options(args, idx + 2, {...opts, env_file: next}),
+      "--secret" => match util.split_at_eq(next) {
+        some(kv) => parse_options(args, idx + 2, {...opts, secrets: opts.secrets + [kv]}),
+        none => parse_options(args, idx + 2, opts),
+      },
+      "-v" => {
+        let dir = next
+        parse_options(args, idx + 2, {...opts, preopen_dirs: opts.preopen_dirs + [dir]})
+      },
+      "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
+      "--allow-exec" => parse_options(args, idx + 2, {...opts, allow_exec: opts.allow_exec + string.split(next, ",")}),
+      "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
+      "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
+      "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
+      "--" => {...opts, wasm_args: list.drop(args, idx + 1)},
+      _ =>
+        if string.starts_with(arg, "--") then parse_options(args, idx + 2, opts)
+        else if opts.path == "" then parse_options(args, idx + 1, {...opts, path: arg})
+        else parse_options(args, idx + 1, opts),
+    }
+  }
+
+// --- Environment resolution ---
+
+effect fn load_env_file(path: String) -> Result[List[dispatch.EnvVar], String] = {
+  let content = fs.read_text(path)!
+  let lines = util.split_lines(string.to_bytes(content), 0, 0, [])
+  ok(lines
+    |> list.filter((line) => string.len(string.trim(line)) > 0 and not string.starts_with(string.trim(line), "#"))
+    |> list.filter_map((line) => util.split_at_eq(string.trim(line))))
+}
+
+effect fn resolve_env(opts: Options) -> Result[List[dispatch.EnvVar], String] = {
+  let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
+    else []
+  // CLI --env overrides file values (dedup: keep last occurrence per key)
+  let combined = file_env + opts.env_vars
+  ok(dedup_env(combined, 0, []))
+}
+
+fn dedup_env(vars: List[dispatch.EnvVar], idx: Int, acc: List[dispatch.EnvVar]) -> List[dispatch.EnvVar] =
+  if idx >= list.len(vars) then acc
+  else {
+    let head = list.get(vars, idx) ?? {key: "", val: ""}
+    let tail = list.drop(vars, idx + 1)
+    let rest_has_key = tail |> list.any((e) => e.key == head.key)
+    if rest_has_key then dedup_env(vars, idx + 1, acc)
+    else dedup_env(vars, idx + 1, acc + [head])
+  }
+
+// --- Capability resolution (manifest-aware) ---
+
+effect fn resolve_run_caps(opts: Options) -> Result[sandbox.CapabilitySet, String] = {
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+  if fs.exists(manifest_path) then {
+    let m = manifest.load_manifest(manifest_path)!
+    ok(util.resolve_serve_caps(opts.profile, m.capabilities))
+  }
+  else ok(util.resolve_caps(opts.profile, []))
+}
+
+// --- Config builder ---
+
+fn build_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, env: List[dispatch.EnvVar]) -> dispatch.InstanceConfig = {
+  let config = dispatch.default_config(wasm_path, caps)
+  {
+    ...config,
+    entry: opts.entry,
+    step_limit: opts.step_limit,
+    max_memory_pages: opts.max_memory_pages,
+    restart_policy: dispatch.parse_restart_policy(opts.restart),
+    env_vars: env,
+    secrets: opts.secrets,
+    wasm_args: opts.wasm_args,
+    preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
+    allowed_commands: opts.allow_exec,
+    allowed_hosts: opts.allow_net,
+  }
+}
+
+// --- Help ---
+
+fn print_common_runtime_opts() -> Unit = {
+  println("  -e, --env <KEY=VALUE>   Set environment variable (repeatable)")
+  println("  --env-file <path>       Load env vars from file")
+  println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
+  println("  --profile <name>        Capability profile: ai-agent, worker, full")
+  println("  --entry <name>          Entry point (default: _start)")
+  println("  --step-limit <n>        Max instructions (0 = unlimited)")
+  println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
+  println("  -v <path>               Mount directory (repeatable, append :ro for read-only)")
+  println("  --allow-net <host:port> Allow network to host:port (repeatable)")
+  println("  --allow-exec <cmd,...>  Allow commands (comma-separated)")
+}
+
+fn print_help(topic: String) -> Unit =
+  match topic {
+    "run" => {
+      println("porta run <target> [options] [-- args...]")
+      println("")
+      println("Execute a WASM binary or native command.")
+      println("Auto-detects mode: .wasm files run in WASM sandbox, everything else")
+      println("runs as a native command with filesystem and network restrictions.")
+      println("")
+      println("examples:")
+      println("  porta run agent.wasm --profile full -v .")
+      println("  porta run claude --allow-net '*:443' -v . -e \"HOME=$HOME\"")
+      println("  porta run python --allow-net '*:443' -v . -- script.py")
+      println("")
+      println("options:")
+      print_common_runtime_opts()
+      println("  --restart <policy>      Restart policy: no, on-failure, always (WASM only)")
+      println("  --manifest <path>       Path to manifest.json (WASM only)")
+      println("  -d, --detach            Run as background daemon (WASM only)")
+    },
+    "serve" => {
+      println("porta serve <agent.wasm> [options]")
+      println("")
+      println("Start MCP server on stdio (JSON-RPC 2.0).")
+      println("Exposes WASM agent tools via the MCP protocol.")
+      println("")
+      println("options:")
+      print_common_runtime_opts()
+      println("  --manifest <path>       Path to manifest.json")
+    },
+    "run-native" => print_help("run"),
+    "up" => {
+      println("porta up [-- extra-args...]")
+      println("")
+      println("Run agent from porta.toml in the current directory.")
+      println("Supports both WASM and native runtimes.")
+    },
+    "init" => {
+      println("porta init [native|wasm] [command]")
+      println("")
+      println("Create a porta.toml in the current directory.")
+      println("")
+      println("examples:")
+      println("  porta init native claude    Create native config for 'claude'")
+      println("  porta init wasm agent.wasm  Create WASM config")
+    },
+    "build" => {
+      println("porta build <agent.wasm> [options]")
+      println("")
+      println("Generate manifest.json from WASM binary.")
+      println("Extracts exported functions as MCP tools and lists WASI imports.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Output path (default: <agent>.manifest.json)")
+    },
+    "inspect" => {
+      println("porta inspect <agent.wasm>")
+      println("")
+      println("Show WASM module info: imports, exports, and memory layout.")
+    },
+    "validate" => {
+      println("porta validate <agent.wasm> [options]")
+      println("")
+      println("Check WASI imports against a capability profile.")
+      println("Reports which imports are allowed or denied.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Path to manifest.json")
+      println("  --profile <name>        Capability profile: ai-agent, worker, full")
+    },
+    "ps" => {
+      println("porta ps")
+      println("")
+      println("List running and stopped instances.")
+    },
+    _ => {
+      println("porta — WASM agent MCP bridge")
+      println("")
+      println("Project:")
+      println("  init          Create porta.toml")
+      println("  up            Run from porta.toml")
+      println("")
+      println("Runtime:")
+      println("  run           Execute WASM or native command")
+      println("  serve         Start MCP server")
+      println("")
+      println("Development:")
+      println("  build         Generate manifest.json from WASM binary")
+      println("  inspect       Show WASM module info")
+      println("  validate      Check WASI imports against capabilities")
+      println("")
+      println("Instances:")
+      println("  ps            List instances")
+      println("  stop <id>     Stop instance (SIGTERM)")
+      println("  kill <id>     Kill instance (SIGKILL)")
+      println("  logs <id>     View instance logs")
+      println("  rm <id>       Remove stopped instance")
+      println("")
+      println("  version       Show version")
+      println("  help [cmd]    Show help for a command")
+      println("")
+      println("Run 'porta help <command>' for command-specific options.")
+    },
+  }
