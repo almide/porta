@@ -47,8 +47,9 @@ effect fn main() -> Result[Unit, String] = {
     },
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
-      let command = list.get(args, 3) ?? "claude"
-      project.porta_init(runtime_type, command)
+      let command = list.get(args, 3) ?? ""
+      if command == "" then { cli.print_help("init"); ok(()) }
+      else project.porta_init(runtime_type, command)
     },
     "run-native" => {
       // Alias: porta run-native is equivalent to porta run <non-wasm>

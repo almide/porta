@@ -112,7 +112,7 @@ fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) 
     else acc + "(allow file-write* (subpath \"" + clean + "\"))\n"
   })
   let p = p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
-  let p = p + "(allow file-write* (subpath \"" + home + "/Library\"))\n(allow file-write* (subpath \"" + home + "/.config\"))\n(allow file-write* (subpath \"" + home + "/.cache\"))\n(allow file-write* (subpath \"" + home + "/.npm\"))\n(allow file-write* (subpath \"" + home + "/.claude\"))\n"
+  let p = p + "(allow file-write* (subpath \"" + home + "/Library\"))\n(allow file-write* (subpath \"" + home + "/.config\"))\n(allow file-write* (subpath \"" + home + "/.cache\"))\n(allow file-write* (subpath \"" + home + "/.npm\"))\n(allow file-write* (subpath \"" + home + "/.local\"))\n"
   let p = p + "(deny file-read-data (subpath \"" + home + "/.ssh\"))\n(deny file-read-data (subpath \"" + home + "/.gnupg\"))\n(deny file-read-data (subpath \"" + home + "/.aws\"))\n(deny file-read-data (subpath \"" + home + "/.kube\"))\n(deny file-read-data (subpath \"" + home + "/.docker\"))\n(deny file-read-data (subpath \"" + home + "/Documents\"))\n(deny file-read-data (subpath \"" + home + "/Desktop\"))\n(deny file-read-data (subpath \"" + home + "/Downloads\"))\n(deny file-read-data (subpath \"" + home + "/Pictures\"))\n"
   // Network: open by default (like Docker). --allow-net restricts to listed ports.
   if list.len(allowed_net) > 0 then {

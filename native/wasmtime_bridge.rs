@@ -676,7 +676,7 @@ fn exec_sandboxed_macos(
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.local\"))\n", home));
     }
 
     // --- FS read: deny sensitive directories ---
@@ -833,7 +833,7 @@ fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> 
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.local\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
