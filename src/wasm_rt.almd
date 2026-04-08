@@ -115,6 +115,8 @@ fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) 
   let p = p + "(deny network-outbound)\n(allow network-outbound (local udp))\n(allow network-outbound (remote unix-socket))\n"
   if list.len(allowed_net) > 0 then {
     allowed_net |> list.fold(p, (acc, host) => {
+      // sandbox-exec only supports * or localhost as host — use port filtering only
+      // Host-based filtering is enforced at the MCP layer (is_host_allowed)
       let parts = string.split(host, ":")
       let port = list.last(parts) ?? "*"
       acc + "(allow network-outbound (remote tcp \"*:" + port + "\"))\n"

@@ -95,10 +95,15 @@ test "build_sandbox_profile: empty allowed_net denies all outbound" {
   assert(string.contains(profile, "(allow network-outbound (local udp))"))
 }
 
-test "build_sandbox_profile: allowed_net adds TCP rules" {
-  let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"])
-  assert(string.contains(profile, "(deny network-outbound)"))
+test "build_sandbox_profile: allowed_net adds port-based TCP rules" {
+  // sandbox-exec only supports * or localhost as host — port filtering only
+  let profile = wasm_rt.build_sandbox_profile(["."], ["api.example.com:443"])
   assert(string.contains(profile, "(allow network-outbound (remote tcp \"*:443\"))"))
+}
+
+test "build_sandbox_profile: wildcard port" {
+  let profile = wasm_rt.build_sandbox_profile(["."], ["*:*"])
+  assert(string.contains(profile, "(allow network-outbound (remote tcp \"*:*\"))"))
 }
 
 test "build_sandbox_profile: :ro mount has no file-write rule" {
