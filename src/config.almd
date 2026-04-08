@@ -1,0 +1,105 @@
+// porta.toml configuration loader
+
+import fs
+import json
+import toml
+import self.dispatch
+
+type PortaConfig = {
+  runtime_type: String,
+  command: String,
+  wasm_path: String,
+  mounts: List[String],
+  network: List[String],
+  env_vars: List[dispatch.EnvVar],
+  secrets: List[dispatch.EnvVar],
+  profile: String,
+  entry: String,
+  step_limit: Int,
+  max_memory: Int,
+  restart: String,
+  args: List[String],
+}
+
+fn default_porta_config() -> PortaConfig = {
+  runtime_type: "wasm",
+  command: "",
+  wasm_path: "",
+  mounts: ["."],
+  network: [],
+  env_vars: [],
+  secrets: [],
+  profile: "",
+  entry: "_start",
+  step_limit: 0,
+  max_memory: 0,
+  restart: "no",
+  args: [],
+}
+
+effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
+  let content = fs.read_text(path)!
+  let v = toml.parse(content)!
+
+  // [runtime]
+  let rt = json.get(v, "runtime") ?? json.object([])
+  let runtime_type = json.get_string(rt, "type") ?? "wasm"
+  let command = json.get_string(rt, "command") ?? ""
+  let wasm_path = json.get_string(rt, "wasm") ?? ""
+  let entry = json.get_string(rt, "entry") ?? "_start"
+
+  // [sandbox]
+  let sb = json.get(v, "sandbox") ?? json.object([])
+  let mounts = json.get_array(sb, "mounts") ?? [] |> list.filter_map(json.as_string)
+  let network = json.get_array(sb, "network") ?? [] |> list.filter_map(json.as_string)
+  let profile = json.get_string(sb, "profile") ?? ""
+  let step_limit = json.get_int(sb, "step-limit") ?? 0
+  let max_memory = json.get_int(sb, "max-memory") ?? 0
+  let restart = json.get_string(sb, "restart") ?? "no"
+
+  // [env] — simple key=value table
+  let env_obj = json.get(v, "env") ?? json.object([])
+  let env_keys = json.keys(env_obj)
+  let env_vars = env_keys |> list.map((k) => {
+    let val = json.get_string(env_obj, k) ?? ""
+    let e: dispatch.EnvVar = {key: k, val: val}
+    e
+  })
+
+  // [secrets] — key=value or key={from-env=true}
+  let sec_obj = json.get(v, "secrets") ?? json.object([])
+  let sec_keys = json.keys(sec_obj)
+  let secrets = sec_keys |> list.filter_map((k) => {
+    let val = json.get_string(sec_obj, k)
+    match val {
+      some(v) => some({key: k, val: v}),
+      none => none,
+    }
+  })
+
+  // [args]
+  let args_arr = json.get_array(v, "args") ?? []
+  let cmd_args = args_arr |> list.filter_map(json.as_string)
+
+  ok({
+    runtime_type: runtime_type,
+    command: command,
+    wasm_path: wasm_path,
+    mounts: if list.len(mounts) > 0 then mounts else ["."],
+    network: network,
+    env_vars: env_vars,
+    secrets: secrets,
+    profile: profile,
+    entry: entry,
+    step_limit: step_limit,
+    max_memory: max_memory,
+    restart: restart,
+    args: cmd_args,
+  })
+}
+
+fn generate_native_toml(command: String) -> String =
+  "[runtime]\ntype = \"native\"\ncommand = \"" + command + "\"\n\n[sandbox]\nmounts = [\".\"]\nnetwork = [\"*:443\"]\n\n[env]\n\n[secrets]\n"
+
+fn generate_wasm_toml(wasm_path: String) -> String =
+  "[runtime]\ntype = \"wasm\"\nwasm = \"" + wasm_path + "\"\nentry = \"_start\"\n\n[sandbox]\nmounts = [\".\"]\nprofile = \"full\"\n\n[env]\n\n[secrets]\n"
