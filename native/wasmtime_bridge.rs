@@ -571,7 +571,17 @@ pub fn wt_exec_sandboxed(
     cwd: impl AsRef<str>,
 ) -> String {
     let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
-    let allowed_dirs: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
+    let allowed_dirs_raw: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
+    // Resolve paths, strip :ro suffix for resolution but keep it for sandbox profile
+    let allowed_dirs: Vec<String> = allowed_dirs_raw.iter().map(|d| {
+        let clean = d.trim_end_matches(":ro");
+        let abs = if clean.starts_with('/') {
+            clean.to_string()
+        } else {
+            std::fs::canonicalize(clean).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| clean.to_string())
+        };
+        if d.ends_with(":ro") { format!("{}:ro", abs) } else { abs }
+    }).collect();
     let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
     let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
         .unwrap_or_default()
@@ -601,25 +611,23 @@ fn exec_sandboxed_macos(
     env_vars: &[(String, String)], cwd: &str,
 ) -> String {
     // Build sandbox-exec profile
+    // Strategy: allow default + deny writes outside allowed dirs + deny reads on sensitive dirs
     let mut profile = String::from("(version 1)\n(allow default)\n");
 
-    // FS write restrictions
+    // --- FS write: deny all, allow only specified dirs + system essentials ---
     profile.push_str("(deny file-write*)\n");
-    for dir in allowed_dirs {
-        let abs = if dir.starts_with('/') {
-            dir.clone()
-        } else {
-            std::fs::canonicalize(dir).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| dir.clone())
-        };
-        profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", abs));
+    for dir in allowed_dirs.iter() {
+        let clean = dir.trim_end_matches(":ro");
+        if !dir.ends_with(":ro") {
+            profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+        }
     }
-    // Always allow system paths needed by runtimes
+    // System paths needed by runtimes
     profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
     profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    // Allow writing to home .config dirs (needed for many tools)
     if let Ok(home) = std::env::var("HOME") {
         profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
@@ -628,14 +636,25 @@ fn exec_sandboxed_macos(
         profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
     }
 
-    // Network restrictions
+    // --- FS read: deny sensitive directories ---
+    if let Ok(home) = std::env::var("HOME") {
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.kube\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.docker\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Documents\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Desktop\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
+    }
+
+    // --- Network restrictions ---
     if !allowed_net.is_empty() {
         profile.push_str("(deny network-outbound)\n");
-        profile.push_str("(allow network-outbound (local udp))\n"); // DNS
-        profile.push_str("(allow network-outbound (remote unix-socket))\n"); // IPC
+        profile.push_str("(allow network-outbound (local udp))\n");
+        profile.push_str("(allow network-outbound (remote unix-socket))\n");
         for host in allowed_net {
-            // sandbox-exec only supports *:port or localhost:port, not domain names
-            // Extract port and use wildcard host
             if let Some(colon) = host.rfind(':') {
                 let port = &host[colon + 1..];
                 profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));

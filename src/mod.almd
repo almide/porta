@@ -610,7 +610,8 @@ effect fn run_native(opts: Options) -> Result[Unit, String] = {
   let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
   let env_json = json.stringify(json.array(env_pairs))
 
-  let cwd = if list.len(dirs) > 0 then list.get(dirs, 0) ?? "." else "."
+  let first_dir = list.get(dirs, 0) ?? "."
+  let cwd = string.replace(first_dir, ":ro", "")
 
   let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)
   let parsed = json.parse(result_json)!
