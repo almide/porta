@@ -51,6 +51,9 @@ fn wt_destroy(handle: Int) -> Int
 @extern(rs, "wasmtime_bridge", "wt_inspect")
 fn wt_inspect(wasm_path: String) -> String
 
+@extern(rs, "wasmtime_bridge", "wt_exec_replace")
+fn wt_exec_replace(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> String
+
 // --- HTTP (pure Almide) ---
 
 effect fn wt_http_request(method: String, url: String, headers_json: String, body: String) -> Result[String, String] = {

@@ -75,35 +75,19 @@ effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
   let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
   let dirs = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
   let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
-
-  // Collect --allow-net values
   let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
-
-  // Build env: merge env_vars + secrets
   let env = cli.resolve_env(opts)!
   let all_env = env + opts.secrets
   let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
   let env_json = json.stringify(json.array(env_pairs))
-
   let first_dir = list.get(dirs, 0) ?? "."
   let cwd = string.replace(first_dir, ":ro", "")
 
-  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
-  let parsed = json.parse(result_json)!
-  let error = json.get_string(parsed, "error") ?? ""
-  if error != "" then {
-    eprintln(error)
-    ok(())
-  }
-  else {
-    let stdout = json.get_string(parsed, "stdout") ?? ""
-    let stderr = json.get_string(parsed, "stderr") ?? ""
-    let exit_code = json.get_int(parsed, "exit_code") ?? 0
-    if string.len(stdout) > 0 then println(stdout) else ()
-    if string.len(stderr) > 0 then eprintln(stderr) else ()
-    if exit_code != 0 then eprintln("exit code: " + int.to_string(exit_code)) else ()
-    ok(())
-  }
+  // exec() replaces this process — terminal is inherited, never returns on success
+  let error_json = wasm_rt.wt_exec_replace(cmd, args_json, dirs_json, net_json, env_json, cwd)
+  let parsed = json.parse(error_json)!
+  let error = json.get_string(parsed, "error") ?? "unknown error"
+  err(error)
 }
 
 // --- Validate ---

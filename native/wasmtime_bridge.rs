@@ -759,6 +759,107 @@ fn exec_sandboxed_linux(
     }
 }
 
+/// Replace the current process with a sandboxed command (Unix exec).
+/// This function never returns on success — porta becomes the sandboxed process.
+/// On failure, returns a JSON error string.
+pub fn wt_exec_replace(
+    cmd: impl AsRef<str>,
+    args_json: impl AsRef<str>,
+    allowed_dirs_json: impl AsRef<str>,
+    allowed_net_json: impl AsRef<str>,
+    env_json: impl AsRef<str>,
+    cwd: impl AsRef<str>,
+) -> String {
+    let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
+    let allowed_dirs_raw: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
+    let allowed_dirs: Vec<String> = allowed_dirs_raw.iter().map(|d| {
+        let clean = d.trim_end_matches(":ro");
+        let abs = if clean.starts_with('/') {
+            clean.to_string()
+        } else {
+            std::fs::canonicalize(clean).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| clean.to_string())
+        };
+        if d.ends_with(":ro") { format!("{}:ro", abs) } else { abs }
+    }).collect();
+    let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
+    let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|pair| {
+            if pair.len() == 2 { Some((pair[0].clone(), pair[1].clone())) } else { None }
+        })
+        .collect();
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        let profile = build_sandbox_profile_rs(&allowed_dirs, &allowed_net);
+        let mut command = std::process::Command::new("sandbox-exec");
+        command.arg("-p").arg(&profile).arg(cmd.as_ref()).args(&args);
+        if !cwd.as_ref().is_empty() && cwd.as_ref() != "." {
+            command.current_dir(cwd.as_ref());
+        }
+        for (k, v) in &env_vars {
+            command.env(k, v);
+        }
+        // exec() replaces the current process — never returns on success
+        let err = command.exec();
+        format!("{{\"error\":\"exec failed: {}\"}}", err)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("{{\"error\":\"exec_replace not supported on this platform\"}}")
+    }
+}
+
+/// Shared sandbox profile builder for Rust-side exec functions.
+#[cfg(target_os = "macos")]
+fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> String {
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+    profile.push_str("(deny file-write*)\n");
+    for dir in allowed_dirs.iter() {
+        let clean = dir.trim_end_matches(":ro");
+        if !dir.ends_with(":ro") {
+            profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+        }
+    }
+    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/var\"))\n");
+    profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
+    if let Ok(home) = std::env::var("HOME") {
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}/.claude\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.kube\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.docker\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Documents\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Desktop\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
+    }
+    profile.push_str("(deny network-outbound)\n");
+    profile.push_str("(allow network-outbound (local udp))\n");
+    profile.push_str("(allow network-outbound (remote unix-socket))\n");
+    if !allowed_net.is_empty() {
+        for host in allowed_net {
+            if let Some(colon) = host.rfind(':') {
+                let port = &host[colon + 1..];
+                profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));
+            } else {
+                profile.push_str("(allow network-outbound (remote tcp \"*:*\"))\n");
+            }
+        }
+    }
+    profile
+}
+
 /// Spawn a detached process. Returns PID (>0) or -1 on error.
 pub fn wt_spawn(cmd: impl AsRef<str>, args_json: impl AsRef<str>) -> i64 {
     let args: Vec<String> = if args_json.as_ref().is_empty() || args_json.as_ref() == "[]" {
