@@ -165,15 +165,22 @@ fn print_common_runtime_opts() -> Unit = {
 fn print_help(topic: String) -> Unit =
   match topic {
     "run" => {
-      println("porta run <agent.wasm> [options] [-- args...]")
+      println("porta run <target> [options] [-- args...]")
       println("")
-      println("Execute a WASM binary.")
+      println("Execute a WASM binary or native command.")
+      println("Auto-detects mode: .wasm files run in WASM sandbox, everything else")
+      println("runs as a native command with filesystem and network restrictions.")
+      println("")
+      println("examples:")
+      println("  porta run agent.wasm --profile full -v .")
+      println("  porta run claude --allow-net '*:443' -v . -e \"HOME=$HOME\"")
+      println("  porta run python --allow-net '*:443' -v . -- script.py")
       println("")
       println("options:")
       print_common_runtime_opts()
-      println("  --restart <policy>      Restart policy: no, on-failure, always")
-      println("  --manifest <path>       Path to manifest.json")
-      println("  -d, --detach            Run as background daemon")
+      println("  --restart <policy>      Restart policy: no, on-failure, always (WASM only)")
+      println("  --manifest <path>       Path to manifest.json (WASM only)")
+      println("  -d, --detach            Run as background daemon (WASM only)")
     },
     "serve" => {
       println("porta serve <agent.wasm> [options]")
@@ -185,18 +192,7 @@ fn print_help(topic: String) -> Unit =
       print_common_runtime_opts()
       println("  --manifest <path>       Path to manifest.json")
     },
-    "run-native" => {
-      println("porta run-native <command> [options] [-- args...]")
-      println("")
-      println("Execute a native command with filesystem and network restrictions.")
-      println("")
-      println("options:")
-      println("  -e, --env <KEY=VALUE>   Set environment variable (repeatable)")
-      println("  --env-file <path>       Load env vars from file")
-      println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
-      println("  -v <path>               Mount directory (repeatable, append :ro for read-only)")
-      println("  --allow-net <host:port> Allow network to host:port (repeatable)")
-    },
+    "run-native" => print_help("run"),
     "up" => {
       println("porta up [-- extra-args...]")
       println("")
@@ -249,8 +245,7 @@ fn print_help(topic: String) -> Unit =
       println("  up            Run from porta.toml")
       println("")
       println("Runtime:")
-      println("  run           Execute WASM binary")
-      println("  run-native    Execute native command with restrictions")
+      println("  run           Execute WASM or native command")
       println("  serve         Start MCP server")
       println("")
       println("Development:")

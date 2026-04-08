@@ -36,7 +36,8 @@ effect fn main() -> Result[Unit, String] = {
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
         if opts.path == "" then { cli.print_help("run"); ok(()) }
-        else engine.run_wasm(opts)
+        else if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
+        else engine.run_native(opts)
       }
     },
     "up" => {
@@ -50,10 +51,11 @@ effect fn main() -> Result[Unit, String] = {
       project.porta_init(runtime_type, command)
     },
     "run-native" => {
-      if has_help_flag(args) then { cli.print_help("run-native"); ok(()) }
+      // Alias: porta run-native is equivalent to porta run <non-wasm>
+      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("run-native"); ok(()) }
+        if opts.path == "" then { cli.print_help("run"); ok(()) }
         else engine.run_native(opts)
       }
     },

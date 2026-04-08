@@ -28,28 +28,29 @@ Two execution modes:
 ### Run Claude Code with restrictions
 
 ```bash
+porta run claude --allow-net '*:443' -v . -e "HOME=$HOME" -- --print "Fix the bug"
+```
+
+Or declaratively:
+
+```bash
 porta init native claude
 porta up -- --print "Fix the bug in main.rs"
 ```
-
-This creates a `porta.toml` and runs Claude Code with:
-- Filesystem writes restricted to the current directory
-- Sensitive directories (~/.ssh, ~/.aws, ~/Documents) unreadable
-- Network limited to HTTPS only (`*:443`)
 
 ### Verify network restrictions
 
 ```bash
 # All network blocked (no --allow-net)
-porta run-native curl -- https://example.com
+porta run curl -- https://example.com
 # → exit status: 7 (blocked by sandbox)
 
 # Only HTTPS allowed
-porta run-native curl --allow-net '*:443' -- https://example.com
+porta run curl --allow-net '*:443' -- https://example.com
 # → works
 
-# Specific port only
-porta run-native curl --allow-net '*:80' -- https://example.com
+# Specific port only — HTTPS blocked
+porta run curl --allow-net '*:80' -- https://example.com
 # → exit status: 7 (port 443 not allowed)
 ```
 
@@ -59,6 +60,8 @@ porta run-native curl --allow-net '*:80' -- https://example.com
 porta run agent.wasm --profile full -v ./workspace
 porta serve agent.wasm   # Start as MCP server
 ```
+
+`porta run` auto-detects mode: `.wasm` files run in WASM sandbox, everything else runs as a native command with OS-level restrictions.
 
 ## porta.toml
 
@@ -103,9 +106,8 @@ porta up -- --print "hi"   # Pass arguments to the command
 
 | Command | Description |
 |---------|-------------|
-| `porta run <agent.wasm>` | Execute WASM binary |
-| `porta run -d <agent.wasm>` | Run as background daemon |
-| `porta run-native <cmd>` | Execute native command with restrictions |
+| `porta run <target>` | Execute WASM (.wasm) or native command |
+| `porta run -d <agent.wasm>` | Run WASM as background daemon |
 | `porta serve <agent.wasm>` | Start MCP server on stdio |
 
 ### Development
@@ -260,7 +262,7 @@ cp porta ~/.local/bin/
 |---------|--------|---------|
 | Almide → WASM | Full support | `porta run agent.wasm` |
 | Python 3.14 | Runs in WASM | `porta run python.wasm -- script.py` |
-| Native commands | OS restrictions | `porta run-native claude -- --print "hi"` |
+| Native commands | OS restrictions | `porta run claude -- --print "hi"` |
 
 ## License
 
