@@ -32,3 +32,21 @@ fn wt_preopen_dir(handle: Int, host_path: String, guest_path: String) -> Int
 
 @extern(rs, "wasmtime_bridge", "wt_destroy")
 fn wt_destroy(handle: Int) -> Int
+
+// --- HTTP ---
+
+@extern(rs, "wasmtime_bridge", "wt_http_request")
+fn wt_http_request(method: String, url: String, headers_json: String, body: String) -> String
+
+// --- exec ---
+
+@extern(rs, "wasmtime_bridge", "wt_exec_command")
+fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> String
+
+// --- Process management ---
+
+@extern(rs, "wasmtime_bridge", "wt_getpid")
+fn wt_getpid() -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_kill")
+fn wt_kill(pid: Int, signal: Int) -> Int

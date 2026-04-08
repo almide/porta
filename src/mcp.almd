@@ -5,6 +5,7 @@ import self.jsonrpc
 import self.manifest
 import self.dispatch
 import self.observability
+import self.wasm_rt
 
 type McpState =
   | Initializing
@@ -54,22 +55,61 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 }
 
 effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let tools_json = server.manifest.tools |> list.map((tool) =>
+  let agent_tools = server.manifest.tools |> list.map((tool) =>
     json.object([
       ("name", json.from_string(tool.name)),
       ("description", json.from_string(tool.description)),
       ("inputSchema", tool.input_schema),
     ])
   )
-  let result = json.object([
-    ("tools", json.array(tools_json)),
-  ])
+  let builtin_tools = [
+    json.object([
+      ("name", json.from_string("porta.exec")),
+      ("description", json.from_string("Execute a shell command in the sandbox")),
+      ("inputSchema", json.object([
+        ("type", json.from_string("object")),
+        ("properties", json.object([
+          ("command", json.object([("type", json.from_string("string")), ("description", json.from_string("Command to execute"))])),
+          ("args", json.object([("type", json.from_string("array")), ("items", json.object([("type", json.from_string("string"))])), ("description", json.from_string("Command arguments"))])),
+          ("cwd", json.object([("type", json.from_string("string")), ("description", json.from_string("Working directory"))])),
+        ])),
+        ("required", json.array([json.from_string("command")])),
+      ])),
+    ]),
+    json.object([
+      ("name", json.from_string("porta.http")),
+      ("description", json.from_string("Make an HTTP request")),
+      ("inputSchema", json.object([
+        ("type", json.from_string("object")),
+        ("properties", json.object([
+          ("method", json.object([("type", json.from_string("string")), ("description", json.from_string("HTTP method: GET, POST, PUT, DELETE"))])),
+          ("url", json.object([("type", json.from_string("string")), ("description", json.from_string("Request URL"))])),
+          ("headers", json.object([("type", json.from_string("object")), ("description", json.from_string("Request headers"))])),
+          ("body", json.object([("type", json.from_string("string")), ("description", json.from_string("Request body"))])),
+        ])),
+        ("required", json.array([json.from_string("method"), json.from_string("url")])),
+      ])),
+    ]),
+  ]
+  let all_tools = agent_tools + builtin_tools
+  let result = json.object([("tools", json.array(all_tools))])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
 }
 
 effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let tool_name = json.get_string(req.params, "name") ?? ""
   let arguments = json.get(req.params, "arguments") ?? json.object([])
+
+  // Built-in tools
+  if tool_name == "porta.exec" then {
+    let result = handle_builtin_exec(arguments)
+    ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+  }
+  else if tool_name == "porta.http" then {
+    let result = handle_builtin_http(arguments)
+    ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+  }
+  else {
 
   let tool = server.manifest.tools |> list.find((t) => t.name == tool_name)
   match tool {
@@ -142,6 +182,62 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
       }
       ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
     },
+  }
+  } // else (not builtin)
+}
+
+// --- Built-in tools ---
+
+fn handle_builtin_exec(args: Value) -> Value = {
+  let cmd = json.get_string(args, "command") ?? ""
+  let cmd_args = json.get_array(args, "args") ?? []
+  let args_strs = cmd_args |> list.filter_map((a) => json.as_string(a))
+  let cwd = json.get_string(args, "cwd") ?? "."
+  let args_json = json.stringify(json.array(args_strs |> list.map(json.from_string)))
+  let result_json = wasm_rt.wt_exec_command(cmd, args_json, cwd)
+  let parsed = json.parse(result_json)
+  match parsed {
+    ok(v) => {
+      let stdout = json.get_string(v, "stdout") ?? ""
+      let stderr = json.get_string(v, "stderr") ?? ""
+      let error = json.get_string(v, "error") ?? ""
+      let output = if error != "" then error
+        else if stderr != "" then stdout + "\n--- stderr ---\n" + stderr
+        else stdout
+      json.object([
+        ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(output))])])),
+        ("isError", json.from_bool(error != "")),
+      ])
+    },
+    err(_) => json.object([
+      ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
+      ("isError", json.from_bool(true)),
+    ]),
+  }
+}
+
+fn handle_builtin_http(args: Value) -> Value = {
+  let method = json.get_string(args, "method") ?? "GET"
+  let url = json.get_string(args, "url") ?? ""
+  let headers = json.get(args, "headers") ?? json.object([])
+  let body = json.get_string(args, "body") ?? ""
+  let headers_json = json.stringify(headers)
+  let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)
+  let parsed = json.parse(result_json)
+  match parsed {
+    ok(v) => {
+      let body_text = json.get_string(v, "body") ?? ""
+      let error = json.get_string(v, "error") ?? ""
+      let output = if error != "" then error else body_text
+      json.object([
+        ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(output))])])),
+        ("isError", json.from_bool(error != "")),
+      ])
+    },
+    err(_) => json.object([
+      ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
+      ("isError", json.from_bool(true)),
+    ]),
   }
 }
 

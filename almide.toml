@@ -8,3 +8,6 @@ allow = ["FS.read", "FS.write", "IO", "Env", "Time"]
 [native-deps]
 wasmtime = "42.0.1"
 wasmtime-wasi = "42.0.1"
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+serde_json = "1"
+libc = "0.2"

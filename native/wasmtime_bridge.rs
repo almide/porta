@@ -3,6 +3,8 @@
 
 use std::sync::Mutex;
 use wasmtime::*;
+#[allow(unused_imports)]
+use serde_json;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
@@ -252,6 +254,115 @@ pub fn wt_get_exit_code(handle: i64) -> i64 {
         .and_then(|s| s.as_ref())
         .map(|i| i.exit_code)
         .unwrap_or(-1)
+}
+
+// --- HTTP host function ---
+
+/// Execute an HTTP request. Returns JSON response string.
+/// Response: {"status":200,"body":"..."} or {"error":"..."}
+pub fn wt_http_request(method: impl AsRef<str>, url: impl AsRef<str>, headers_json: impl AsRef<str>, body: impl AsRef<str>) -> String {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build() {
+        Ok(c) => c,
+        Err(e) => return format!("{{\"error\":\"client error: {}\"}}", e),
+    };
+
+    let mut req = match method.as_ref() {
+        "GET" => client.get(url.as_ref()),
+        "POST" => client.post(url.as_ref()),
+        "PUT" => client.put(url.as_ref()),
+        "DELETE" => client.delete(url.as_ref()),
+        "PATCH" => client.patch(url.as_ref()),
+        "HEAD" => client.head(url.as_ref()),
+        _ => return format!("{{\"error\":\"unsupported method: {}\"}}", method.as_ref()),
+    };
+
+    // Parse headers JSON: {"Content-Type": "application/json", ...}
+    if !headers_json.as_ref().is_empty() && headers_json.as_ref() != "{}" {
+        if let Ok(headers) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(headers_json.as_ref()) {
+            for (k, v) in headers {
+                if let Some(s) = v.as_str() {
+                    req = req.header(k.as_str(), s);
+                }
+            }
+        }
+    }
+
+    let body_str = body.as_ref();
+    if !body_str.is_empty() {
+        req = req.body(body_str.to_string());
+    }
+
+    match req.send() {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            match resp.text() {
+                Ok(text) => {
+                    // Escape the body for JSON embedding
+                    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+                    format!("{{\"status\":{},\"body\":\"{}\"}}", status, escaped)
+                }
+                Err(e) => format!("{{\"error\":\"read error: {}\"}}", e),
+            }
+        }
+        Err(e) => format!("{{\"error\":\"request failed: {}\"}}", e),
+    }
+}
+
+// --- exec host function ---
+
+/// Execute a shell command. Returns JSON result string.
+/// Response: {"exit_code":0,"stdout":"...","stderr":"..."} or {"error":"..."}
+pub fn wt_exec_command(cmd: impl AsRef<str>, args_json: impl AsRef<str>, cwd: impl AsRef<str>) -> String {
+    // Parse args from JSON array: ["arg1", "arg2"]
+    let args: Vec<String> = if args_json.as_ref().is_empty() || args_json.as_ref() == "[]" {
+        Vec::new()
+    } else {
+        match serde_json::from_str::<Vec<String>>(args_json.as_ref()) {
+            Ok(a) => a,
+            Err(e) => return format!("{{\"error\":\"invalid args: {}\"}}", e),
+        }
+    };
+
+    let mut command = std::process::Command::new(cmd.as_ref());
+    command.args(&args);
+
+    let cwd_str = cwd.as_ref();
+    if !cwd_str.is_empty() {
+        command.current_dir(cwd_str);
+    }
+
+    match command.output() {
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout_escaped = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            let stderr_escaped = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, stdout_escaped, stderr_escaped)
+        }
+        Err(e) => format!("{{\"error\":\"exec failed: {}\"}}", e),
+    }
+}
+
+// --- Daemon host functions ---
+
+/// Get current process PID.
+pub fn wt_getpid() -> i64 {
+    std::process::id() as i64
+}
+
+/// Send a signal to a process. Returns 0 on success, -1 on error.
+pub fn wt_kill(pid: i64, signal: i64) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let result = unsafe { libc::kill(pid as libc::pid_t, signal as libc::c_int) };
+        if result == 0 { 0 } else { -1 }
+    }
+    #[cfg(not(unix))]
+    { -1 }
 }
 
 /// Destroy an instance and free resources.
