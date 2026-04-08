@@ -2,14 +2,6 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
-## Active
-
-1 items
-
-| Item | Description |
-|------|-------------|
-| [Sandbox Honesty](active/05-sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
-
 ## On Hold
 
 7 items
@@ -26,14 +18,15 @@
 
 ## Done
 
-18 items
+19 items
 
 <details>
-<summary>Show all 18 completed items</summary>
+<summary>Show all 19 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
 | 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
+| 2026-04-08 | [Sandbox Honesty](done/sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
 | 2026-04-08 | [Run Mode Manifest Capabilities](done/run-manifest-caps.md) | Make run mode respect manifest capabilities like serve does |
 | 2026-04-08 | [porta.http Host-Based Allowlist](done/http-host-allowlist.md) | Make porta.http allowlist check hostname, not just port |
 | 2026-04-08 | [porta.exec Sandboxing](done/exec-sandbox.md) | Make porta.exec truly sandboxed and fix command injection in sh -c |

@@ -96,6 +96,9 @@ effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: S
   }
 }
 
+// Build a macOS sandbox-exec profile.
+// Uses (allow default) base — read access is broad, write and network are restricted.
+// This is a constrained environment, not a full deny-by-default sandbox.
 fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) -> String = {
   let home = process.env("HOME") ?? "/tmp"
   let p = "(version 1)\n(allow default)\n"

@@ -66,7 +66,7 @@ effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
   let builtin_tools = [
     json.object([
       ("name", json.from_string("porta.exec")),
-      ("description", json.from_string("Execute a shell command in the sandbox")),
+      ("description", json.from_string("Execute a command with filesystem and network restrictions")),
       ("inputSchema", json.object([
         ("type", json.from_string("object")),
         ("properties", json.object([
