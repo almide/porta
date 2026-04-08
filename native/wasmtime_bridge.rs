@@ -206,6 +206,115 @@ pub fn wt_run(handle: i64) -> i64 {
         return -1;
     }
 
+    // Register porta host functions for WASM agents
+    // porta.http_request(req_ptr, req_len, resp_ptr, resp_cap) -> resp_len
+    // Agent writes JSON request to memory, gets JSON response back
+    let _ = linker.func_wrap(
+        "porta",
+        "http_request",
+        |mut caller: Caller<'_, WasiP1Ctx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
+            let memory = match caller.get_export("memory") {
+                Some(Extern::Memory(m)) => m,
+                _ => return -1,
+            };
+            let data = memory.data(&caller);
+            let req_bytes = &data[req_ptr as usize..(req_ptr + req_len) as usize];
+            let req_str = std::str::from_utf8(req_bytes).unwrap_or("");
+
+            // Parse JSON: {"method":"GET","url":"...","headers":{...},"body":"..."}
+            let resp_str = if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_str) {
+                let method = req["method"].as_str().unwrap_or("GET");
+                let url = req["url"].as_str().unwrap_or("");
+                let headers_val = &req["headers"];
+                let body = req["body"].as_str().unwrap_or("");
+
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build();
+                match client {
+                    Ok(client) => {
+                        let mut builder = match method {
+                            "POST" => client.post(url),
+                            "PUT" => client.put(url),
+                            "DELETE" => client.delete(url),
+                            "PATCH" => client.patch(url),
+                            _ => client.get(url),
+                        };
+                        if let Some(obj) = headers_val.as_object() {
+                            for (k, v) in obj {
+                                if let Some(s) = v.as_str() {
+                                    builder = builder.header(k.as_str(), s);
+                                }
+                            }
+                        }
+                        if !body.is_empty() { builder = builder.body(body.to_string()); }
+                        match builder.send() {
+                            Ok(resp) => {
+                                let status = resp.status().as_u16();
+                                let text = resp.text().unwrap_or_default();
+                                let escaped = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
+                                format!("{{\"status\":{},\"body\":\"{}\"}}", status, escaped)
+                            }
+                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                        }
+                    }
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                }
+            } else {
+                "{\"error\":\"invalid request JSON\"}".to_string()
+            };
+
+            let resp_bytes = resp_str.as_bytes();
+            let write_len = resp_bytes.len().min(resp_cap as usize);
+            let mem_data = memory.data_mut(&mut caller);
+            mem_data[resp_ptr as usize..resp_ptr as usize + write_len].copy_from_slice(&resp_bytes[..write_len]);
+            write_len as i32
+        },
+    );
+
+    // porta.exec_command(req_ptr, req_len, resp_ptr, resp_cap) -> resp_len
+    let _ = linker.func_wrap(
+        "porta",
+        "exec_command",
+        |mut caller: Caller<'_, WasiP1Ctx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
+            let memory = match caller.get_export("memory") {
+                Some(Extern::Memory(m)) => m,
+                _ => return -1,
+            };
+            let data = memory.data(&caller);
+            let req_bytes = &data[req_ptr as usize..(req_ptr + req_len) as usize];
+            let req_str = std::str::from_utf8(req_bytes).unwrap_or("");
+
+            let resp_str = if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_str) {
+                let cmd = req["command"].as_str().unwrap_or("");
+                let args: Vec<String> = req["args"].as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                let cwd = req["cwd"].as_str().unwrap_or(".");
+
+                match std::process::Command::new(cmd).args(&args).current_dir(cwd).output() {
+                    Ok(output) => {
+                        let exit_code = output.status.code().unwrap_or(-1);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
+                        let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
+                        format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
+                    }
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                }
+            } else {
+                "{\"error\":\"invalid request JSON\"}".to_string()
+            };
+
+            let resp_bytes = resp_str.as_bytes();
+            let write_len = resp_bytes.len().min(resp_cap as usize);
+            let mem_data = memory.data_mut(&mut caller);
+            mem_data[resp_ptr as usize..resp_ptr as usize + write_len].copy_from_slice(&resp_bytes[..write_len]);
+            write_len as i32
+        },
+    );
+
     let instance = match linker.instantiate(&mut store, &inst.module) {
         Ok(i) => i,
         Err(e) => {
