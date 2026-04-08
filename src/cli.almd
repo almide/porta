@@ -3,6 +3,7 @@
 import fs
 import self.dispatch
 import self.sandbox
+import self.manifest
 import self.util
 
 // --- Options ---
@@ -110,6 +111,18 @@ fn dedup_env(vars: List[dispatch.EnvVar], idx: Int, acc: List[dispatch.EnvVar]) 
     if rest_has_key then dedup_env(vars, idx + 1, acc)
     else dedup_env(vars, idx + 1, acc + [head])
   }
+
+// --- Capability resolution (manifest-aware) ---
+
+effect fn resolve_run_caps(opts: Options) -> Result[sandbox.CapabilitySet, String] = {
+  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+    else string.replace(opts.path, ".wasm", ".manifest.json")
+  if fs.exists(manifest_path) then {
+    let m = manifest.load_manifest(manifest_path)!
+    ok(util.resolve_serve_caps(opts.profile, m.capabilities))
+  }
+  else ok(util.resolve_caps(opts.profile, []))
+}
 
 // --- Config builder ---
 

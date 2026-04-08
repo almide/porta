@@ -58,7 +58,7 @@ effect fn run_wasm(opts: cli.Options) -> Result[Unit, String] =
   else run_foreground(opts)
 
 effect fn run_foreground(opts: cli.Options) -> Result[Unit, String] = {
-  let caps = util.resolve_caps(opts.profile, [])
+  let caps = cli.resolve_run_caps(opts)!
   let env = cli.resolve_env(opts)!
   let config = cli.build_config(opts.path, opts, caps, env)
   let result = dispatch.run_instance(config)!
