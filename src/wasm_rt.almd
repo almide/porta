@@ -115,8 +115,9 @@ fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) 
   let p = p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
   let p = p + "(allow file-write* (subpath \"" + home + "/Library\"))\n(allow file-write* (subpath \"" + home + "/.config\"))\n(allow file-write* (subpath \"" + home + "/.cache\"))\n(allow file-write* (subpath \"" + home + "/.npm\"))\n(allow file-write* (subpath \"" + home + "/.claude\"))\n"
   let p = p + "(deny file-read-data (subpath \"" + home + "/.ssh\"))\n(deny file-read-data (subpath \"" + home + "/.gnupg\"))\n(deny file-read-data (subpath \"" + home + "/.aws\"))\n(deny file-read-data (subpath \"" + home + "/.kube\"))\n(deny file-read-data (subpath \"" + home + "/.docker\"))\n(deny file-read-data (subpath \"" + home + "/Documents\"))\n(deny file-read-data (subpath \"" + home + "/Desktop\"))\n(deny file-read-data (subpath \"" + home + "/Downloads\"))\n(deny file-read-data (subpath \"" + home + "/Pictures\"))\n"
+  // Network: deny-by-default, only allow explicitly listed hosts/ports
+  let p = p + "(deny network-outbound)\n(allow network-outbound (local udp))\n(allow network-outbound (remote unix-socket))\n"
   if list.len(allowed_net) > 0 then {
-    let p = p + "(deny network-outbound)\n(allow network-outbound (local udp))\n(allow network-outbound (remote unix-socket))\n"
     allowed_net |> list.fold(p, (acc, host) => {
       let parts = string.split(host, ":")
       let port = list.last(parts) ?? "*"
