@@ -4,11 +4,10 @@
 
 ## Active
 
-2 items
+1 items
 
 | Item | Description |
 |------|-------------|
-| [Test Coverage for Security Paths](active/06-test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
 | [Full Almide Migration](active/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
 
 ## On Hold
@@ -26,13 +25,14 @@
 
 ## Done
 
-13 items
+14 items
 
 <details>
-<summary>Show all 13 completed items</summary>
+<summary>Show all 14 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
 | 2026-04-08 | [Native Sandbox Deny-by-Default](done/native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
 | 2026-04-08 | [JSON-RPC Proper Framing](done/jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
 | 2026-04-08 | [Config Honesty](done/config-honesty.md) | Remove or implement config options that exist but don't work |

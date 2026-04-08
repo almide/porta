@@ -87,6 +87,39 @@ test "wt_inspect: invalid path" {
   }
 }
 
+// --- build_sandbox_profile ---
+
+test "build_sandbox_profile: empty allowed_net denies all outbound" {
+  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  assert(string.contains(profile, "(deny network-outbound)"))
+  assert(string.contains(profile, "(allow network-outbound (local udp))"))
+}
+
+test "build_sandbox_profile: allowed_net adds TCP rules" {
+  let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"])
+  assert(string.contains(profile, "(deny network-outbound)"))
+  assert(string.contains(profile, "(allow network-outbound (remote tcp \"*:443\"))"))
+}
+
+test "build_sandbox_profile: :ro mount has no file-write rule" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace:ro"], [])
+  assert(not string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
+}
+
+test "build_sandbox_profile: writable mount has file-write rule" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [])
+  assert(string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
+}
+
+test "build_sandbox_profile: sensitive dirs denied" {
+  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  assert(string.contains(profile, ".ssh"))
+  assert(string.contains(profile, ".gnupg"))
+  assert(string.contains(profile, ".aws"))
+  assert(string.contains(profile, ".kube"))
+  assert(string.contains(profile, ".docker"))
+}
+
 // --- wt_getpid ---
 
 test "wt_getpid: returns positive" {

@@ -1,0 +1,63 @@
+import self.mcp
+import self.sandbox
+import self.dispatch
+
+// --- is_host_allowed ---
+
+test "is_host_allowed: https matches port 443" {
+  assert(mcp.is_host_allowed("https://api.example.com/path", ["*:443"]))
+}
+
+test "is_host_allowed: wildcard port matches anything" {
+  assert(mcp.is_host_allowed("https://api.example.com/path", ["*:*"]))
+  assert(mcp.is_host_allowed("http://api.example.com/path", ["*:*"]))
+}
+
+test "is_host_allowed: http on 443-only denied" {
+  assert(not mcp.is_host_allowed("http://api.example.com/path", ["*:443"]))
+}
+
+test "is_host_allowed: empty list denies all" {
+  assert(not mcp.is_host_allowed("https://api.example.com", []))
+}
+
+test "is_host_allowed: multiple entries" {
+  assert(mcp.is_host_allowed("https://api.example.com", ["*:80", "*:443"]))
+  assert(not mcp.is_host_allowed("https://api.example.com", ["*:80", "*:8080"]))
+}
+
+// --- Capability enforcement: porta.exec requires CapExec ---
+
+test "porta.exec: ai-agent profile lacks CapExec" {
+  let caps = sandbox.profile_ai_agent()
+  assert(not sandbox.has_capability(caps, sandbox.CapExec))
+}
+
+test "porta.exec: full profile has CapExec" {
+  let caps = sandbox.profile_full()
+  assert(sandbox.has_capability(caps, sandbox.CapExec))
+}
+
+test "porta.exec: from_manifest exec" {
+  let caps = sandbox.from_manifest(["exec"])
+  assert(sandbox.has_capability(caps, sandbox.CapExec))
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+// --- Capability enforcement: porta.http requires CapNet ---
+
+test "porta.http: ai-agent profile lacks CapNet" {
+  let caps = sandbox.profile_ai_agent()
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "porta.http: worker profile lacks CapNet" {
+  let caps = sandbox.profile_worker()
+  assert(not sandbox.has_capability(caps, sandbox.CapNet))
+}
+
+test "porta.http: from_manifest net" {
+  let caps = sandbox.from_manifest(["net"])
+  assert(sandbox.has_capability(caps, sandbox.CapNet))
+  assert(not sandbox.has_capability(caps, sandbox.CapExec))
+}
