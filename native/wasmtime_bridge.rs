@@ -671,25 +671,10 @@ fn exec_sandboxed_macos(
     profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    if let Ok(home) = std::env::var("HOME") {
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.local\"))\n", home));
-    }
-
-    // --- FS read: deny sensitive directories ---
+    // --- FS read: deny cryptographic keys ---
     if let Ok(home) = std::env::var("HOME") {
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.kube\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.docker\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Documents\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Desktop\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
     }
 
     // --- Network restrictions ---
@@ -828,21 +813,10 @@ fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> 
     profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/var\"))\n");
     profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
+    // FS read: deny cryptographic keys only — everything else is user's choice via -v
     if let Ok(home) = std::env::var("HOME") {
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/Library\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.config\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.cache\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.npm\"))\n", home));
-        profile.push_str(&format!("(allow file-write* (subpath \"{}/.local\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.aws\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.kube\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.docker\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Documents\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Desktop\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Downloads\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/Pictures\"))\n", home));
     }
     // Network: open by default (like Docker). --allow-net restricts to listed ports only.
     if !allowed_net.is_empty() {

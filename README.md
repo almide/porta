@@ -161,8 +161,8 @@ Uses `sandbox-exec` to enforce:
 
 | Control | Behavior |
 |---------|----------|
-| **FS write** | Denied everywhere except `-v` mounted dirs |
-| **FS read** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures` denied |
+| **FS write** | Denied everywhere except `-v` mounted dirs and `/tmp` |
+| **FS read** | `~/.ssh` and `~/.gnupg` denied (cryptographic keys). Everything else user-configurable via `-v` |
 | **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
 | **Read-only** | `-v ./data:ro` → read OK, write denied |
 

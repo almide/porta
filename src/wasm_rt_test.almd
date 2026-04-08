@@ -121,13 +121,12 @@ test "build_sandbox_profile: writable mount has file-write rule" {
   assert(string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
 }
 
-test "build_sandbox_profile: sensitive dirs denied" {
+test "build_sandbox_profile: cryptographic keys denied" {
   let profile = wasm_rt.build_sandbox_profile(["."], [])
   assert(string.contains(profile, ".ssh"))
   assert(string.contains(profile, ".gnupg"))
-  assert(string.contains(profile, ".aws"))
-  assert(string.contains(profile, ".kube"))
-  assert(string.contains(profile, ".docker"))
+  assert(not string.contains(profile, ".aws"))
+  assert(not string.contains(profile, "Documents"))
 }
 
 // --- wt_getpid ---
