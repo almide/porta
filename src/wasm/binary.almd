@@ -230,7 +230,14 @@ effect fn read_export(p: Parser) -> Result[{val: Export, next: Parser}, String] 
 effect fn read_memarg(p: Parser) -> Result[{val: MemArg, next: Parser}, String] = {
   let align_r = read_leb128_u(p)!
   let offset_r = read_leb128_u(align_r.next)!
-  ok({val: {align: align_r.val, offset: offset_r.val, mem_idx: 0}, next: offset_r.next})
+  let has_mem_idx = int.band(align_r.val, 0x40) != 0
+  let actual_align = int.band(align_r.val, 0x3F)
+  if has_mem_idx then {
+    let mem_r = read_leb128_u(offset_r.next)!
+    ok({val: {align: actual_align, offset: offset_r.val, mem_idx: mem_r.val}, next: mem_r.next})
+  } else {
+    ok({val: {align: actual_align, offset: offset_r.val, mem_idx: 0}, next: offset_r.next})
+  }
 }
 
 effect fn read_blocktype(p: Parser) -> Result[{val: BlockType, next: Parser}, String] = {
@@ -371,7 +378,7 @@ effect fn read_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = 
     0xA7 => ok({val: I32WrapI64, next: p2}),
     0xAC => ok({val: I64ExtendI32S, next: p2}), 0xAD => ok({val: I64ExtendI32U, next: p2}),
     0xB9 => ok({val: F64ConvertI64S, next: p2}), 0xBA => ok({val: F64ConvertI64U, next: p2}),
-    0xAE => ok({val: I64TruncF64S, next: p2}),
+    0xB0 => ok({val: I64TruncF64S, next: p2}),
     0xBF => ok({val: F64ReinterpretI64, next: p2}), 0xBD => ok({val: I64ReinterpretF64, next: p2}),
     0x0B => ok({val: End, next: p2}),
     0xFC => read_fc_instr(p2),

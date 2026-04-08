@@ -9,6 +9,25 @@ type ToolDef = {
   input_schema: Value,
 }
 
+type ResourceDef = {
+  uri: String,
+  name: String,
+  description: String,
+  mime_type: String,
+}
+
+type PromptDef = {
+  name: String,
+  description: String,
+  arguments: List[PromptArg],
+}
+
+type PromptArg = {
+  name: String,
+  description: String,
+  required: Bool,
+}
+
 type Manifest = {
   schema_version: String,
   name: String,
@@ -16,6 +35,8 @@ type Manifest = {
   description: String,
   capabilities: List[String],
   tools: List[ToolDef],
+  resources: List[ResourceDef],
+  prompts: List[PromptDef],
   wasi_imports: List[String],
   entry: String,
 }
@@ -44,6 +65,12 @@ effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
   let tools_arr = json.get_array(v, "tools") ?? []
   let tools = tools_arr |> list.map(parse_tool)
 
+  let resources_arr = json.get_array(v, "resources") ?? []
+  let resources = resources_arr |> list.map(parse_resource)
+
+  let prompts_arr = json.get_array(v, "prompts") ?? []
+  let prompts = prompts_arr |> list.map(parse_prompt)
+
   ok({
     schema_version: schema_version,
     name: name,
@@ -51,6 +78,8 @@ effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
     description: description,
     capabilities: capabilities,
     tools: tools,
+    resources: resources,
+    prompts: prompts,
     wasi_imports: wasi_imports,
     entry: entry,
   })
@@ -61,4 +90,27 @@ fn parse_tool(t: Value) -> ToolDef = {
   let description = json.get_string(t, "description") ?? ""
   let input_schema = json.get(t, "inputSchema") ?? json.object([])
   {name: name, description: description, input_schema: input_schema}
+}
+
+fn parse_resource(r: Value) -> ResourceDef = {
+  let uri = json.get_string(r, "uri") ?? ""
+  let name = json.get_string(r, "name") ?? ""
+  let description = json.get_string(r, "description") ?? ""
+  let mime_type = json.get_string(r, "mimeType") ?? "text/plain"
+  {uri: uri, name: name, description: description, mime_type: mime_type}
+}
+
+fn parse_prompt(p: Value) -> PromptDef = {
+  let name = json.get_string(p, "name") ?? ""
+  let description = json.get_string(p, "description") ?? ""
+  let args_arr = json.get_array(p, "arguments") ?? []
+  let arguments = args_arr |> list.map(parse_prompt_arg)
+  {name: name, description: description, arguments: arguments}
+}
+
+fn parse_prompt_arg(a: Value) -> PromptArg = {
+  let name = json.get_string(a, "name") ?? ""
+  let description = json.get_string(a, "description") ?? ""
+  let required = json.get_bool(a, "required") ?? false
+  {name: name, description: description, required: required}
 }

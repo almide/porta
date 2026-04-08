@@ -2,14 +2,24 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
+## Active
+
+1 items
+
+| Item | Description |
+|------|-------------|
+| [Replace Interpreter with wasmtime](active/wasmtime-migration.md) | Replace hand-rolled WASM interpreter with wasmtime via FFI |
+
 ## On Hold
 
-4 items
+6 items
 
 | Item | Description |
 |------|-------------|
 | [Compose](on-hold/compose.md) | Multi-service orchestration with dependency and health management |
+| [Image Distribution](on-hold/image-distribution.md) | OCI-compatible image push/pull for porta agent distribution |
 | [Networking](on-hold/networking.md) | Port publishing, service discovery, and capability-routed networking |
+| [Self-Hosted WASM Runtime](on-hold/self-hosted-wasm-runtime.md) | Build Almide-native WASM runtime to eventually replace wasmtime |
 | [Snapshot & Replay](on-hold/snapshot-and-replay.md) | Instance snapshot, suspend/resume, and deterministic execution replay |
 | [Supply Chain Security](on-hold/supply-chain.md) | Image signing, provenance attestation, SBOM, and dependency locking |
 

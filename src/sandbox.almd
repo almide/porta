@@ -12,6 +12,7 @@ type Capability =
   | CapClock
   | CapRandom
   | CapNet
+  | CapExec
 
 type CapabilitySet = {
   caps: List[Capability],
@@ -29,6 +30,7 @@ fn parse_capability(s: String) -> Option[Capability] =
     "clock" => some(CapClock),
     "random" => some(CapRandom),
     "net" => some(CapNet),
+    "exec" => some(CapExec),
     _ => none,
   }
 
@@ -48,6 +50,7 @@ fn cap_eq(a: Capability, b: Capability) -> Bool =
     (CapClock, CapClock) => true,
     (CapRandom, CapRandom) => true,
     (CapNet, CapNet) => true,
+    (CapExec, CapExec) => true,
     _ => false,
   }
 
@@ -64,6 +67,7 @@ fn cap_name(cap: Capability) -> String =
     CapClock => "clock",
     CapRandom => "random",
     CapNet => "net",
+    CapExec => "exec",
   }
 
 // --- WASI function → required capability ---
@@ -140,7 +144,7 @@ fn profile_worker() -> CapabilitySet = {
 }
 
 fn profile_full() -> CapabilitySet = {
-  caps: [CapIO, CapFS, CapFSWrite, CapProcess, CapEnv, CapClock, CapRandom, CapNet],
+  caps: [CapIO, CapFS, CapFSWrite, CapProcess, CapEnv, CapClock, CapRandom, CapNet, CapExec],
 }
 
 fn empty() -> CapabilitySet = {

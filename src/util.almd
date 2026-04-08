@@ -1,6 +1,5 @@
 // Utility functions for CLI and config parsing
 
-import self.wasm.interp
 import self.dispatch
 import self.sandbox
 
@@ -19,10 +18,10 @@ fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
 
 // --- String splitting ---
 
-fn split_at_eq(s: String) -> Option[interp.EnvVar] =
+fn split_at_eq(s: String) -> Option[dispatch.EnvVar] =
   find_eq_pos(string.to_bytes(s), 0)
 
-fn find_eq_pos(bytes: List[Int], idx: Int) -> Option[interp.EnvVar] =
+fn find_eq_pos(bytes: List[Int], idx: Int) -> Option[dispatch.EnvVar] =
   if idx >= list.len(bytes) then none
   else {
     let b = list.get(bytes, idx) ?? 0

@@ -1,9 +1,14 @@
 // Instance Lifecycle & Dispatch
 
+import json
 import self.wasm.binary
-import self.wasm.interp
+import self.wasm_rt
 import self.sandbox
 import self.observability
+
+// --- Types ---
+
+type EnvVar = { key: String, val: String }
 
 type InstanceState =
   | Created
@@ -18,6 +23,7 @@ type RestartPolicy =
   | Always
 
 type InstanceConfig = {
+  wasm_path: String,
   wasm: binary.WasmModule,
   entry: String,
   restart_policy: RestartPolicy,
@@ -25,8 +31,10 @@ type InstanceConfig = {
   max_memory_pages: Int,
   max_restarts: Int,
   capabilities: sandbox.CapabilitySet,
-  env_vars: List[interp.EnvVar],
-  secrets: List[interp.EnvVar],
+  env_vars: List[EnvVar],
+  secrets: List[EnvVar],
+  preopen_dirs: List[String],
+  wasm_args: List[String],
 }
 
 type ToolResult = {
@@ -51,7 +59,8 @@ fn parse_restart_policy(s: String) -> RestartPolicy =
     _ => Never,
   }
 
-fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> InstanceConfig = {
+  wasm_path: wasm_path,
   wasm: wasm,
   entry: "_start",
   restart_policy: Never,
@@ -61,22 +70,64 @@ fn default_config(wasm: binary.WasmModule, caps: sandbox.CapabilitySet) -> Insta
   capabilities: caps,
   env_vars: [],
   secrets: [],
+  preopen_dirs: ["."],
+  wasm_args: [],
+}
+
+// --- Helpers ---
+
+fn setup_env(handle: Int, env: List[EnvVar], idx: Int) -> Unit =
+  if idx >= list.len(env) then ()
+  else {
+    let e = list.get(env, idx) ?? {key: "", val: ""}
+    let _ = wasm_rt.wt_set_env(handle, e.key, e.val)
+    setup_env(handle, env, idx + 1)
+  }
+
+fn setup_dirs(handle: Int, dirs: List[String], idx: Int) -> Unit =
+  if idx >= list.len(dirs) then ()
+  else {
+    let dir = list.get(dirs, idx) ?? "."
+    let _ = wasm_rt.wt_preopen_dir(handle, dir, dir)
+    setup_dirs(handle, dirs, idx + 1)
+  }
+
+fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
+  let full_args = [wasm_path] + args
+  let args_json = json.stringify(json.array(full_args |> list.map(json.from_string)))
+  let _ = wasm_rt.wt_set_args(handle, args_json)
+  ()
 }
 
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
-  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
-  let env = config.env_vars + config.secrets
-  let ws = interp.run_tool(config.wasm, tool_name, args_json, config.step_limit, config.max_memory_pages, config.capabilities, env)!
-  let m = observability.empty_metrics()
-  let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages}
-  ok({
-    stdout: ws.stdout_buf,
-    stderr: ws.stderr_buf,
-    exit_code: ws.exit_code,
-    metrics: metrics,
-  })
+  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  let fuel = if config.step_limit > 0 then config.step_limit else 0
+  let h = wasm_rt.wt_create(config.wasm_path, fuel)
+  if h < 0 then err("failed to create WASM instance")
+  else {
+    let env = config.env_vars + config.secrets
+    setup_env(h, env, 0)
+    setup_dirs(h, config.preopen_dirs, 0)
+    let _ = wasm_rt.wt_set_tool_stdin(h, tool_name, args_json)
+    let run_result = wasm_rt.wt_run(h)
+    let stdout = wasm_rt.wt_get_stdout(h)
+    let stderr = wasm_rt.wt_get_stderr(h)
+    let exit_code = wasm_rt.wt_get_exit_code(h)
+    let steps = wasm_rt.wt_get_fuel_consumed(h)
+    let _ = wasm_rt.wt_destroy(h)
+    let m = observability.empty_metrics()
+    let metrics = {...m, steps: steps}
+    if run_result < 0 and string.len(stderr) > 0 then
+      err("WASM execution failed: ${stderr}")
+    else ok({
+      stdout: stdout,
+      stderr: stderr,
+      exit_code: if exit_code >= 0 then some(exit_code) else none,
+      metrics: metrics,
+    })
+  }
 }
 
 // --- Run mode: full lifecycle with restart ---
@@ -85,19 +136,34 @@ effect fn run_instance(config: InstanceConfig) -> Result[RunResult, String] =
   run_with_restarts(config, 0)
 
 effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[RunResult, String] = {
-  sandbox.validate_imports(config.wasm.imports, config.capabilities)!
-  let env = config.env_vars + config.secrets
-  let ws = interp.run(config.wasm, config.step_limit, config.max_memory_pages, config.capabilities, env)!
-  let exit_code = match ws.exit_code { some(c) => c, none => 0 }
-  let should_restart = match config.restart_policy {
-    Never => false,
-    OnFailure => exit_code != 0 and restarts < config.max_restarts,
-    Always => restarts < config.max_restarts,
-  }
-  if should_restart then run_with_restarts(config, restarts + 1)
+  if list.len(config.wasm.imports) > 0 then sandbox.validate_imports(config.wasm.imports, config.capabilities)! else ()
+  let fuel = if config.step_limit > 0 then config.step_limit else 0
+  let h = wasm_rt.wt_create(config.wasm_path, fuel)
+  if h < 0 then err("failed to create WASM instance")
   else {
-    let m = observability.empty_metrics()
-    let metrics = {...m, steps: ws.steps, memory_pages: ws.memory_pages, restarts: restarts}
-    ok({exit_code: exit_code, stdout: ws.stdout_buf, stderr: ws.stderr_buf, restarts: restarts, metrics: metrics})
+    let env = config.env_vars + config.secrets
+    setup_env(h, env, 0)
+    setup_dirs(h, config.preopen_dirs, 0)
+    setup_args(h, config.wasm_path, config.wasm_args)
+    let run_result = wasm_rt.wt_run(h)
+    let stdout = wasm_rt.wt_get_stdout(h)
+    let stderr = wasm_rt.wt_get_stderr(h)
+    let exit_code = wasm_rt.wt_get_exit_code(h)
+    let steps = wasm_rt.wt_get_fuel_consumed(h)
+    let _ = wasm_rt.wt_destroy(h)
+    if run_result < 0 and string.len(stderr) > 0 then err("WASM execution failed: ${stderr}")
+    else {
+    let should_restart = match config.restart_policy {
+      Never => false,
+      OnFailure => exit_code != 0 and restarts < config.max_restarts,
+      Always => restarts < config.max_restarts,
+    }
+    if should_restart then run_with_restarts(config, restarts + 1)
+    else {
+      let m = observability.empty_metrics()
+      let metrics = {...m, steps: steps, restarts: restarts}
+      ok({exit_code: exit_code, stdout: stdout, stderr: stderr, restarts: restarts, metrics: metrics})
+    }
+    }
   }
 }

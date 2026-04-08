@@ -1,3 +1,5 @@
 target/
 *.wasm
 .DS_Store
+.almide/cache/
+tests/fixtures/
