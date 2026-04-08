@@ -36,6 +36,12 @@ fn wt_get_fuel_consumed(handle: Int) -> Int
 @extern(rs, "wasmtime_bridge", "wt_get_exit_code")
 fn wt_get_exit_code(handle: Int) -> Int
 
+@extern(rs, "wasmtime_bridge", "wt_set_max_memory")
+fn wt_set_max_memory(handle: Int, pages: Int) -> Int
+
+@extern(rs, "wasmtime_bridge", "wt_set_entry")
+fn wt_set_entry(handle: Int, name: String) -> Int
+
 @extern(rs, "wasmtime_bridge", "wt_preopen_dir")
 fn wt_preopen_dir(handle: Int, host_path: String, guest_path: String) -> Int
 
@@ -60,7 +66,10 @@ effect fn wt_http_request(method: String, url: String, headers_json: String, bod
 
 effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result[String, String] = {
   let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
-  let result = process.exec(cmd, args)
+  let result = if cwd != "" and cwd != "." then
+    process.exec("sh", ["-c", "cd " + cwd + " && exec " + cmd + " " + string.join(args, " ")])
+  else
+    process.exec(cmd, args)
   match result {
     ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(json.from_string(stdout)) + ",\"stderr\":\"\"}"),
     err(e) => ok("{\"error\":" + json.stringify(json.from_string(e)) + "}"),
@@ -73,8 +82,20 @@ effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: S
   let args = json.as_array(json.parse(args_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
   let allowed_dirs = json.as_array(json.parse(allowed_dirs_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
   let allowed_net = json.as_array(json.parse(allowed_net_json) ?? json.array([])) ?? [] |> list.filter_map(json.as_string)
+  let env_pairs = json.as_array(json.parse(env_json) ?? json.array([])) ?? []
+    |> list.filter_map((pair) => {
+      let arr = json.as_array(pair) ?? []
+      let k = json.as_string(list.get(arr, 0) ?? json.null())
+      let v = json.as_string(list.get(arr, 1) ?? json.null())
+      match (k, v) { (some(ek), some(ev)) => some(ek + "=" + ev), _ => none }
+    })
   let profile = build_sandbox_profile(allowed_dirs, allowed_net)
-  let sandbox_args = ["-p", profile, cmd] + args
+  let env_cmd = if list.len(env_pairs) > 0 then ["/usr/bin/env"] + env_pairs else []
+  let inner_cmd = env_cmd + [cmd] + args
+  let sandbox_args = if cwd != "" and cwd != "." then
+    ["-p", profile, "/bin/sh", "-c", "cd " + cwd + " && exec " + string.join(inner_cmd, " ")]
+  else
+    ["-p", profile] + inner_cmd
   let result = process.exec("sandbox-exec", sandbox_args)
   match result {
     ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(json.from_string(stdout)) + ",\"stderr\":\"\"}"),

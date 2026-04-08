@@ -2,6 +2,7 @@
 
 import fs
 import json
+import process
 import toml
 import self.dispatch
 
@@ -73,7 +74,16 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
     let val = json.get_string(sec_obj, k)
     match val {
       some(v) => some({key: k, val: v}),
-      none => none,
+      none => {
+        // Check for {from-env = true}: read value from host environment
+        let obj = json.get(sec_obj, k) ?? json.null()
+        let from_env = json.get_bool(obj, "from-env") ?? false
+        if from_env then {
+          let env_val = process.env(k) ?? ""
+          some({key: k, val: env_val})
+        }
+        else none
+      },
     }
   })
 

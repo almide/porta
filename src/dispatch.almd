@@ -117,6 +117,14 @@ effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] 
   else ok(())
 }
 
+fn configure_instance(h: Int, config: InstanceConfig) -> Unit = {
+  let env = config.env_vars + config.secrets
+  setup_env(h, env, 0)
+  setup_dirs(h, config.preopen_dirs, 0)
+  if config.max_memory_pages > 0 then { let _ = wasm_rt.wt_set_max_memory(h, config.max_memory_pages); () } else ()
+  if config.entry != "_start" then { let _ = wasm_rt.wt_set_entry(h, config.entry); () } else ()
+}
+
 // --- Serve mode: dispatch a single tool call ---
 
 effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: String) -> Result[ToolResult, String] = {
@@ -125,9 +133,7 @@ effect fn dispatch_tool(config: InstanceConfig, tool_name: String, args_json: St
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
   else {
-    let env = config.env_vars + config.secrets
-    setup_env(h, env, 0)
-    setup_dirs(h, config.preopen_dirs, 0)
+    configure_instance(h, config)
     let _ = wasm_rt.wt_set_tool_stdin(h, tool_name, args_json)
     let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
@@ -159,9 +165,7 @@ effect fn run_with_restarts(config: InstanceConfig, restarts: Int) -> Result[Run
   let h = wasm_rt.wt_create(config.wasm_path, fuel)
   if h < 0 then err("failed to create WASM instance")
   else {
-    let env = config.env_vars + config.secrets
-    setup_env(h, env, 0)
-    setup_dirs(h, config.preopen_dirs, 0)
+    configure_instance(h, config)
     setup_args(h, config.wasm_path, config.wasm_args)
     let run_result = wasm_rt.wt_run(h)
     let stdout = wasm_rt.wt_get_stdout(h)
