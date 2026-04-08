@@ -1,0 +1,80 @@
+// Project: porta.toml workflows (up, init)
+
+import fs
+import json
+import self.cli
+import self.config
+import self.engine
+import self.wasm_rt
+
+effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
+  let config_path = if fs.exists("porta.toml") then "porta.toml" else ".porta.toml"
+  if not fs.exists(config_path) then {
+    println("No porta.toml found. Run 'porta init' to create one.")
+    ok(())
+  }
+  else {
+    let cfg = config.load_porta_config(config_path)!
+    let env_list = cfg.env_vars
+    let secret_list = cfg.secrets
+    let all_args = cfg.args + extra_args
+
+    if cfg.runtime_type == "native" then {
+      let cmd = cfg.command
+      let args_json = json.stringify(json.array(all_args |> list.map(json.from_string)))
+      let dirs_json = json.stringify(json.array(cfg.mounts |> list.map(json.from_string)))
+      let net_json = json.stringify(json.array(cfg.network |> list.map(json.from_string)))
+      let all_env = env_list + secret_list
+      let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
+      let env_json = json.stringify(json.array(env_pairs))
+      let cwd = string.replace(list.get(cfg.mounts, 0) ?? ".", ":ro", "")
+
+      let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
+      let parsed = json.parse(result_json)!
+      let error = json.get_string(parsed, "error") ?? ""
+      if error != "" then eprintln(error)
+      else {
+        let stdout = json.get_string(parsed, "stdout") ?? ""
+        let stderr = json.get_string(parsed, "stderr") ?? ""
+        if string.len(stdout) > 0 then println(stdout) else ()
+        if string.len(stderr) > 0 then eprintln(stderr) else ()
+      }
+      ok(())
+    }
+    else {
+      // WASM runtime
+      let wasm_path = cfg.wasm_path
+      let opts: cli.Options = {
+        ...cli.default_options(),
+        path: wasm_path,
+        entry: cfg.entry,
+        step_limit: cfg.step_limit,
+        max_memory_pages: cfg.max_memory,
+        restart: cfg.restart,
+        profile: cfg.profile,
+        env_vars: env_list,
+        secrets: secret_list,
+        preopen_dirs: cfg.mounts,
+        wasm_args: all_args,
+      }
+      engine.run_wasm(opts)
+    }
+  }
+}
+
+effect fn porta_init(runtime_type: String, command: String) -> Result[Unit, String] = {
+  if fs.exists("porta.toml") then {
+    println("porta.toml already exists.")
+    ok(())
+  }
+  else {
+    let content = if runtime_type == "native" then config.generate_native_toml(command)
+      else config.generate_wasm_toml(command)
+    fs.write("porta.toml", content)!
+    println("Created porta.toml")
+    println("")
+    println("Edit porta.toml to configure your sandbox, then run:")
+    println("  porta up")
+    ok(())
+  }
+}
