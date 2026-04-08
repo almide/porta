@@ -31,6 +31,7 @@ type Options = {
   wasm_args: List[String],
   preopen_dirs: List[String],
   allow_net: List[String],
+  allow_exec: List[String],
 }
 
 fn default_options() -> Options = {
@@ -49,6 +50,7 @@ fn default_options() -> Options = {
   wasm_args: [],
   preopen_dirs: [],
   allow_net: [],
+  allow_exec: [],
 }
 
 fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
@@ -77,6 +79,7 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
         parse_options(args, idx + 2, {...opts, preopen_dirs: opts.preopen_dirs + [dir]})
       },
       "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
+      "--allow-exec" => parse_options(args, idx + 2, {...opts, allow_exec: opts.allow_exec + string.split(next, ",")}),
       "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
@@ -135,6 +138,8 @@ fn build_run_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySe
     secrets: opts.secrets,
     wasm_args: opts.wasm_args,
     preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
+    allowed_commands: opts.allow_exec,
+    allowed_hosts: opts.allow_net,
   }
 }
 
@@ -150,6 +155,8 @@ fn build_config(wasm_path: String, wasm: binary.WasmModule, opts: Options, caps:
     secrets: opts.secrets,
     wasm_args: opts.wasm_args,
     preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
+    allowed_commands: opts.allow_exec,
+    allowed_hosts: opts.allow_net,
   }
 }
 

@@ -35,6 +35,8 @@ type InstanceConfig = {
   secrets: List[EnvVar],
   preopen_dirs: List[String],
   wasm_args: List[String],
+  allowed_commands: List[String],
+  allowed_hosts: List[String],
 }
 
 type ToolResult = {
@@ -72,6 +74,8 @@ fn default_config(wasm_path: String, wasm: binary.WasmModule, caps: sandbox.Capa
   secrets: [],
   preopen_dirs: ["."],
   wasm_args: [],
+  allowed_commands: [],
+  allowed_hosts: [],
 }
 
 // --- Helpers ---

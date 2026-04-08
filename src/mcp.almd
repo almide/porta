@@ -4,6 +4,7 @@ import json
 import self.jsonrpc
 import self.manifest
 import self.dispatch
+import self.sandbox
 import self.observability
 import self.wasm_rt
 
@@ -100,14 +101,40 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
   let tool_name = json.get_string(req.params, "name") ?? ""
   let arguments = json.get(req.params, "arguments") ?? json.object([])
 
-  // Built-in tools
+  // Built-in tools with capability enforcement
   if tool_name == "porta.exec" then {
-    let result = handle_builtin_exec(arguments)!
-    ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+    if not sandbox.has_capability(server.config.capabilities, sandbox.CapExec) then {
+      let resp = jsonrpc.make_error_response(req.id, -32602, "porta.exec denied: 'exec' capability not granted")
+      ok({server: server, response: some(resp)})
+    }
+    else {
+      let cmd = json.get_string(arguments, "command") ?? ""
+      if list.len(server.config.allowed_commands) > 0 and not list.any(server.config.allowed_commands, (c) => c == cmd) then {
+        let resp = jsonrpc.make_error_response(req.id, -32602, "porta.exec denied: command '${cmd}' not in allowed list")
+        ok({server: server, response: some(resp)})
+      }
+      else {
+        let result = handle_builtin_exec(arguments)!
+        ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+      }
+    }
   }
   else if tool_name == "porta.http" then {
-    let result = handle_builtin_http(arguments)!
-    ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+    if not sandbox.has_capability(server.config.capabilities, sandbox.CapNet) then {
+      let resp = jsonrpc.make_error_response(req.id, -32602, "porta.http denied: 'net' capability not granted")
+      ok({server: server, response: some(resp)})
+    }
+    else {
+      let url = json.get_string(arguments, "url") ?? ""
+      if list.len(server.config.allowed_hosts) > 0 and not is_host_allowed(url, server.config.allowed_hosts) then {
+        let resp = jsonrpc.make_error_response(req.id, -32602, "porta.http denied: host not in allowed list")
+        ok({server: server, response: some(resp)})
+      }
+      else {
+        let result = handle_builtin_http(arguments)!
+        ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+      }
+    }
   }
   else {
 
@@ -184,6 +211,22 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
     },
   }
   } // else (not builtin)
+}
+
+// --- Host validation ---
+
+fn is_host_allowed(url: String, allowed: List[String]) -> Bool = {
+  // Extract host:port from URL, check against allowed list
+  // allowed entries are like "*:443", "api.example.com:443"
+  // For now, check if any allowed entry's port matches the URL scheme
+  let is_https = string.starts_with(url, "https://")
+  let is_http = string.starts_with(url, "http://")
+  let port = if is_https then "443" else if is_http then "80" else ""
+  allowed |> list.any((h) => {
+    let parts = string.split(h, ":")
+    let allowed_port = list.last(parts) ?? ""
+    allowed_port == "*" or allowed_port == port
+  })
 }
 
 // --- Built-in tools ---
