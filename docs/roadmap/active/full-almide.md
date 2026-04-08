@@ -32,15 +32,6 @@ Move non-wasmtime Rust code from `native/wasmtime_bridge.rs` to pure Almide. Red
 - Almide process spawn without wait (for `wt_spawn`)
 - Almide signal sending (for `wt_kill`)
 
-## Compiler Blockers
-
-1. **`import http` + `@extern(rs)` で `Write` trait 重複** — codegen の use dedup 漏れ
-2. **`json.as_map` 未定義** — Value から Map への変換 stdlib 関数が必要
-3. **`process.pid()` 未定義** — 現在のプロセスの PID 取得が必要
-4. **`effect fn` → 非 effect 呼び出しの型不一致** — effect fn が Result を返すが、既存の呼び出し側が plain 値を期待
-
-全てコンパイラ側で対応すれば移行可能。
-
 ## Goal
 
 `native/wasmtime_bridge.rs` should contain ONLY wasmtime API calls (~200 lines). Everything else in Almide.

@@ -398,10 +398,15 @@ pub fn wt_get_exit_code(handle: i64) -> i64 {
         .unwrap_or(-1)
 }
 
-// --- HTTP host function ---
+// --- Functions below migrated to pure Almide (kept only for linker host functions) ---
+
+// NOTE: wt_http_request, wt_exec_command, wt_exec_sandboxed, wt_getpid,
+// wt_kill, wt_spawn, wt_home_dir are now implemented in src/wasm_rt.almd
+// The Rust versions below are ONLY used by wasmtime linker host functions.
+
+// --- HTTP (used by linker host function only) ---
 
 /// Execute an HTTP request. Returns JSON response string.
-/// Response: {"status":200,"body":"..."} or {"error":"..."}
 pub fn wt_http_request(method: impl AsRef<str>, url: impl AsRef<str>, headers_json: impl AsRef<str>, body: impl AsRef<str>) -> String {
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

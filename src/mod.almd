@@ -323,7 +323,7 @@ effect fn run_detached(opts: Options) -> Result[Unit, String] = {
   // Build args for daemon child: porta run --_daemon <id> <path> [original flags minus -d]
   let child_args = ["run", "--_daemon", id, opts.path, "--profile", if opts.profile != "" then opts.profile else "full"]
   let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
-  let pid = wasm_rt.wt_spawn(self_path, args_json)
+  let pid = wasm_rt.wt_spawn(self_path, args_json)!
   if pid < 0 then err("failed to spawn daemon")
   else {
     register_instance(id, opts.path, pid)!
@@ -560,7 +560,7 @@ effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
     let pid = json.get_int(v, "pid") ?? 0
     if pid == 0 then { println("no PID for instance: " + id); ok(()) }
     else {
-      let result = wasm_rt.wt_kill(pid, signal)
+      let result = wasm_rt.wt_kill(pid, signal)!
       if result == 0 then {
         println(if signal == 9 then "killed: " + id else "stopped: " + id)
         // Update status
@@ -628,7 +628,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
       let env_json = json.stringify(json.array(env_pairs))
       let cwd = string.replace(list.get(cfg.mounts, 0) ?? ".", ":ro", "")
 
-      let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)
+      let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
       let parsed = json.parse(result_json)!
       let error = json.get_string(parsed, "error") ?? ""
       if error != "" then eprintln(error)
@@ -698,7 +698,7 @@ effect fn run_native(opts: Options) -> Result[Unit, String] = {
   let first_dir = list.get(dirs, 0) ?? "."
   let cwd = string.replace(first_dir, ":ro", "")
 
-  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)
+  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
   let parsed = json.parse(result_json)!
   let error = json.get_string(parsed, "error") ?? ""
   if error != "" then {

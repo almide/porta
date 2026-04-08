@@ -102,11 +102,11 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 
   // Built-in tools
   if tool_name == "porta.exec" then {
-    let result = handle_builtin_exec(arguments)
+    let result = handle_builtin_exec(arguments)!
     ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
   }
   else if tool_name == "porta.http" then {
-    let result = handle_builtin_http(arguments)
+    let result = handle_builtin_http(arguments)!
     ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
   }
   else {
@@ -188,15 +188,15 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 
 // --- Built-in tools ---
 
-fn handle_builtin_exec(args: Value) -> Value = {
+effect fn handle_builtin_exec(args: Value) -> Result[Value, String] = {
   let cmd = json.get_string(args, "command") ?? ""
   let cmd_args = json.get_array(args, "args") ?? []
   let args_strs = cmd_args |> list.filter_map((a) => json.as_string(a))
   let cwd = json.get_string(args, "cwd") ?? "."
   let args_json = json.stringify(json.array(args_strs |> list.map(json.from_string)))
-  let result_json = wasm_rt.wt_exec_command(cmd, args_json, cwd)
+  let result_json = wasm_rt.wt_exec_command(cmd, args_json, cwd)!
   let parsed = json.parse(result_json)
-  match parsed {
+  ok(match parsed {
     ok(v) => {
       let stdout = json.get_string(v, "stdout") ?? ""
       let stderr = json.get_string(v, "stderr") ?? ""
@@ -213,18 +213,18 @@ fn handle_builtin_exec(args: Value) -> Value = {
       ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
       ("isError", json.from_bool(true)),
     ]),
-  }
+  })
 }
 
-fn handle_builtin_http(args: Value) -> Value = {
+effect fn handle_builtin_http(args: Value) -> Result[Value, String] = {
   let method = json.get_string(args, "method") ?? "GET"
   let url = json.get_string(args, "url") ?? ""
   let headers = json.get(args, "headers") ?? json.object([])
   let body = json.get_string(args, "body") ?? ""
   let headers_json = json.stringify(headers)
-  let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)
+  let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)!
   let parsed = json.parse(result_json)
-  match parsed {
+  ok(match parsed {
     ok(v) => {
       let body_text = json.get_string(v, "body") ?? ""
       let error = json.get_string(v, "error") ?? ""
@@ -238,7 +238,7 @@ fn handle_builtin_http(args: Value) -> Value = {
       ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
       ("isError", json.from_bool(true)),
     ]),
-  }
+  })
 }
 
 // --- Resources ---
