@@ -114,7 +114,7 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
         ok({server: server, response: some(resp)})
       }
       else {
-        let result = handle_builtin_exec(arguments)!
+        let result = handle_builtin_exec(server.config, arguments)!
         ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
       }
     }
@@ -231,13 +231,19 @@ fn is_host_allowed(url: String, allowed: List[String]) -> Bool = {
 
 // --- Built-in tools ---
 
-effect fn handle_builtin_exec(args: Value) -> Result[Value, String] = {
+effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] = {
   let cmd = json.get_string(args, "command") ?? ""
   let cmd_args = json.get_array(args, "args") ?? []
   let args_strs = cmd_args |> list.filter_map((a) => json.as_string(a))
   let cwd = json.get_string(args, "cwd") ?? "."
   let args_json = json.stringify(json.array(args_strs |> list.map(json.from_string)))
-  let result_json = wasm_rt.wt_exec_command(cmd, args_json, cwd)!
+  let dirs = config.preopen_dirs
+  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
+  let net_json = json.stringify(json.array(config.allowed_hosts |> list.map(json.from_string)))
+  let all_env = config.env_vars + config.secrets
+  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
+  let env_json = json.stringify(json.array(env_pairs))
+  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
   let parsed = json.parse(result_json)
   ok(match parsed {
     ok(v) => {
