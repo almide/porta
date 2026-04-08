@@ -266,4 +266,4 @@ cp porta ~/.local/bin/
 
 ## License
 
-MIT
+Apache-2.0
