@@ -43,13 +43,29 @@ effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[U
 
 // --- Daemon execution ---
 
+fn serialize_opts(opts: cli.Options) -> List[String] = {
+  let args: List[String] = []
+  let args = if opts.profile != "" then args + ["--profile", opts.profile] else args
+  let args = if opts.entry != "_start" then args + ["--entry", opts.entry] else args
+  let args = if opts.step_limit > 0 then args + ["--step-limit", int.to_string(opts.step_limit)] else args
+  let args = if opts.max_memory_pages > 0 then args + ["--max-memory", int.to_string(opts.max_memory_pages)] else args
+  let args = if opts.restart != "no" then args + ["--restart", opts.restart] else args
+  let args = if opts.manifest_path != "" then args + ["--manifest", opts.manifest_path] else args
+  let args = if opts.env_file != "" then args + ["--env-file", opts.env_file] else args
+  let args = opts.env_vars |> list.fold(args, (acc, e) => acc + ["--env", e.key + "=" + e.val])
+  let args = opts.secrets |> list.fold(args, (acc, e) => acc + ["--secret", e.key + "=" + e.val])
+  let args = opts.preopen_dirs |> list.fold(args, (acc, d) => acc + ["-v", d])
+  let args = opts.allow_net |> list.fold(args, (acc, h) => acc + ["--allow-net", h])
+  let args = opts.allow_exec |> list.fold(args, (acc, c) => acc + ["--allow-exec", c])
+  let args = if list.len(opts.wasm_args) > 0 then args + ["--"] + opts.wasm_args else args
+  args
+}
+
 effect fn run_detached(opts: cli.Options) -> Result[Unit, String] = {
   let id = generate_id()
   ensure_porta_dir()!
-  // Get porta binary path from args[0]
   let self_path = list.get(process.args(), 0) ?? "porta"
-  // Build args for daemon child: porta run --_daemon <id> <path> [original flags minus -d]
-  let child_args = ["run", "--_daemon", id, opts.path, "--profile", if opts.profile != "" then opts.profile else "full"]
+  let child_args = ["run", "--_daemon", id, opts.path] + serialize_opts(opts)
   let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
   let pid = wasm_rt.wt_spawn(self_path, args_json)!
   if pid < 0 then err("failed to spawn daemon")

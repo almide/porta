@@ -4,11 +4,10 @@
 
 ## Active
 
-2 items
+1 items
 
 | Item | Description |
 |------|-------------|
-| [Detach Option Forwarding](active/04-detach-options.md) | Forward all CLI options to detached daemon child process |
 | [Sandbox Honesty](active/05-sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
 
 ## On Hold
@@ -27,10 +26,10 @@
 
 ## Done
 
-17 items
+18 items
 
 <details>
-<summary>Show all 17 completed items</summary>
+<summary>Show all 18 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
@@ -40,6 +39,7 @@
 | 2026-04-08 | [porta.exec Sandboxing](done/exec-sandbox.md) | Make porta.exec truly sandboxed and fix command injection in sh -c |
 | 2026-04-08 | [Native Sandbox Deny-by-Default](done/native-sandbox-deny-default.md) | Make native sandbox truly deny-by-default for network and filesystem |
 | 2026-04-08 | [JSON-RPC Proper Framing](done/jsonrpc-framing.md) | Fix JSON-RPC to actually use Content-Length for message framing |
+| 2026-04-08 | [Detach Option Forwarding](done/detach-options.md) | Forward all CLI options to detached daemon child process |
 | 2026-04-08 | [Config Honesty](done/config-honesty.md) | Remove or implement config options that exist but don't work |
 | 2026-04-08 | [Builtin Tool Security](done/builtin-tool-security.md) | Enforce capability checks on porta.exec and porta.http builtin tools |
 | 2026-04-08 | [Always Validate Imports](done/validate-always.md) | Always validate WASM imports, never skip on empty module |
