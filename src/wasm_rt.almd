@@ -100,18 +100,20 @@ effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: S
 }
 
 // Build a macOS sandbox-exec profile.
-// Uses (allow default) base — read access is broad, write and network are restricted.
-// This is a constrained environment, not a full deny-by-default sandbox.
+// (allow default) base. Write and network restrictions are opt-in via -v and --allow-net.
 fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) -> String = {
   let home = process.env("HOME") ?? "/tmp"
   let p = "(version 1)\n(allow default)\n"
-  let p = p + "(deny file-write*)\n"
-  let p = allowed_dirs |> list.fold(p, (acc, dir) => {
-    let clean = string.replace(dir, ":ro", "")
-    if string.ends_with(dir, ":ro") then acc
-    else acc + "(allow file-write* (subpath \"" + clean + "\"))\n"
-  })
-  let p = p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
+  // Write restrictions: only applied when -v is specified
+  let p = if list.len(allowed_dirs) > 0 then {
+    let p = p + "(deny file-write*)\n"
+    let p = allowed_dirs |> list.fold(p, (acc, dir) => {
+      let clean = string.replace(dir, ":ro", "")
+      if string.ends_with(dir, ":ro") then acc
+      else acc + "(allow file-write* (subpath \"" + clean + "\"))\n"
+    })
+    p + "(allow file-write* (subpath \"/tmp\"))\n(allow file-write* (subpath \"/private/tmp\"))\n(allow file-write* (subpath \"/private/var\"))\n(allow file-write* (subpath \"/var\"))\n(allow file-write* (subpath \"/dev\"))\n"
+  } else p
   let p = p + "(deny file-read-data (subpath \"" + home + "/.ssh\"))\n(deny file-read-data (subpath \"" + home + "/.gnupg\"))\n"
   // Network: open by default (like Docker). --allow-net restricts to listed ports.
   if list.len(allowed_net) > 0 then {

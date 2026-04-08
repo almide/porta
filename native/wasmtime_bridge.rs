@@ -657,21 +657,22 @@ fn exec_sandboxed_macos(
     // Strategy: allow default + deny writes outside allowed dirs + deny reads on sensitive dirs
     let mut profile = String::from("(version 1)\n(allow default)\n");
 
-    // --- FS write: deny all, allow only specified dirs + system essentials ---
-    profile.push_str("(deny file-write*)\n");
-    for dir in allowed_dirs.iter() {
-        let clean = dir.trim_end_matches(":ro");
-        if !dir.ends_with(":ro") {
-            profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+    // FS write: restricted only when -v is specified (opt-in)
+    if !allowed_dirs.is_empty() {
+        profile.push_str("(deny file-write*)\n");
+        for dir in allowed_dirs.iter() {
+            let clean = dir.trim_end_matches(":ro");
+            if !dir.ends_with(":ro") {
+                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+            }
         }
+        profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/var\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
     }
-    // System paths needed by runtimes
-    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/var\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    // --- FS read: deny cryptographic keys ---
+    // FS read: deny cryptographic keys ---
     if let Ok(home) = std::env::var("HOME") {
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
@@ -801,19 +802,22 @@ pub fn wt_exec_replace(
 #[cfg(target_os = "macos")]
 fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    profile.push_str("(deny file-write*)\n");
-    for dir in allowed_dirs.iter() {
-        let clean = dir.trim_end_matches(":ro");
-        if !dir.ends_with(":ro") {
-            profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+    // FS write: restricted only when -v is specified (opt-in)
+    if !allowed_dirs.is_empty() {
+        profile.push_str("(deny file-write*)\n");
+        for dir in allowed_dirs.iter() {
+            let clean = dir.trim_end_matches(":ro");
+            if !dir.ends_with(":ro") {
+                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+            }
         }
+        profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/var\"))\n");
+        profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
     }
-    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/var\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    // FS read: deny cryptographic keys only — everything else is user's choice via -v
+    // FS read: deny cryptographic keys only
     if let Ok(home) = std::env::var("HOME") {
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
         profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));

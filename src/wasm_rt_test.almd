@@ -89,9 +89,16 @@ test "wt_inspect: invalid path" {
 
 // --- build_sandbox_profile ---
 
-test "build_sandbox_profile: empty allowed_net means network open" {
-  let profile = wasm_rt.build_sandbox_profile(["."], [])
+test "build_sandbox_profile: no dirs and no net means minimal sandbox" {
+  let profile = wasm_rt.build_sandbox_profile([], [])
+  assert(not string.contains(profile, "(deny file-write*)"))
   assert(not string.contains(profile, "(deny network-outbound)"))
+  assert(string.contains(profile, ".ssh"))
+}
+
+test "build_sandbox_profile: dirs specified enables write restrictions" {
+  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  assert(string.contains(profile, "(deny file-write*)"))
 }
 
 test "build_sandbox_profile: allow_net restricts to listed ports" {
