@@ -1,0 +1,59 @@
+// HTTPS CONNECT proxy: hostname allow/deny enforced in the Rust bridge.
+// Almide owns config shape and lifecycle; the accept loop runs in a native thread.
+
+import json
+import self.wasm_rt
+
+type ProxyConfig = {
+  allow: List[String],
+  deny: List[String],
+  audit_path: String,
+}
+
+type ProxyHandle = {
+  handle: Int,
+  port: Int,
+}
+
+fn empty_config() -> ProxyConfig = {
+  allow: [],
+  deny: [],
+  audit_path: "",
+}
+
+fn is_enabled(c: ProxyConfig) -> Bool =
+  list.len(c.allow) > 0 or list.len(c.deny) > 0
+
+// Mutually exclusive: returns an error message when both allow and deny are set.
+fn validate(c: ProxyConfig) -> Result[Unit, String] =
+  if list.len(c.allow) > 0 and list.len(c.deny) > 0 then
+    err("--proxy-allow and --proxy-deny are mutually exclusive")
+  else ok(())
+
+effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
+  validate(c)!
+  let allow_json = json.stringify(json.array(c.allow |> list.map(json.from_string)))
+  let deny_json = json.stringify(json.array(c.deny |> list.map(json.from_string)))
+  let result_json = wasm_rt.wt_proxy_start(allow_json, deny_json, c.audit_path)
+  let parsed = json.parse(result_json)!
+  let error = json.get_string(parsed, "error") ?? ""
+  if error != "" then err(error)
+  else {
+    let handle = json.get_int(parsed, "handle") ?? -1
+    let port = json.get_int(parsed, "port") ?? 0
+    if handle < 0 or port == 0 then err("proxy start returned invalid handle or port")
+    else ok({handle: handle, port: port})
+  }
+}
+
+effect fn stop(h: ProxyHandle) -> Result[Unit, String] = {
+  let rc = wasm_rt.wt_proxy_stop(h.handle)
+  if rc == 0 then ok(())
+  else err("proxy stop failed (handle=${int.to_string(h.handle)})")
+}
+
+// Endpoint string the sandboxed process should see as HTTP_PROXY / HTTPS_PROXY.
+fn endpoint(h: ProxyHandle) -> String = "http://127.0.0.1:${int.to_string(h.port)}"
+
+// sandbox-exec allow rule that restricts net to just the proxy port.
+fn sandbox_net_rule(h: ProxyHandle) -> String = "*:${int.to_string(h.port)}"

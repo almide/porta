@@ -20,6 +20,9 @@ type PortaConfig = {
   max_memory: Int,
   restart: String,
   args: List[String],
+  proxy_allow: List[String],
+  proxy_deny: List[String],
+  proxy_audit: String,
 }
 
 fn default_porta_config() -> PortaConfig = {
@@ -36,6 +39,9 @@ fn default_porta_config() -> PortaConfig = {
   max_memory: 0,
   restart: "no",
   args: [],
+  proxy_allow: [],
+  proxy_deny: [],
+  proxy_audit: "",
 }
 
 effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
@@ -91,6 +97,12 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
   let args_arr = json.get_array(v, "args") ?? []
   let cmd_args = args_arr |> list.filter_map(json.as_string)
 
+  // [proxy]
+  let px = json.get(v, "proxy") ?? json.object([])
+  let proxy_allow = json.get_array(px, "allow") ?? [] |> list.filter_map(json.as_string)
+  let proxy_deny = json.get_array(px, "deny") ?? [] |> list.filter_map(json.as_string)
+  let proxy_audit = json.get_string(px, "audit") ?? ""
+
   ok({
     runtime_type: runtime_type,
     command: command,
@@ -105,6 +117,9 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
     max_memory: max_memory,
     restart: restart,
     args: cmd_args,
+    proxy_allow: proxy_allow,
+    proxy_deny: proxy_deny,
+    proxy_audit: proxy_audit,
   })
 }
 

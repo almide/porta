@@ -25,6 +25,9 @@ type Options = {
   preopen_dirs: List[String],
   allow_net: List[String],
   allow_exec: List[String],
+  proxy_allow: List[String],
+  proxy_deny: List[String],
+  proxy_audit: String,
 }
 
 fn default_options() -> Options = {
@@ -44,6 +47,9 @@ fn default_options() -> Options = {
   preopen_dirs: [],
   allow_net: [],
   allow_exec: [],
+  proxy_allow: [],
+  proxy_deny: [],
+  proxy_audit: "",
 }
 
 fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
@@ -77,6 +83,9 @@ fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
       },
       "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
       "--allow-exec" => parse_options(args, idx + 2, {...opts, allow_exec: opts.allow_exec + string.split(next, ",")}),
+      "--proxy-allow" => parse_options(args, idx + 2, {...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
+      "--proxy-deny" => parse_options(args, idx + 2, {...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
+      "--proxy-audit" => parse_options(args, idx + 2, {...opts, proxy_audit: next}),
       "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
       "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
@@ -160,6 +169,9 @@ fn print_common_runtime_opts() -> Unit = {
   println("  -v <path>               Mount directory (repeatable, append :ro for read-only)")
   println("  --allow-net <host:port> Allow network to host:port (repeatable)")
   println("  --allow-exec <cmd,...>  Allow commands (comma-separated)")
+  println("  --proxy-allow <hosts>   HTTPS proxy allowlist (comma-separated, *.wildcard ok)")
+  println("  --proxy-deny <hosts>    HTTPS proxy denylist (comma-separated, *.wildcard ok)")
+  println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
 }
 
 fn print_help(topic: String) -> Unit =

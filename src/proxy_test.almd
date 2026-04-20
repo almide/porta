@@ -1,0 +1,50 @@
+import self.proxy
+
+test "is_enabled: empty config is disabled" {
+  let c = proxy.empty_config()
+  assert_eq(proxy.is_enabled(c), false)
+}
+
+test "is_enabled: allow-only enables proxy" {
+  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: ""}
+  assert_eq(proxy.is_enabled(c), true)
+}
+
+test "is_enabled: deny-only enables proxy" {
+  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: ""}
+  assert_eq(proxy.is_enabled(c), true)
+}
+
+test "validate: allow only is ok" {
+  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: ""}
+  match proxy.validate(c) {
+    ok(_) => assert(true),
+    err(_) => assert(false),
+  }
+}
+
+test "validate: deny only is ok" {
+  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: ""}
+  match proxy.validate(c) {
+    ok(_) => assert(true),
+    err(_) => assert(false),
+  }
+}
+
+test "validate: both allow and deny is an error" {
+  let c: proxy.ProxyConfig = {allow: ["a.com"], deny: ["b.com"], audit_path: ""}
+  match proxy.validate(c) {
+    ok(_) => assert(false),
+    err(msg) => assert(string.contains(msg, "mutually exclusive")),
+  }
+}
+
+test "endpoint: formats as http://127.0.0.1:PORT" {
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123}
+  assert_eq(proxy.endpoint(h), "http://127.0.0.1:42123")
+}
+
+test "sandbox_net_rule: formats as *:PORT" {
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123}
+  assert_eq(proxy.sandbox_net_rule(h), "*:42123")
+}
