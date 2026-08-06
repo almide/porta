@@ -44,7 +44,7 @@ effect fn read_message() -> Result[Option[JsonRpcRequest], String] = {
     if string.starts_with(trimmed, "Content-Length:") then {
       let len_str = string.trim(string.replace(trimmed, "Content-Length:", ""))
       let len = parse_content_length(string.to_bytes(len_str), 0, 0)
-      skip_headers()
+      skip_headers()!
       if len <= 0 then ok(none)
       else {
         let body_bytes = io.read_n_bytes(len)
