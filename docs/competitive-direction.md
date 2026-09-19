@@ -77,6 +77,14 @@ these are fixed-response startup measurements, not real-task quality results.
    model-authored script, none in transport or the runtime, so that toolset is
    also not adopted. Broader public tasks across multiple models remain necessary
    before claiming quality superiority.
+   The [containment and recovery suite](benchmarks/containment-evaluation.md)
+   scores what escaped rather than what succeeded: across 30 hostile trials both
+   arms attempted in the same 12, Porta executed 0 and Docker Agent 3, all three
+   in the same scenario, where an injected argument shape reached the tool
+   service on one side and was refused before any effect on the other. Four
+   scenarios separated nothing and Porta's refusals cost task completion (6/15
+   against 9/15). The isolation-matched sandbox arm did not run on this host, so
+   this is not a container-versus-WASM isolation result.
 2. **Persistent execution:** broker-boundary checkpoint/resume and offline replay
    are implemented; stopped-journal inspection reports uncertain operations without
    effects. Cancellation controls, signed transcripts,

@@ -11,6 +11,11 @@ The separate [WASM compute capability smoke](compute-smoke.md) records two corre
 tasks and one failed transformation with the new optional tool. It has no
 competitor arm and does not replace the matched quality measurements.
 
+The [containment and recovery suite](containment-evaluation.md) measures what
+reached the outside world under hostile inputs instead of task success. One of
+five scenarios separated the runtimes; Porta's refusals also cost task
+completion, and the isolation-matched sandbox arm did not run on this host.
+
 The [shared WASM compute evaluation](shared-compute-evaluation.md) gives both
 runtimes that same optional tool across the four matched tasks. No trial passed
 every requirement, and all 115 compute calls failed inside the model-authored
