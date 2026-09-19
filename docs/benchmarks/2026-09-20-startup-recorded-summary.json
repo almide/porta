@@ -1,0 +1,57 @@
+{
+  "scope": "fresh process to final answer; one local fixture model call; no tools",
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "versions": {
+    "porta": "porta 0.4.0",
+    "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963"
+  },
+  "parameters": {
+    "latency_runs": 15,
+    "memory_runs": 7,
+    "warmups_per_runtime": 1,
+    "porta_record": true
+  },
+  "median_ms": {
+    "porta_wasm": 36.659082979895175,
+    "docker_agent_native": 238.29762503737584
+  },
+  "guest_bytes": 43820,
+  "runtime_bytes": 40598456,
+  "sha256": {
+    "porta": "8accf1034b85535115a79e735453c413752f47efade70510c161dac524f39bf1",
+    "guest": "f897f457a2b5c961c3ab08b9d0eca950bdd47b4cc4decc20f46e6d61a6fb3188",
+    "harness": "20fda65d0f53c769e0eedf1f11f22547bcfeb744da92c4b415e819cd256e4bce"
+  },
+  "not_measured": [
+    "real-model quality",
+    "Docker sandbox startup",
+    "tool throughput",
+    "production latency",
+    "simultaneous aggregate process-tree RSS"
+  ],
+  "memory": {
+    "measured": true,
+    "method": "/usr/bin/time -l, separate fresh-process trials on macOS",
+    "unit": "bytes",
+    "median_max_rss_bytes": {
+      "porta_wasm": 33751040,
+      "docker_agent_native": 74989568
+    }
+  },
+  "latency_range_ms": {
+    "porta_wasm": {
+      "min": 31.60770802060142,
+      "max": 40.94691603677347
+    },
+    "docker_agent_native": {
+      "min": 232.42612497415394,
+      "max": 241.42754200147465
+    }
+  },
+  "raw_report": {
+    "file": "2026-09-20-startup-recorded.json.gz",
+    "sha256": "adf513936c649c0c950dccf7e2a2a49e1214fe9128a7369be174b8e369ac2f9b",
+    "uncompressed_sha256": "1701d0eb99084424d658c9b57b66fd0370e1411316558c92edeabe8595ea7745"
+  },
+  "harness_snapshot": "2026-09-20-startup-recorded-harness.py.gz"
+}

@@ -1,6 +1,33 @@
 import self.mcp
 import self.sandbox
-import self.dispatch
+import json
+import value
+
+fn tool_text(result: Value) -> String = {
+  let blocks = json.get_array(result, "content") ?? []
+  json.get_string(list.get(blocks, 0) ?? value.null(), "text") ?? ""
+}
+
+test "MCP preserves structured tool results and their errors" {
+  let output = "{\"ok\":true,\"json\":\"9007199254740993\"}"
+  let result = mcp.tool_response(output, true)
+  assert_eq(tool_text(result), output)
+  assert_eq(json.stringify(value.field(result, "isError") ?? value.null()), "false")
+  let failure = "{\"ok\":false,\"error\":{\"message\":\"bad script\"}}"
+  let error = mcp.tool_response(failure, true)
+  assert_eq(tool_text(error), failure)
+  assert_eq(json.stringify(value.field(error, "isError") ?? value.null()), "true")
+}
+
+test "MCP retains legacy Result envelopes and failed process status" {
+  assert_eq(tool_text(mcp.tool_response("{\"ok\":\"hello\"}", true)), "hello")
+  let error = mcp.tool_response("{\"err\":\"bad\"}", true)
+  assert_eq(tool_text(error), "bad")
+  assert_eq(json.stringify(value.field(error, "isError") ?? value.null()), "true")
+  let failed = mcp.tool_response("{\"ok\":\"partial\"}", false)
+  assert_eq(json.stringify(value.field(failed, "isError") ?? value.null()), "true")
+  assert_eq(tool_text(mcp.tool_response("raw text", true)), "raw text")
+}
 
 // --- is_host_allowed ---
 
@@ -71,4 +98,12 @@ test "porta.http: from_manifest net" {
   let caps = sandbox.from_manifest(["net"])
   assert(sandbox.has_capability(caps, sandbox.CapNet))
   assert(not sandbox.has_capability(caps, sandbox.CapExec))
+}
+
+
+test "HTTP policy rejects userinfo and non-HTTP URL schemes" {
+  assert(not mcp.is_host_allowed("https://allowed.example:443@evil.example/", ["allowed.example:*"]))
+  assert(not mcp.is_host_allowed("file:///etc/passwd", ["*:*"]))
+  assert(not mcp.is_host_allowed("ftp://allowed.example/", ["*:*"]))
+  assert(mcp.is_host_allowed("https://API.EXAMPLE.COM?q=1", ["api.example.com:443"]))
 }

@@ -1,0 +1,29 @@
+// JSON artifact check. Uses normalized serialization; see README for limits.
+import io
+import fs
+import json
+import value
+
+fn verdict(passed: Bool, feedback: String) -> String = json.stringify(value.object([
+  ("passed", value.bool(passed)), ("feedback", value.str(feedback)),
+]))
+
+effect fn main() -> Result[Unit, String] = {
+  let input = json.parse(io.read_line())!
+  let parameters = value.field(input, "parameters")!
+  let path = json.get_string(parameters, "path")!
+  let expected = value.field(parameters, "expected")!
+  match fs.read_text(path) {
+    ok(content) => {
+      match json.parse(content) {
+        ok(actual) => {
+          let passed = json.stringify(actual) == json.stringify(expected)
+          println(verdict(passed, if passed then "" else "JSON artifact ${path} differs from the configured expected value."))
+        },
+        err(_) => println(verdict(false, "JSON artifact ${path} is invalid JSON.")),
+      }
+    },
+    err(_) => println(verdict(false, "JSON artifact ${path} is missing or unreadable.")),
+  }
+  ok(())
+}

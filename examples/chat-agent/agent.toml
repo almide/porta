@@ -1,0 +1,25 @@
+version = 1
+
+[agent]
+wasm = "agent.wasm"
+instruction = "You are a careful assistant. Use the available tools to answer the user's request."
+
+# Point this at a chat-completions-compatible model server with tool calling.
+[model]
+endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+name = "your-model"
+# token_env = "MODEL_API_KEY" # Read by Porta; never injected into WASM.
+
+[limits]
+max_steps = 64
+max_model_calls = 16
+fuel_per_step = 50000000
+memory_pages = 1024
+max_output_tokens = 2048
+timeout_seconds = 120
+
+[[tools]]
+name = "add"
+wasm = "../demo-agent/agent.wasm"
+description = "Add two integers."
+input_schema = { type = "object", properties = { a = { type = "integer" }, b = { type = "integer" } }, required = ["a", "b"] }

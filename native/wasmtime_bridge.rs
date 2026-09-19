@@ -57,27 +57,11 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
         Err(_) => return -1,
     };
 
-    // Try loading precompiled cache
-    let cache_path = format!("{}.porta-cache", path);
-    let module = if let Ok(cached) = std::fs::read(&cache_path) {
-        unsafe { Module::deserialize(&engine, &cached) }.ok()
-    } else {
-        None
-    };
-    let module = match module {
-        Some(m) => m,
-        None => {
-            // Compile and cache
-            match Module::from_binary(&engine, &bytes) {
-                Ok(m) => {
-                    if let Ok(serialized) = m.serialize() {
-                        let _ = std::fs::write(&cache_path, &serialized);
-                    }
-                    m
-                }
-                Err(_) => return -1,
-            }
-        }
+    // Serialized native modules are executable code, not untrusted WASM.
+    // Never deserialize an attacker-writable sidecar next to an agent.
+    let module = match Module::from_binary(&engine, &bytes) {
+        Ok(module) => module,
+        Err(_) => return -1,
     };
 
     let inst = WasmInstance {
@@ -248,114 +232,8 @@ pub fn wt_run(handle: i64) -> i64 {
         return -1;
     }
 
-    // Register porta host functions for WASM agents
-    // porta.http_request(req_ptr, req_len, resp_ptr, resp_cap) -> resp_len
-    // Agent writes JSON request to memory, gets JSON response back
-    let _ = linker.func_wrap(
-        "porta",
-        "http_request",
-        |mut caller: Caller<'_, PortaCtx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(m)) => m,
-                _ => return -1,
-            };
-            let data = memory.data(&caller);
-            let req_bytes = &data[req_ptr as usize..(req_ptr + req_len) as usize];
-            let req_str = std::str::from_utf8(req_bytes).unwrap_or("");
-
-            // Parse JSON: {"method":"GET","url":"...","headers":{...},"body":"..."}
-            let resp_str = if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_str) {
-                let method = req["method"].as_str().unwrap_or("GET");
-                let url = req["url"].as_str().unwrap_or("");
-                let headers_val = &req["headers"];
-                let body = req["body"].as_str().unwrap_or("");
-
-                let client = reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build();
-                match client {
-                    Ok(client) => {
-                        let mut builder = match method {
-                            "POST" => client.post(url),
-                            "PUT" => client.put(url),
-                            "DELETE" => client.delete(url),
-                            "PATCH" => client.patch(url),
-                            _ => client.get(url),
-                        };
-                        if let Some(obj) = headers_val.as_object() {
-                            for (k, v) in obj {
-                                if let Some(s) = v.as_str() {
-                                    builder = builder.header(k.as_str(), s);
-                                }
-                            }
-                        }
-                        if !body.is_empty() { builder = builder.body(body.to_string()); }
-                        match builder.send() {
-                            Ok(resp) => {
-                                let status = resp.status().as_u16();
-                                let text = resp.text().unwrap_or_default();
-                                let escaped = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
-                                format!("{{\"status\":{},\"body\":\"{}\"}}", status, escaped)
-                            }
-                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                        }
-                    }
-                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                }
-            } else {
-                "{\"error\":\"invalid request JSON\"}".to_string()
-            };
-
-            let resp_bytes = resp_str.as_bytes();
-            let write_len = resp_bytes.len().min(resp_cap as usize);
-            let mem_data = memory.data_mut(&mut caller);
-            mem_data[resp_ptr as usize..resp_ptr as usize + write_len].copy_from_slice(&resp_bytes[..write_len]);
-            write_len as i32
-        },
-    );
-
-    // porta.exec_command(req_ptr, req_len, resp_ptr, resp_cap) -> resp_len
-    let _ = linker.func_wrap(
-        "porta",
-        "exec_command",
-        |mut caller: Caller<'_, PortaCtx>, req_ptr: i32, req_len: i32, resp_ptr: i32, resp_cap: i32| -> i32 {
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(m)) => m,
-                _ => return -1,
-            };
-            let data = memory.data(&caller);
-            let req_bytes = &data[req_ptr as usize..(req_ptr + req_len) as usize];
-            let req_str = std::str::from_utf8(req_bytes).unwrap_or("");
-
-            let resp_str = if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_str) {
-                let cmd = req["command"].as_str().unwrap_or("");
-                let args: Vec<String> = req["args"].as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                    .unwrap_or_default();
-                let cwd = req["cwd"].as_str().unwrap_or(".");
-
-                match std::process::Command::new(cmd).args(&args).current_dir(cwd).output() {
-                    Ok(output) => {
-                        let exit_code = output.status.code().unwrap_or(-1);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
-                        let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
-                        format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
-                    }
-                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                }
-            } else {
-                "{\"error\":\"invalid request JSON\"}".to_string()
-            };
-
-            let resp_bytes = resp_str.as_bytes();
-            let write_len = resp_bytes.len().min(resp_cap as usize);
-            let mem_data = memory.data_mut(&mut caller);
-            mem_data[resp_ptr as usize..resp_ptr as usize + write_len].copy_from_slice(&resp_bytes[..write_len]);
-            write_len as i32
-        },
-    );
+    // Only WASI is linked. Direct porta.exec_command/http_request imports
+    // bypassed MCP capability and allow-list checks; do not expose them.
 
     let instance = match linker.instantiate(&mut store, &inst.module) {
         Ok(i) => i,
@@ -441,17 +319,13 @@ pub fn wt_get_exit_code(handle: i64) -> i64 {
         .unwrap_or(-1)
 }
 
-// --- Functions below migrated to pure Almide (kept only for linker host functions) ---
-
-// NOTE: wt_http_request, wt_exec_command, wt_exec_sandboxed, wt_getpid,
-// wt_kill, wt_spawn, wt_home_dir are now implemented in src/wasm_rt.almd
-// The Rust versions below are ONLY used by wasmtime linker host functions.
-
-// --- HTTP (used by linker host function only) ---
+// --- Native services invoked by checked Almide MCP handlers ---
 
 /// Execute an HTTP request. Returns JSON response string.
 pub fn wt_http_request(method: impl AsRef<str>, url: impl AsRef<str>, headers_json: impl AsRef<str>, body: impl AsRef<str>) -> String {
     let client = match reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(30))
         .build() {
         Ok(c) => c,
@@ -658,45 +532,7 @@ fn exec_sandboxed_macos(
     cmd: &str, args: &[String], allowed_dirs: &[String], allowed_net: &[String],
     env_vars: &[(String, String)], cwd: &str,
 ) -> String {
-    // Build sandbox-exec profile
-    // Strategy: allow default + deny writes outside allowed dirs + deny reads on sensitive dirs
-    let mut profile = String::from("(version 1)\n(allow default)\n");
-
-    // FS write: restricted only when -v is specified (opt-in)
-    if !allowed_dirs.is_empty() {
-        profile.push_str("(deny file-write*)\n");
-        for dir in allowed_dirs.iter() {
-            let clean = dir.trim_end_matches(":ro");
-            if !dir.ends_with(":ro") {
-                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
-            }
-        }
-        profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/var\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    }
-    // FS read: deny cryptographic keys ---
-    if let Ok(home) = std::env::var("HOME") {
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
-    }
-
-    // --- Network restrictions ---
-    if !allowed_net.is_empty() {
-        profile.push_str("(deny network-outbound)\n");
-        profile.push_str("(allow network-outbound (local udp))\n");
-        profile.push_str("(allow network-outbound (remote unix-socket))\n");
-        for host in allowed_net {
-            if let Some(colon) = host.rfind(':') {
-                let port = &host[colon + 1..];
-                profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));
-            } else {
-                profile.push_str("(allow network-outbound (remote tcp \"*:*\"))\n");
-            }
-        }
-    }
+    let profile = build_sandbox_profile_rs(allowed_dirs, allowed_net);
 
     let mut command = std::process::Command::new("sandbox-exec");
     command.arg("-p").arg(&profile).arg(cmd).args(args);
@@ -725,29 +561,10 @@ fn exec_sandboxed_linux(
     cmd: &str, args: &[String], allowed_dirs: &[String], _allowed_net: &[String],
     env_vars: &[(String, String)], cwd: &str,
 ) -> String {
-    // Linux: use unshare if available, fallback to direct exec with chroot-like restriction
-    // For now, basic implementation without root (no namespace)
-    let mut command = std::process::Command::new(cmd);
-    command.args(args);
-    if !cwd.is_empty() {
-        command.current_dir(cwd);
-    }
-    for (k, v) in env_vars {
-        command.env(k, v);
-    }
-    // TODO: Add unshare/seccomp when running as root
+    // Fail closed until a Linux isolation backend enforces every requested rule.
+    let _ = (cmd, args, allowed_dirs, env_vars, cwd);
+    serde_json::json!({"error": "native sandbox unavailable on Linux; use a WASM agent"}).to_string()
 
-    match command.output() {
-        Ok(output) => {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
-            let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
-            format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
-        }
-        Err(e) => format!("{{\"error\":\"exec failed: {}\"}}", e),
-    }
 }
 
 /// Replace the current process with a sandboxed command (Unix exec).
@@ -803,41 +620,41 @@ pub fn wt_exec_replace(
     }
 }
 
+fn sandbox_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Shared sandbox profile builder for Rust-side exec functions.
-#[cfg(target_os = "macos")]
 fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    // FS write: restricted only when -v is specified (opt-in)
-    if !allowed_dirs.is_empty() {
+    // Writes require explicit mounts even when the list is empty.
+    {
         profile.push_str("(deny file-write*)\n");
         for dir in allowed_dirs.iter() {
             let clean = dir.trim_end_matches(":ro");
             if !dir.ends_with(":ro") {
-                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", clean));
+                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(clean)));
             }
         }
         profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
         profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/private/var\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/var\"))\n");
         profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
     }
     // FS read: deny cryptographic keys only
     if let Ok(home) = std::env::var("HOME") {
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", home));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", home));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", sandbox_literal(&home)));
+        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", sandbox_literal(&home)));
     }
     // Network: open by default (like Docker). --allow-net restricts to listed ports only.
     if !allowed_net.is_empty() {
         profile.push_str("(deny network-outbound)\n");
-        profile.push_str("(allow network-outbound (local udp))\n");
-        profile.push_str("(allow network-outbound (remote unix-socket))\n");
+
         for host in allowed_net {
-            if let Some(colon) = host.rfind(':') {
-                let port = &host[colon + 1..];
-                profile.push_str(&format!("(allow network-outbound (remote tcp \"*:{}\"))\n", port));
-            } else {
-                profile.push_str("(allow network-outbound (remote tcp \"*:*\"))\n");
+            if let Some((address, port)) = host.rsplit_once(':') {
+                if port == "*" || port.parse::<u16>().is_ok_and(|p| p > 0) {
+                    let address = if address == "127.0.0.1" || address == "localhost" { "localhost" } else { "*" };
+                    profile.push_str(&format!("(allow network-outbound (remote tcp \"{}:{}\"))\n", address, port));
+                }
             }
         }
     }
@@ -923,8 +740,8 @@ fn host_matches(host: &str, pattern: &str) -> bool {
             return true;
         }
         if host.len() > suffix.len() + 1 {
-            let tail = &host[host.len() - suffix.len() - 1..];
-            if tail.eq_ignore_ascii_case(&format!(".{}", suffix)) {
+            let tail = host.get(host.len() - suffix.len() - 1..);
+            if tail.is_some_and(|tail| tail.eq_ignore_ascii_case(&format!(".{}", suffix))) {
                 return true;
             }
         }
@@ -1219,4 +1036,34 @@ pub fn wt_exec_supervised(
         let _ = (allowed_dirs, allowed_net, env_vars);
         -1
     }
+}
+
+/// Parse TOML through the maintained parser, preserving JSON-compatible values.
+pub fn wt_parse_toml(content: impl AsRef<str>) -> String {
+    match toml::from_str::<toml::Value>(content.as_ref()) {
+        Ok(value) => serde_json::json!({"value": value}).to_string(),
+        Err(error) => serde_json::json!({"error": error.to_string()}).to_string(),
+    }
+}
+
+pub fn wt_sandbox_profile(dirs_json: impl AsRef<str>, net_json: impl AsRef<str>) -> String {
+    match (serde_json::from_str::<Vec<String>>(dirs_json.as_ref()), serde_json::from_str::<Vec<String>>(net_json.as_ref())) {
+        (Ok(dirs), Ok(net)) => build_sandbox_profile_rs(&dirs, &net),
+        _ => "(version 1)\n(deny default)\n".to_string(),
+    }
+}
+
+/// Use the same URL parser as the HTTP transport, never a string split.
+pub fn wt_is_host_allowed(url: impl AsRef<str>, allowed_json: impl AsRef<str>) -> bool {
+    let Ok(url) = reqwest::Url::parse(url.as_ref()) else { return false };
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
+    let Ok(allowed) = serde_json::from_str::<Vec<String>>(allowed_json.as_ref()) else { return false };
+    allowed.iter().any(|rule| {
+        let Some((allowed_host, allowed_port)) = rule.rsplit_once(':') else { return false };
+        (allowed_host == "*" || allowed_host.eq_ignore_ascii_case(host)) &&
+            (allowed_port == "*" || allowed_port.parse::<u16>().ok() == Some(port))
+    })
 }

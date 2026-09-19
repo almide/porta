@@ -150,7 +150,7 @@ fn build_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, e
     env_vars: env,
     secrets: opts.secrets,
     wasm_args: opts.wasm_args,
-    preopen_dirs: if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."],
+    preopen_dirs: opts.preopen_dirs,
     allowed_commands: opts.allow_exec,
     allowed_hosts: opts.allow_net,
   }
@@ -250,13 +250,18 @@ fn print_help(topic: String) -> Unit =
       println("List running and stopped instances.")
     },
     _ => {
-      println("porta — WASM agent MCP bridge")
+      println("porta — WASM agents, teams, and MCP tools")
       println("")
       println("Project:")
       println("  init          Create porta.toml")
       println("  up            Run from porta.toml")
       println("")
       println("Runtime:")
+      println("  agent-journal Inspect a stopped journal without replay or effects")
+      println("  agent-check   Validate and inspect a team without executing it")
+      println("  agent         Run a WASM agent or team; optionally record/checkpoint")
+      println("  agent-resume  Continue a recorded WASM run")
+      println("  agent-replay  Verify a completed run without external operations")
       println("  run           Execute WASM or native command")
       println("  serve         Start MCP server")
       println("")

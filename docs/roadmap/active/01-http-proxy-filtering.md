@@ -24,7 +24,7 @@ sandboxed process ──► porta proxy (127.0.0.1:N) ──► internet
 ### How it works
 
 1. porta starts a local TCP proxy on 127.0.0.1:<random> before launching the child
-2. The sandbox-exec profile is rewritten so the only outbound rule is `*:<proxy-port>` (any user-supplied `--allow-net` is ignored with a warning)
+2. The sandbox-exec profile is rewritten so the only outbound rule is `127.0.0.1:<proxy-port>` (any user-supplied `--allow-net` is ignored with a warning)
 3. `HTTP_PROXY` / `HTTPS_PROXY` env vars point the child at the proxy
 4. For HTTPS: the proxy reads the CONNECT method's target hostname, matches against the allow/deny list, and either tunnels or returns 403
 5. No MITM — TLS content is not inspected, only the connection target
@@ -64,7 +64,7 @@ allow = ["api.anthropic.com", "*.anthropic.com"]
 
 ## Known limitations
 
-- `*:<proxy-port>` still allows the sandboxed process to connect to any host on that specific high random port. In practice the port is bound by the proxy and unreachable remotely, but a tighter `remote ip` rule (`127.0.0.1:<port>` literal) would close the door philosophically. Deferred to v2.
+- Egress is restricted to the loopback proxy endpoint; UDP and Unix-socket egress are denied.
 - macOS only for the supervised exec path. Linux support tracked separately.
 - Tools that ignore `HTTPS_PROXY` fail (by design — raw-socket outbound is denied by the sandbox).
 
@@ -79,6 +79,6 @@ allow = ["api.anthropic.com", "*.anthropic.com"]
 
 ## Next iterations
 
-- v2: tighten sandbox net rule to `127.0.0.1:<port>` literal; Linux support
+- v2: Linux support, bounded connections, and private-address policy
 - v3: credential broker — proxy injects scoped tokens so the agent never holds secrets
 - v4: method/path-level policy (may subsume into credential scoping)

@@ -1,4 +1,5 @@
-// JSON-RPC 2.0 over stdio with Content-Length framing
+import value
+// MCP stdio uses one UTF-8 JSON-RPC message per line.
 
 import json
 import io
@@ -10,8 +11,8 @@ type JsonRpcRequest = {
 }
 
 fn make_response(id: Value, result: Value) -> String = {
-  let resp = json.object([
-    ("jsonrpc", json.from_string("2.0")),
+  let resp = value.object([
+    ("jsonrpc", value.str("2.0")),
     ("id", id),
     ("result", result),
   ])
@@ -19,69 +20,34 @@ fn make_response(id: Value, result: Value) -> String = {
 }
 
 fn make_error_response(id: Value, code: Int, message: String) -> String = {
-  let resp = json.object([
-    ("jsonrpc", json.from_string("2.0")),
+  let resp = value.object([
+    ("jsonrpc", value.str("2.0")),
     ("id", id),
-    ("error", json.object([
-      ("code", json.from_int(code)),
-      ("message", json.from_string(message)),
+    ("error", value.object([
+      ("code", value.int(code)),
+      ("message", value.str(message)),
     ])),
   ])
   json.stringify(resp)
 }
 
+fn encode_message(msg: String) -> String = msg + "\n"
+
 effect fn write_message(msg: String) -> Result[Unit, String] = {
-  let header = "Content-Length: ${int.to_string(string.len(msg))}\r\n\r\n"
-  io.print(header + msg)
+  io.print(encode_message(msg))
   ok(())
 }
 
 effect fn read_message() -> Result[Option[JsonRpcRequest], String] = {
   let line = io.read_line()
   if string.len(line) == 0 then ok(none)
-  else {
-    let trimmed = string.trim(line)
-    if string.starts_with(trimmed, "Content-Length:") then {
-      let len_str = string.trim(string.replace(trimmed, "Content-Length:", ""))
-      let len = parse_content_length(string.to_bytes(len_str), 0, 0)
-      skip_headers()!
-      if len <= 0 then ok(none)
-      else {
-        let body_bytes = io.read_n_bytes(len)
-        let body = string.from_bytes(body_bytes)
-        if string.len(body) == 0 then ok(none)
-        else {
-          let r = parse_and_wrap(body)!
-          ok(r)
-        }
-      }
-    }
-    else if string.starts_with(trimmed, "{") then {
-      let r = parse_and_wrap(trimmed)!
-      ok(r)
-    }
-    else read_message()
-  }
-}
-
-fn parse_content_length(bytes: List[Int], idx: Int, acc: Int) -> Int =
-  if idx >= list.len(bytes) then acc
-  else {
-    let b = list.get(bytes, idx) ?? 0
-    if b >= 48 and b <= 57 then parse_content_length(bytes, idx + 1, acc * 10 + (b - 48))
-    else acc
-  }
-
-effect fn skip_headers() -> Unit = {
-  let line = io.read_line()
-  if string.len(string.trim(line)) == 0 then ()
-  else skip_headers()
+  else parse_and_wrap(line)
 }
 
 effect fn parse_and_wrap(body: String) -> Result[Option[JsonRpcRequest], String] = {
   let parsed = json.parse(body)!
-  let id = json.get(parsed, "id") ?? json.null()
+  let id = value.field(parsed, "id") ?? value.null()
   let method = json.get_string(parsed, "method") ?? ""
-  let params = json.get(parsed, "params") ?? json.object([])
+  let params = value.field(parsed, "params") ?? value.object([])
   ok(some({id: id, method: method, params: params}))
 }

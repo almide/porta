@@ -44,7 +44,7 @@ test "endpoint: formats as http://127.0.0.1:PORT" {
   assert_eq(proxy.endpoint(h), "http://127.0.0.1:42123")
 }
 
-test "sandbox_net_rule: formats as *:PORT" {
+test "sandbox_net_rule: formats as 127.0.0.1:PORT" {
   let h: proxy.ProxyHandle = {handle: 0, port: 42123}
-  assert_eq(proxy.sandbox_net_rule(h), "*:42123")
+  assert_eq(proxy.sandbox_net_rule(h), "127.0.0.1:42123")
 }

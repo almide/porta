@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Demo MCP agent with file and utility tools",
   "entry": "_start",
-  "capabilities": ["io", "fs", "fs.write", "process", "clock", "random"],
+  "capabilities": ["io", "fs", "fs.write", "process", "env", "clock", "random"],
   "tools": [
     {
       "name": "hello",

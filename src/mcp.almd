@@ -1,3 +1,4 @@
+import value
 // MCP Protocol State Machine
 
 import json
@@ -26,7 +27,9 @@ fn new_server(m: manifest.Manifest, config: dispatch.InstanceConfig) -> McpServe
 // --- Handle a single request ---
 
 effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] =
-  match req.method {
+  if string.starts_with(req.method, "notifications/") and req.method != "notifications/initialized" then
+    ok({server: server, response: none})
+  else match req.method {
     "initialize" => handle_initialize(server, req),
     "notifications/initialized" => ok({server: {...server, state: Ready}, response: none}),
     "tools/list" => handle_tools_list(server, req),
@@ -35,21 +38,21 @@ effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Resu
     "resources/read" => handle_resources_read(server, req),
     "prompts/list" => handle_prompts_list(server, req),
     "prompts/get" => handle_prompts_get(server, req),
-    "ping" => ok({server: server, response: some(jsonrpc.make_response(req.id, json.object([])))}),
+    "ping" => ok({server: server, response: some(jsonrpc.make_response(req.id, value.object([])))}),
     _ => ok({server: server, response: some(jsonrpc.make_error_response(req.id, -32601, "Method not found: ${req.method}"))}),
   }
 
 effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let result = json.object([
-    ("protocolVersion", json.from_string("2025-03-26")),
-    ("serverInfo", json.object([
-      ("name", json.from_string("porta/${server.manifest.name}")),
-      ("version", json.from_string(server.manifest.version)),
+  let result = value.object([
+    ("protocolVersion", value.str("2025-03-26")),
+    ("serverInfo", value.object([
+      ("name", value.str("porta/${server.manifest.name}")),
+      ("version", value.str(server.manifest.version)),
     ])),
-    ("capabilities", json.object([
-      ("tools", json.object([("listChanged", json.from_bool(false))])),
-      ("resources", json.object([("listChanged", json.from_bool(false))])),
-      ("prompts", json.object([("listChanged", json.from_bool(false))])),
+    ("capabilities", value.object([
+      ("tools", value.object([("listChanged", value.bool(false))])),
+      ("resources", value.object([("listChanged", value.bool(false))])),
+      ("prompts", value.object([("listChanged", value.bool(false))])),
     ])),
   ])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
@@ -57,49 +60,49 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 
 effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let agent_tools = server.manifest.tools |> list.map((tool) =>
-    json.object([
-      ("name", json.from_string(tool.name)),
-      ("description", json.from_string(tool.description)),
+    value.object([
+      ("name", value.str(tool.name)),
+      ("description", value.str(tool.description)),
       ("inputSchema", tool.input_schema),
     ])
   )
   let builtin_tools = [
-    json.object([
-      ("name", json.from_string("porta.exec")),
-      ("description", json.from_string("Execute a command with filesystem and network restrictions")),
-      ("inputSchema", json.object([
-        ("type", json.from_string("object")),
-        ("properties", json.object([
-          ("command", json.object([("type", json.from_string("string")), ("description", json.from_string("Command to execute"))])),
-          ("args", json.object([("type", json.from_string("array")), ("items", json.object([("type", json.from_string("string"))])), ("description", json.from_string("Command arguments"))])),
-          ("cwd", json.object([("type", json.from_string("string")), ("description", json.from_string("Working directory"))])),
+    value.object([
+      ("name", value.str("porta.exec")),
+      ("description", value.str("Execute a command with filesystem and network restrictions")),
+      ("inputSchema", value.object([
+        ("type", value.str("object")),
+        ("properties", value.object([
+          ("command", value.object([("type", value.str("string")), ("description", value.str("Command to execute"))])),
+          ("args", value.object([("type", value.str("array")), ("items", value.object([("type", value.str("string"))])), ("description", value.str("Command arguments"))])),
+          ("cwd", value.object([("type", value.str("string")), ("description", value.str("Working directory"))])),
         ])),
-        ("required", json.array([json.from_string("command")])),
+        ("required", value.array([value.str("command")])),
       ])),
     ]),
-    json.object([
-      ("name", json.from_string("porta.http")),
-      ("description", json.from_string("Make an HTTP request")),
-      ("inputSchema", json.object([
-        ("type", json.from_string("object")),
-        ("properties", json.object([
-          ("method", json.object([("type", json.from_string("string")), ("description", json.from_string("HTTP method: GET, POST, PUT, DELETE"))])),
-          ("url", json.object([("type", json.from_string("string")), ("description", json.from_string("Request URL"))])),
-          ("headers", json.object([("type", json.from_string("object")), ("description", json.from_string("Request headers"))])),
-          ("body", json.object([("type", json.from_string("string")), ("description", json.from_string("Request body"))])),
+    value.object([
+      ("name", value.str("porta.http")),
+      ("description", value.str("Make an HTTP request")),
+      ("inputSchema", value.object([
+        ("type", value.str("object")),
+        ("properties", value.object([
+          ("method", value.object([("type", value.str("string")), ("description", value.str("HTTP method: GET, POST, PUT, DELETE"))])),
+          ("url", value.object([("type", value.str("string")), ("description", value.str("Request URL"))])),
+          ("headers", value.object([("type", value.str("object")), ("description", value.str("Request headers"))])),
+          ("body", value.object([("type", value.str("string")), ("description", value.str("Request body"))])),
         ])),
-        ("required", json.array([json.from_string("method"), json.from_string("url")])),
+        ("required", value.array([value.str("method"), value.str("url")])),
       ])),
     ]),
   ]
   let all_tools = agent_tools + builtin_tools
-  let result = json.object([("tools", json.array(all_tools))])
+  let result = value.object([("tools", value.array(all_tools))])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
 }
 
 effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let tool_name = json.get_string(req.params, "name") ?? ""
-  let arguments = json.get(req.params, "arguments") ?? json.object([])
+  let arguments = value.field(req.params, "arguments") ?? value.object([])
 
   // Built-in tools with capability enforcement
   if tool_name == "porta.exec" then {
@@ -155,101 +158,63 @@ effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
       let updated_metrics = observability.merge_tool_call(server.metrics, tool_result.metrics.steps, tool_result.metrics.memory_pages)
       let server = {...server, metrics: updated_metrics}
 
-      // Parse stdout: expect {"ok": ...} or {"err": ...}
-      let output = tool_result.stdout
-      let parsed = json.parse(output)
-      let result = match parsed {
-        ok(v) => {
-          let ok_val = json.get(v, "ok")
-          let err_val = json.get(v, "err")
-          match ok_val {
-            some(ov) => json.object([
-              ("content", json.array([
-                json.object([
-                  ("type", json.from_string("text")),
-                  ("text", match json.as_string(ov) { some(s) => json.from_string(s), none => ov }),
-                ]),
-              ])),
-              ("isError", json.from_bool(false)),
-            ]),
-            none => match err_val {
-              some(ev) => json.object([
-                ("content", json.array([
-                  json.object([
-                    ("type", json.from_string("text")),
-                    ("text", match json.as_string(ev) { some(s) => json.from_string(s), none => ev }),
-                  ]),
-                ])),
-                ("isError", json.from_bool(true)),
-              ]),
-              none => json.object([
-                ("content", json.array([
-                  json.object([
-                    ("type", json.from_string("text")),
-                    ("text", json.from_string(output)),
-                  ]),
-                ])),
-                ("isError", json.from_bool(false)),
-              ]),
-            },
-          }
-        },
-        err(_) => {
-          // Raw text output (not JSON)
-          json.object([
-            ("content", json.array([
-              json.object([
-                ("type", json.from_string("text")),
-                ("text", json.from_string(output)),
-              ]),
-            ])),
-            ("isError", json.from_bool(false)),
-          ])
-        },
-      }
+      let result = tool_response(tool_result.stdout, success)
       ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
     },
   }
   } // else (not builtin)
 }
 
+// Legacy single-key Result envelopes are unwrapped. Multi-field results must
+// remain intact: {ok:true,json:"..."} carries more than its status flag.
+fn tool_response(output: String, success: Bool) -> Value = {
+  let rendered = match json.parse(output) {
+    ok(v) => {
+      let keys = value.keys(v)
+      let ok_value = value.field(v, "ok")
+      let err_value = value.field(v, "err")
+      if list.len(keys) == 1 then match ok_value {
+        ok(ov) => {text: value.as_string(ov) ?? json.stringify(ov), failed: not success},
+        err(_) => match err_value {
+          ok(ev) => {text: value.as_string(ev) ?? json.stringify(ev), failed: true},
+          err(_) => {text: output, failed: not success},
+        },
+      }
+      else {
+        let status_failed = json.stringify(ok_value ?? value.null()) == "false"
+        let has_error = match err_value { ok(_) => true, err(_) => false }
+        {text: output, failed: not success or status_failed or has_error}
+      }
+    },
+    err(_) => {text: output, failed: not success},
+  }
+  value.object([
+    ("content", value.array([value.object([
+      ("type", value.str("text")), ("text", value.str(rendered.text)),
+    ])])),
+    ("isError", value.bool(rendered.failed)),
+  ])
+}
+
 // --- Host validation ---
 
-fn is_host_allowed(url: String, allowed: List[String]) -> Bool = {
-  // Extract host and port from URL
-  let is_https = string.starts_with(url, "https://")
-  let is_http = string.starts_with(url, "http://")
-  let scheme_len = if is_https then 8 else if is_http then 7 else 0
-  let after_scheme = string.drop(url, scheme_len)
-  let host_port_part = list.get(string.split(after_scheme, "/"), 0) ?? ""
-  let url_parts = string.split(host_port_part, ":")
-  let url_host = list.get(url_parts, 0) ?? ""
-  let url_port = if list.len(url_parts) > 1 then list.last(url_parts) ?? ""
-    else if is_https then "443" else if is_http then "80" else ""
-  allowed |> list.any((h) => {
-    let parts = string.split(h, ":")
-    let allowed_host = if list.len(parts) > 1 then string.join(list.take(parts, list.len(parts) - 1), ":") else list.get(parts, 0) ?? ""
-    let allowed_port = list.last(parts) ?? ""
-    let host_match = allowed_host == "*" or allowed_host == url_host
-    let port_match = allowed_port == "*" or allowed_port == url_port
-    host_match and port_match
-  })
-}
+fn is_host_allowed(url: String, allowed: List[String]) -> Bool =
+  wasm_rt.wt_is_host_allowed(url, json.stringify(value.array(allowed |> list.map(value.str))))
 
 // --- Built-in tools ---
 
 effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] = {
   let cmd = json.get_string(args, "command") ?? ""
   let cmd_args = json.get_array(args, "args") ?? []
-  let args_strs = cmd_args |> list.filter_map((a) => json.as_string(a))
+  let args_strs = cmd_args |> list.filter_map((a) => match value.as_string(a) { ok(s) => some(s), err(_) => none })
   let cwd = json.get_string(args, "cwd") ?? "."
-  let args_json = json.stringify(json.array(args_strs |> list.map(json.from_string)))
+  let args_json = json.stringify(value.array(args_strs |> list.map(value.str)))
   let dirs = config.preopen_dirs
-  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
-  let net_json = json.stringify(json.array(config.allowed_hosts |> list.map(json.from_string)))
+  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
+  let net_json = json.stringify(value.array(config.allowed_hosts |> list.map(value.str)))
   let all_env = config.env_vars + config.secrets
-  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
-  let env_json = json.stringify(json.array(env_pairs))
+  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
+  let env_json = json.stringify(value.array(env_pairs))
   let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
   let parsed = json.parse(result_json)
   ok(match parsed {
@@ -260,14 +225,14 @@ effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> R
       let output = if error != "" then error
         else if stderr != "" then stdout + "\n--- stderr ---\n" + stderr
         else stdout
-      json.object([
-        ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(output))])])),
-        ("isError", json.from_bool(error != "")),
+      value.object([
+        ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(output))])])),
+        ("isError", value.bool(error != "")),
       ])
     },
-    err(_) => json.object([
-      ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
-      ("isError", json.from_bool(true)),
+    err(_) => value.object([
+      ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(result_json))])])),
+      ("isError", value.bool(true)),
     ]),
   })
 }
@@ -275,7 +240,7 @@ effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> R
 effect fn handle_builtin_http(args: Value) -> Result[Value, String] = {
   let method = json.get_string(args, "method") ?? "GET"
   let url = json.get_string(args, "url") ?? ""
-  let headers = json.get(args, "headers") ?? json.object([])
+  let headers = value.field(args, "headers") ?? value.object([])
   let body = json.get_string(args, "body") ?? ""
   let headers_json = json.stringify(headers)
   let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)!
@@ -285,14 +250,14 @@ effect fn handle_builtin_http(args: Value) -> Result[Value, String] = {
       let body_text = json.get_string(v, "body") ?? ""
       let error = json.get_string(v, "error") ?? ""
       let output = if error != "" then error else body_text
-      json.object([
-        ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(output))])])),
-        ("isError", json.from_bool(error != "")),
+      value.object([
+        ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(output))])])),
+        ("isError", value.bool(error != "")),
       ])
     },
-    err(_) => json.object([
-      ("content", json.array([json.object([("type", json.from_string("text")), ("text", json.from_string(result_json))])])),
-      ("isError", json.from_bool(true)),
+    err(_) => value.object([
+      ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(result_json))])])),
+      ("isError", value.bool(true)),
     ]),
   })
 }
@@ -301,14 +266,14 @@ effect fn handle_builtin_http(args: Value) -> Result[Value, String] = {
 
 effect fn handle_resources_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let resources_json = server.manifest.resources |> list.map((r) =>
-    json.object([
-      ("uri", json.from_string(r.uri)),
-      ("name", json.from_string(r.name)),
-      ("description", json.from_string(r.description)),
-      ("mimeType", json.from_string(r.mime_type)),
+    value.object([
+      ("uri", value.str(r.uri)),
+      ("name", value.str(r.name)),
+      ("description", value.str(r.description)),
+      ("mimeType", value.str(r.mime_type)),
     ])
   )
-  let result = json.object([("resources", json.array(resources_json))])
+  let result = value.object([("resources", value.array(resources_json))])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
 }
 
@@ -321,14 +286,14 @@ effect fn handle_resources_read(server: McpServer, req: jsonrpc.JsonRpcRequest) 
       ok({server: server, response: some(resp)})
     },
     some(r) => {
-      let args_json = json.stringify(json.object([("uri", json.from_string(uri))]))
+      let args_json = json.stringify(value.object([("uri", value.str(uri))]))
       let tool_result = dispatch.dispatch_tool(server.config, "_resource_read", args_json)!
-      let content = json.object([
-        ("contents", json.array([
-          json.object([
-            ("uri", json.from_string(uri)),
-            ("mimeType", json.from_string(r.mime_type)),
-            ("text", json.from_string(tool_result.stdout)),
+      let content = value.object([
+        ("contents", value.array([
+          value.object([
+            ("uri", value.str(uri)),
+            ("mimeType", value.str(r.mime_type)),
+            ("text", value.str(tool_result.stdout)),
           ]),
         ])),
       ])
@@ -342,19 +307,19 @@ effect fn handle_resources_read(server: McpServer, req: jsonrpc.JsonRpcRequest) 
 effect fn handle_prompts_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
   let prompts_json = server.manifest.prompts |> list.map((p) => {
     let args_json = p.arguments |> list.map((a) =>
-      json.object([
-        ("name", json.from_string(a.name)),
-        ("description", json.from_string(a.description)),
-        ("required", json.from_bool(a.required)),
+      value.object([
+        ("name", value.str(a.name)),
+        ("description", value.str(a.description)),
+        ("required", value.bool(a.required)),
       ])
     )
-    json.object([
-      ("name", json.from_string(p.name)),
-      ("description", json.from_string(p.description)),
-      ("arguments", json.array(args_json)),
+    value.object([
+      ("name", value.str(p.name)),
+      ("description", value.str(p.description)),
+      ("arguments", value.array(args_json)),
     ])
   })
-  let result = json.object([("prompts", json.array(prompts_json))])
+  let result = value.object([("prompts", value.array(prompts_json))])
   ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
 }
 
@@ -367,16 +332,16 @@ effect fn handle_prompts_get(server: McpServer, req: jsonrpc.JsonRpcRequest) -> 
       ok({server: server, response: some(resp)})
     },
     some(_p) => {
-      let arguments = json.get(req.params, "arguments") ?? json.object([])
-      let args_json = json.stringify(json.object([("prompt", json.from_string(name)), ("arguments", arguments)]))
+      let arguments = value.field(req.params, "arguments") ?? value.object([])
+      let args_json = json.stringify(value.object([("prompt", value.str(name)), ("arguments", arguments)]))
       let tool_result = dispatch.dispatch_tool(server.config, "_prompt_get", args_json)!
-      let content = json.object([
-        ("messages", json.array([
-          json.object([
-            ("role", json.from_string("user")),
-            ("content", json.object([
-              ("type", json.from_string("text")),
-              ("text", json.from_string(tool_result.stdout)),
+      let content = value.object([
+        ("messages", value.array([
+          value.object([
+            ("role", value.str("user")),
+            ("content", value.object([
+              ("type", value.str("text")),
+              ("text", value.str(tool_result.stdout)),
             ])),
           ]),
         ])),
@@ -388,19 +353,22 @@ effect fn handle_prompts_get(server: McpServer, req: jsonrpc.JsonRpcRequest) -> 
 
 // --- Main loop ---
 
-effect fn serve_loop(server: McpServer) -> Result[Unit, String] = {
-  let msg = jsonrpc.read_message()!
-  match msg {
-    none => ok(()),
-    some(req) => {
-      let result = handle_request(server, req)!
-      match result.response {
-        some(resp) => {
-          jsonrpc.write_message(resp)!
-          serve_loop(result.server)
-        },
-        none => serve_loop(result.server),
-      }
-    },
+effect fn serve_loop(initial: McpServer) -> Result[Unit, String] = {
+  var server = initial
+  var running = true
+  while running {
+    let msg = jsonrpc.read_message()!
+    match msg {
+      none => { running = false },
+      some(req) => {
+        let result = handle_request(server, req)!
+        match result.response {
+          some(resp) => { jsonrpc.write_message(resp)! },
+          none => (),
+        }
+        server = result.server
+      },
+    }
   }
+  ok(())
 }

@@ -1,0 +1,14 @@
+import fs
+import json
+import value
+
+effect fn main() -> Result[Unit, String] = {
+  let read_result = match fs.read_text("/etc/passwd") { ok(_) => "exposed", err(_) => "denied" }
+  let result = json.stringify(value.object([
+    ("host_read", value.str(read_result)),
+  ]))
+  println(json.stringify(value.object([
+    ("action", value.str("done")), ("output", value.str(result)),
+  ])))
+  ok(())
+}

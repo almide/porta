@@ -5,3 +5,5 @@ target/
 tests/fixtures/
 porta
 .almide/cache/
+.tools/
+__pycache__/

@@ -6,6 +6,7 @@ import self.engine
 import self.ops
 import self.build
 import self.project
+import self.agent
 
 fn has_help_flag(args: List[String]) -> Bool =
   args |> list.any((a) => a == "--help" or a == "-h")
@@ -23,6 +24,11 @@ effect fn main() -> Result[Unit, String] = {
       cli.print_help("")
       ok(())
     },
+    "agent-journal" => agent.journal_info(list.drop(args, 2)),
+    "agent-check" => agent.inspect_config(list.drop(args, 2)),
+    "agent" => agent.command(list.drop(args, 2), "run"),
+    "agent-resume" => agent.command(list.drop(args, 2), "resume"),
+    "agent-replay" => agent.command(list.drop(args, 2), "replay"),
     "serve" => {
       if has_help_flag(args) then { cli.print_help("serve"); ok(()) }
       else {

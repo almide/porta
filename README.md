@@ -5,8 +5,8 @@
 <h1 align="center">Porta</h1>
 
 <p align="center">
-  A secure MCP bridge for AI agents and native commands.<br>
-  WASM isolation for agents. OS-level restrictions for everything else.
+  Agents and teams running inside WebAssembly.<br>
+  Isolated tools, host-held credentials, and shared execution budgets.
 </p>
 
 <p align="center">
@@ -17,13 +17,57 @@
 
 ## What is Porta?
 
-Porta controls what programs can access — filesystem, network, commands — using capability-based security.
+Porta runs an agent's decision loop and its tools inside WASM. Agents can ask a
+model, use explicitly granted WASM tools, delegate to other WASM agents, and
+return a result. Porta keeps model credentials outside the guests and enforces
+budgets across the complete team. Explicitly granted [remote MCP tools](docs/agent-mcp.md)
+can be used from the same loop. No Docker daemon is needed.
 
-Two execution modes:
-- **WASM sandbox** — Almide/Rust/C agents compiled to WASM run inside wasmtime with mathematical isolation
-- **Native restrictions** — Any command (Claude Code, Python, Node.js) runs with OS-level filesystem and network restrictions (macOS sandbox-exec)
+It also exposes WASM tools over MCP and supports restricted native commands on
+macOS. The primary runtime is WASM.
 
 ## Quick Start
+
+### Run a WASM agent or team
+
+```bash
+bash scripts/install-almide.sh
+.tools/almide/almide build src/mod.almd -o target/porta
+.tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
+.tools/almide/almide build examples/demo-agent/src/mod.almd --target wasm -o examples/demo-agent/agent.wasm
+# Set your model endpoint/name in examples/chat-agent/agent.toml and team.toml.
+target/porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
+target/porta agent examples/chat-agent/team.toml -- "Ask the calculator to add 20 and 22."
+```
+
+See [WASM agents and teams](docs/agent-runtime.md) for configuration, grants,
+protocol, execution limits, and the offline integration suite. Tool arguments are
+validated before WASM execution; schema errors can be corrected by the agent
+within its existing budget.
+The optional [WASM computation tool](examples/compute/README.md) executes bounded
+scripts for decimal arithmetic and JSON transformations, without filesystem or
+network access. Its results can feed separately granted writing tools.
+It can also be served to other MCP clients with `porta serve` using its manifest.
+WASM `run` and `serve` require explicit `-v` directory grants; the current directory
+is not mounted automatically.
+Stopped journals can be inspected with `porta agent-journal` without loading code
+or revealing the conversation. Runs can be [checkpointed, resumed, and replayed](docs/agent-journals.md) without
+repeating completed model calls or tool writes. [Completion checks](docs/completion-checks.md)
+can require independent WASM validation before accepting the final answer.
+[Offline team inspection](docs/agent-check.md) validates settings and reports
+grants, budgets and artifacts without credentials or execution.
+[Artifact pins](docs/artifact-pins.md) bind WASM and delegated policies to reviewed
+SHA-256 values, with strict enforcement across the team.
+[Pre-tool checks](docs/before-tool-checks.md) can enforce prerequisites before writes,
+remote calls or delegation execute.
+[Measured startup overhead](docs/benchmarks/README.md) is published with raw
+samples and explicit comparison limits. The [first real-model comparison](docs/benchmarks/real-model-evaluation.md)
+and [verification-assisted follow-up](docs/benchmarks/verified-model-evaluation.md)
+record failures as well as successes. A [compact-result follow-up](docs/benchmarks/compact-results-evaluation.md)
+reduces model calls on the passing release task. With an explicit pre-tool policy,
+the [latest small-suite comparison](docs/benchmarks/pre-tool-policy-evaluation.md) records
+6/12 full passes for Porta versus 3/12 for Docker Agent following instructions alone;
+this does not demonstrate broader quality superiority or exclude equivalent Docker policies.
 
 ### Run Claude Code with restrictions
 
@@ -106,6 +150,9 @@ porta up -- --print "hi"   # Pass arguments to the command
 
 | Command | Description |
 |---------|-------------|
+| `porta agent <agent.toml> [--record <journal>] -- <task>` | Run a WASM agent or team |
+| `porta agent-resume <agent.toml> <journal>` | Continue a recorded run |
+| `porta agent-replay <agent.toml> <journal>` | Verify a completed run offline |
 | `porta run <target>` | Execute WASM (.wasm) or native command |
 | `porta run -d <agent.wasm>` | Run WASM as background daemon |
 | `porta serve <agent.wasm>` | Start MCP server on stdio |
@@ -162,11 +209,28 @@ Uses `sandbox-exec` to enforce:
 | Control | Behavior |
 |---------|----------|
 | **FS write** | Denied everywhere except `-v` mounted dirs and `/tmp` |
-| **FS read** | `~/.ssh` and `~/.gnupg` denied (cryptographic keys). Everything else user-configurable via `-v` |
+| **FS read** | `~/.ssh` and `~/.gnupg` denied (cryptographic keys). Other readable host files remain accessible; `-v` controls writes |
 | **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
 | **Read-only** | `-v ./data:ro` → read OK, write denied |
 
 > Note: macOS sandbox-exec supports port-based filtering only. Host-based filtering (`api.example.com:443`) is enforced at the MCP layer for builtin tools.
+
+### Host-filtered HTTPS
+
+```bash
+porta run claude -v . --proxy-allow "api.anthropic.com,*.anthropic.com"
+```
+
+Or add `[proxy]` with `allow = ["api.anthropic.com"]` to `porta.toml`.
+Both `run` and `up` apply the same policy. The child can connect only to the
+local CONNECT proxy; direct TCP, UDP, and Unix-socket egress are denied.
+Only HTTPS CONNECT on port 443 is supported. Clients must respect `HTTPS_PROXY`.
+This filters connection targets, not TLS contents. Deny lists are weaker than
+explicit allow lists. It is not a credential broker or a private-address filter.
+
+Native restrictions currently require **macOS**. On Linux native execution
+fails closed; WASM remains available. Native read access is broader than write
+access: this is not a container filesystem or complete secret isolation.
 
 ### WASM Sandbox
 
@@ -187,6 +251,10 @@ Deny-by-default capability system. Every WASI import is validated against the ca
 Built-in profiles: `ai-agent` (IO + Process), `worker` (+Clock +Random), `full` (all).
 
 Manifest capabilities are respected in both `serve` and `run` modes.
+Direct `porta.exec_command` / `porta.http_request` WASM imports are rejected;
+host execution and HTTP requests go through the checked MCP built-in tools.
+`porta.http` accepts HTTP(S) URLs without userinfo and does not follow redirects
+or inherit host proxy settings.
 
 ## MCP Server
 
@@ -230,7 +298,7 @@ porta
 ├── engine.almd         — serve, run, validate, inspect
 ├── dispatch.almd       — WASM instance lifecycle & tool dispatch
 ├── mcp.almd            — MCP protocol (JSON-RPC 2.0 / stdio)
-├── jsonrpc.almd        — Content-Length framed JSON-RPC
+├── jsonrpc.almd        — Newline-delimited JSON-RPC
 ├── sandbox.almd        — Capability-based security
 │
 ├── ops.almd            — Daemon management (ps/stop/kill/logs/rm)
@@ -251,10 +319,18 @@ porta
 ## Install
 
 ```bash
-# From source (requires Almide >= 0.12.0)
-almide build src/mod.almd -o porta
-cp porta ~/.local/bin/
+# From source (Almide 0.63.0, Rust toolchain, Python 3, curl)
+bash scripts/install-almide.sh
+.tools/almide/almide build src/mod.almd -o target/porta
+.tools/almide/almide test --ci
+python3 scripts/integration.py target/porta
+cp target/porta ~/.local/bin/
 ```
+
+The compiler target is **0.63.0**. As of 2026-09-19, the published artifact is
+`v0.63.0-rc1` (reports `almide 0.63.0`); the installer pins that release and checks
+its published SHA-256. Once the final tag is published, select it with
+`ALMIDE_RELEASE_TAG=v0.63.0 bash scripts/install-almide.sh`.
 
 ## Language Support
 

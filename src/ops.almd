@@ -1,3 +1,4 @@
+import value
 // Instance lifecycle: daemon management, ps, stop, kill, logs, rm
 
 import process
@@ -31,11 +32,11 @@ effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[U
   ensure_porta_dir()!
   let dir = instance_dir(id)
   fs.mkdir_p(dir)!
-  let info = json.stringify(json.object([
-    ("id", json.from_string(id)),
-    ("wasm", json.from_string(wasm_path)),
-    ("pid", json.from_int(pid)),
-    ("status", json.from_string("running")),
+  let info = json.stringify(value.object([
+    ("id", value.str(id)),
+    ("wasm", value.str(wasm_path)),
+    ("pid", value.int(pid)),
+    ("status", value.str("running")),
   ]))
   fs.write(dir + "/instance.json", info)!
   ok(())
@@ -66,7 +67,7 @@ effect fn run_detached(opts: cli.Options) -> Result[Unit, String] = {
   ensure_porta_dir()!
   let self_path = list.get(process.args(), 0) ?? "porta"
   let child_args = ["run", "--_daemon", id, opts.path] + serialize_opts(opts)
-  let args_json = json.stringify(json.array(child_args |> list.map(json.from_string)))
+  let args_json = json.stringify(value.array(child_args |> list.map(value.str)))
   let pid = wasm_rt.wt_spawn(self_path, args_json)!
   if pid < 0 then err("failed to spawn daemon")
   else {
@@ -87,12 +88,12 @@ effect fn run_as_daemon(opts: cli.Options) -> Result[Unit, String] = {
   if string.len(result.stdout) > 0 then fs.write(dir + "/stdout.log", result.stdout)! else ()
   if string.len(result.stderr) > 0 then fs.write(dir + "/stderr.log", result.stderr)! else ()
   // Update status
-  let info = json.stringify(json.object([
-    ("id", json.from_string(id)),
-    ("wasm", json.from_string(opts.path)),
-    ("pid", json.from_int(wasm_rt.wt_getpid())),
-    ("status", json.from_string("exited")),
-    ("exit_code", json.from_int(result.exit_code)),
+  let info = json.stringify(value.object([
+    ("id", value.str(id)),
+    ("wasm", value.str(opts.path)),
+    ("pid", value.int(wasm_rt.wt_getpid())),
+    ("status", value.str("exited")),
+    ("exit_code", value.int(result.exit_code)),
   ]))
   fs.write(dir + "/instance.json", info)!
   ok(())
@@ -135,11 +136,11 @@ effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
       if result == 0 then {
         println(if signal == 9 then "killed: " + id else "stopped: " + id)
         // Update status
-        let updated = json.stringify(json.object([
-          ("id", json.from_string(id)),
-          ("wasm", json.from_string(json.get_string(v, "wasm") ?? "")),
-          ("pid", json.from_int(pid)),
-          ("status", json.from_string("stopped")),
+        let updated = json.stringify(value.object([
+          ("id", value.str(id)),
+          ("wasm", value.str(json.get_string(v, "wasm") ?? "")),
+          ("pid", value.int(pid)),
+          ("status", value.str("stopped")),
         ]))
         fs.write(info_path, updated)!
         ok(())

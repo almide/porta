@@ -185,14 +185,22 @@ test "validate_imports: denied import" {
   assert(result.is_err(sandbox.validate_imports(imports, caps)))
 }
 
-test "validate_imports: non-wasi imports always pass" {
+test "validate_imports: non-wasi imports fail closed" {
   let imports: List[binary.Import] = [
     {mod_name: "env", name: "some_func", desc: binary.ImportFunc(0)},
   ]
   let caps = sandbox.empty()
-  assert_eq(sandbox.validate_imports(imports, caps), ok(()))
+  assert(result.is_err(sandbox.validate_imports(imports, caps)))
 }
 
 test "validate_imports: empty imports" {
   assert_eq(sandbox.validate_imports([], sandbox.empty()), ok(()))
+}
+
+
+test "direct host execution import is denied even with full capabilities" {
+  let imports: List[binary.Import] = [
+    {mod_name: "porta", name: "exec_command", desc: binary.ImportFunc(0)},
+  ]
+  assert(result.is_err(sandbox.validate_imports(imports, sandbox.profile_full())))
 }

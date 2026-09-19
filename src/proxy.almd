@@ -1,3 +1,4 @@
+import value
 // HTTPS CONNECT proxy: hostname allow/deny enforced in the Rust bridge.
 // Almide owns config shape and lifecycle; the accept loop runs in a native thread.
 
@@ -32,8 +33,8 @@ fn validate(c: ProxyConfig) -> Result[Unit, String] =
 
 effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
   validate(c)!
-  let allow_json = json.stringify(json.array(c.allow |> list.map(json.from_string)))
-  let deny_json = json.stringify(json.array(c.deny |> list.map(json.from_string)))
+  let allow_json = json.stringify(value.array(c.allow |> list.map(value.str)))
+  let deny_json = json.stringify(value.array(c.deny |> list.map(value.str)))
   let result_json = wasm_rt.wt_proxy_start(allow_json, deny_json, c.audit_path)
   let parsed = json.parse(result_json)!
   let error = json.get_string(parsed, "error") ?? ""
@@ -56,4 +57,4 @@ effect fn stop(h: ProxyHandle) -> Result[Unit, String] = {
 fn endpoint(h: ProxyHandle) -> String = "http://127.0.0.1:${int.to_string(h.port)}"
 
 // sandbox-exec allow rule that restricts net to just the proxy port.
-fn sandbox_net_rule(h: ProxyHandle) -> String = "*:${int.to_string(h.port)}"
+fn sandbox_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"

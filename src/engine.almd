@@ -1,3 +1,4 @@
+import value
 // Engine: WASM/native execution, MCP serve, validate, inspect
 
 import fs
@@ -27,7 +28,7 @@ effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
         |> list.filter((exp) => match exp.kind { binary.ExportFunc => true, _ => false })
         |> list.filter((exp) => exp.name != "_start" and exp.name != "__alloc" and exp.name != "memory")
         |> list.map((exp) => {
-          let tool: manifest.ToolDef = {name: exp.name, description: exp.name, input_schema: json.object([])}
+          let tool: manifest.ToolDef = {name: exp.name, description: exp.name, input_schema: value.object([])}
           tool
         })
       let m: manifest.Manifest = {
@@ -83,14 +84,14 @@ effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
 
 effect fn run_native_direct(opts: cli.Options) -> Result[Unit, String] = {
   let cmd = opts.path
-  let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
+  let args_json = json.stringify(value.array(opts.wasm_args |> list.map(value.str)))
   let dirs = opts.preopen_dirs
-  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
-  let net_json = json.stringify(json.array(opts.allow_net |> list.map(json.from_string)))
+  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
+  let net_json = json.stringify(value.array(opts.allow_net |> list.map(value.str)))
   let env = cli.resolve_env(opts)!
   let all_env = env + opts.secrets
-  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
-  let env_json = json.stringify(json.array(env_pairs))
+  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
+  let env_json = json.stringify(value.array(env_pairs))
   let first_dir = list.get(dirs, 0) ?? "."
   let cwd = string.replace(first_dir, ":ro", "")
 
@@ -114,12 +115,12 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
   eprintln("[porta] proxy listening on 127.0.0.1:${int.to_string(h.port)}")
 
   let cmd = opts.path
-  let args_json = json.stringify(json.array(opts.wasm_args |> list.map(json.from_string)))
+  let args_json = json.stringify(value.array(opts.wasm_args |> list.map(value.str)))
   let dirs = opts.preopen_dirs
-  let dirs_json = json.stringify(json.array(dirs |> list.map(json.from_string)))
+  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
 
   // Net: strictly the proxy port. Anything else must be blocked at the OS level.
-  let net_json = json.stringify(json.array([json.from_string(proxy.sandbox_net_rule(h))]))
+  let net_json = json.stringify(value.array([value.str(proxy.sandbox_net_rule(h))]))
 
   // Env: inject HTTP(S)_PROXY so well-behaved clients route through the proxy.
   // Raw sockets bypassing HTTPS_PROXY will be blocked by the sandbox net policy.
@@ -132,8 +133,8 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
     {key: "https_proxy", val: endpoint},
   ]
   let all_env = env + opts.secrets + proxy_env
-  let env_pairs = all_env |> list.map((e) => json.array([json.from_string(e.key), json.from_string(e.val)]))
-  let env_json = json.stringify(json.array(env_pairs))
+  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
+  let env_json = json.stringify(value.array(env_pairs))
   let first_dir = list.get(dirs, 0) ?? "."
   let cwd = string.replace(first_dir, ":ro", "")
 
@@ -195,7 +196,7 @@ effect fn validate(opts: cli.Options) -> Result[Unit, String] = {
     }
   })
   if list.len(denied) > 0 then {
-    let first_name = json.get_string(list.get(denied, 0) ?? json.object([]), "name") ?? ""
+    let first_name = json.get_string(list.get(denied, 0) ?? value.object([]), "name") ?? ""
     println("  Result: FAIL — capability denied for '${first_name}'")
   }
   else println("  Result: PASS")
