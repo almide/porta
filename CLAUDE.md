@@ -13,11 +13,17 @@ durable broker records, exclusive access, and replay validation.
 
 ```bash
 bash scripts/install-almide.sh
+bash scripts/install-wasmtime.sh && export PATH="$PWD/.tools/wasmtime:$PATH"
 .tools/almide/almide check src/mod.almd
 .tools/almide/almide build src/mod.almd -o target/porta
 .tools/almide/almide test --ci
 python3 scripts/integration.py target/porta
 ```
+
+`almide test` runs a test file through `wasmtime` when it is on PATH and
+otherwise builds it natively; the native path rebuilds every test binary and
+costs about an hour on a cold cache. Six of the nine files take the wasmtime
+path; `mcp_test`, `sandbox_test` and `wasm_rt_test` always build natively.
 
 The published 0.63.0 artifact is currently v0.63.0-rc1. Keep CI pinned to the
 verified artifact until the final release is published. JSON constructors and
