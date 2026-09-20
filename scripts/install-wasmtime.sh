@@ -2,7 +2,11 @@
 set -euo pipefail
 # Almide runs each test file through wasmtime when it is on PATH and otherwise
 # falls back to a native build. The fallback rebuilds every test binary, which
-# costs about an hour of CI per job on a cold cache.
+# costs about an hour of CI per job on a cold cache. Both paths run the same
+# tests, so this binary is an accelerator, not a build requirement.
+# This is the wasmtime CLI used by the test runner. It is unrelated to the
+# wasmtime crate that almide.toml pins for the host runtime; the versions are
+# independent and do not need to match.
 # Upstream publishes no checksum file, so the digest of each pinned artifact is
 # recorded here and reviewed with the rest of the repository.
 tag="${WASMTIME_RELEASE_TAG:-v47.0.2}"

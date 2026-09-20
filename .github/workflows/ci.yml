@@ -35,7 +35,10 @@ jobs:
         run: bash scripts/install-almide.sh
       - name: Install pinned Wasmtime
         # Almide runs a test file through wasmtime when it is on PATH and
-        # otherwise builds it natively, which dominated the job time.
+        # otherwise builds it natively, which dominated the job time. This is an
+        # accelerator, not a dependency: a failed download must leave the job
+        # slow rather than red, so the tests still decide whether CI passes.
+        continue-on-error: true
         run: |
           bash scripts/install-wasmtime.sh
           echo "$PWD/.tools/wasmtime" >> "$GITHUB_PATH"
