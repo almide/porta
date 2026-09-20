@@ -52,6 +52,14 @@ fn readable_dirs(allowed_dirs: &[String]) -> Vec<String> {
     allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro").to_string()).collect()
 }
 
+/// Everything a strict read policy leaves readable: nothing else on this host
+/// can be opened, including the command porta is being asked to start.
+pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
+    let mut roots = readable_dirs(allowed_dirs);
+    roots.extend(SYSTEM_READABLE.iter().chain(ALWAYS_WRITABLE.iter()).map(|dir| dir.to_string()));
+    roots
+}
+
 /// The Landlock policy a request asks for, or why this kernel cannot apply it.
 pub(crate) fn ruleset(
     allowed_dirs: &[String],

@@ -88,6 +88,19 @@ fn confined_read_rules(allowed_dirs: &[String]) -> String {
     rules
 }
 
+/// Everything a strict read policy leaves readable: nothing else on this host
+/// can be opened, including the command porta is being asked to start. The
+/// single-path literals are left out — a command is never one of them.
+pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
+    allowed_dirs
+        .iter()
+        .map(|dir| dir.trim_end_matches(":ro"))
+        .chain(PROFILE_WRITABLE)
+        .chain(PROFILE_READABLE)
+        .map(|dir| dir.to_string())
+        .collect()
+}
+
 /// The network is open like Docker's until `--allow-net` names a port, which
 /// then closes everything else. Only the port is filtered, not the host.
 fn network_rules(allowed_net: &[String]) -> String {

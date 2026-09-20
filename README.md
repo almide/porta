@@ -144,7 +144,9 @@ Native restrictions cover **macOS** and **Linux**, and not identically. macOS
 uses `sandbox-exec`; Linux uses Landlock. Both enforce writes and TCP ports.
 Reads are open by default on both; `--read-policy strict` closes them on either,
 confining reads to the mounts you granted plus the system directories a command
-needs to start, so nothing under any home directory is readable.
+needs to start, so nothing under any home directory is readable. The command
+itself is subject to that: one installed outside those directories — a
+toolchain under `/opt`, say — needs `-v` on its own directory.
 HTTPS proxy filtering stays macOS-only: it must also deny UDP and Unix sockets,
 which Landlock cannot express, so proxy mode refuses to run on Linux rather than
 enforce part of a policy. A kernel whose Landlock ABI cannot express a requested

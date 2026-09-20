@@ -61,6 +61,12 @@ A path in the system set that does not exist on a host is skipped rather than
 refused: these are the platform's directories, not a caller's grant, and
 `/lib64` is absent on arm64 Debian.
 
+The command itself is subject to the policy: one that lives outside every grant
+and outside the platform set cannot be read, and so cannot be started. A
+toolchain installed under `/opt` — which is what GitHub's hosted Python is —
+needs `-v` on its own directory. porta says that instead of letting the kernel
+answer with a bare `Permission denied` after the policy is already applied.
+
 The default stays `open`. Flipping it is a version boundary, once the grants a
 real agent needs are known.
 

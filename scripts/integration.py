@@ -134,6 +134,15 @@ else:
                      '--', '-c', f'cat {workspace / "input.txt"}; grep -c . /etc/hosts')
         assert result.returncode == 0 and 'workspace input' in result.stdout, result
         assert 'not permitted' not in result.stderr, result
+        # A command the policy does not cover is refused with the grant that
+        # would fix it, not with a bare exec error from the kernel.
+        interpreter = pathlib.Path(sys.executable).resolve()
+        if not str(interpreter).startswith('/usr'):
+            result = run('run', str(interpreter), '--read-policy', 'strict',
+                         '-v', str(workspace), '--', '-c', 'print("must-not-execute")')
+            assert result.returncode != 0, result
+            assert 'must-not-execute' not in result.stdout, result
+            assert 'unreadable' in result.stdout + result.stderr, result
         print('PASS: strict read policy confines reads to grants and system paths')
     elif platform.system() == 'Linux':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
@@ -196,9 +205,21 @@ else:
         result = run('run', '/bin/sh', '--read-policy', 'strict', '-v', str(workspace),
                      '--', '-c', f'cat {workspace / "input.txt"}')
         assert result.returncode == 0 and 'workspace input' in result.stdout, result
-        result = run('run', sys.executable, '--read-policy', 'strict', '-v', str(workspace),
+        # An interpreter is runnable when the policy covers it, which for a
+        # hosted toolchain under /opt means granting its own directory. Without
+        # that grant the run is refused, and says which grant would fix it
+        # rather than failing with a bare exec error.
+        interpreter = pathlib.Path(sys.executable).resolve()
+        result = run('run', str(interpreter), '--read-policy', 'strict',
+                     '-v', str(workspace), '-v', str(interpreter.parent),
                      '--', '-c', 'print("interpreter ran")')
         assert result.returncode == 0 and 'interpreter ran' in result.stdout, result
+        if not str(interpreter).startswith('/usr'):
+            result = run('run', str(interpreter), '--read-policy', 'strict',
+                         '-v', str(workspace), '--', '-c', 'print("must-not-execute")')
+            assert result.returncode != 0, result
+            assert 'must-not-execute' not in result.stdout, result
+            assert 'unreadable' in result.stdout + result.stderr, result
         result = run('run', '/bin/sh', '--read-policy', 'nonsense', '-v', str(workspace),
                      '--', '-c', 'echo must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result

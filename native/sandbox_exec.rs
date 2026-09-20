@@ -5,8 +5,10 @@
 //! express, refusing the run when it cannot express a requested rule.
 
 use crate::json_text::escape_json_text;
+#[cfg(target_os = "linux")]
+use crate::landlock_policy::readable_roots;
 #[cfg(target_os = "macos")]
-use crate::sandbox_profile::build_sandbox_profile_rs;
+use crate::sandbox_profile::{build_sandbox_profile_rs, readable_roots};
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
 
@@ -55,7 +57,36 @@ impl SandboxRequest {
             return Err(format!("unknown read policy: {}; use open or strict", request.read_policy));
         }
         request.allowed_dirs = request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(reason) = request.unreadable_command() {
+            return Err(reason);
+        }
         Ok(request)
+    }
+
+    /// Why a strict read policy cannot start this command, if it cannot. A
+    /// command porta may not read is a command it may not exec, and the kernel
+    /// reports that as a bare `Permission denied` after the policy is already
+    /// applied. The paths are still in hand here, so say what is wrong and
+    /// which grant would fix it. A command named without a path is left to the
+    /// `PATH` lookup: this is a diagnostic, and the enforcement stands either
+    /// way.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn unreadable_command(&self) -> Option<String> {
+        if self.read_policy != "strict" {
+            return None;
+        }
+        let program = std::fs::canonicalize(&self.cmd).ok()?;
+        let roots = readable_roots(&self.allowed_dirs);
+        if roots.iter().any(|root| program.starts_with(root)) {
+            return None;
+        }
+        Some(format!(
+            "--read-policy strict leaves {} unreadable, so it cannot be started; \
+             grant it with -v {} or name a command under a system directory",
+            program.display(),
+            program.parent()?.display(),
+        ))
     }
 
     /// The profile this request asks for. All three macOS entry points build it
