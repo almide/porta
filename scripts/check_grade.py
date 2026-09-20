@@ -8,6 +8,10 @@ import argparse
 import json
 import math
 
+#: Raising either of these would lift the score without changing any code, so
+#: the gate refuses a report that was produced with relaxed thresholds.
+THRESHOLDS = {'cyclomaticComplexity': 10, 'cognitiveComplexity': 15}
+
 parser = argparse.ArgumentParser()
 parser.add_argument('report')
 parser.add_argument('--min-score', type=float, default=90.0)
@@ -15,6 +19,11 @@ parser.add_argument('--worst', type=int, default=8, help='how many files to list
 args = parser.parse_args()
 with open(args.report) as source:
     report = json.load(source)
+
+assert report.get('scoringThresholds') == THRESHOLDS, (
+    f'this report was scored with {report.get("scoringThresholds")}, not the '
+    f'default {THRESHOLDS}. A relaxed threshold raises the grade without '
+    f'changing any code, so it does not count as passing.')
 
 root = report['targetDir'].rstrip('/') + '/'
 analyzed = [f for f in report['files'] if 'score' in f]
