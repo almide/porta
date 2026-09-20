@@ -108,8 +108,8 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 ## Releasing
 
 ```bash
-git tag v0.5.0 && git push origin v0.5.0     # builds, tests and publishes
-bash scripts/verify_release.sh v0.5.0        # installs it the way a user would
+git tag v0.5.1 && git push origin v0.5.1     # builds, tests and publishes
+bash scripts/verify_release.sh v0.5.1        # installs it the way a user would
 ```
 
 `.github/workflows/release.yml` runs the integration suite against the binary
