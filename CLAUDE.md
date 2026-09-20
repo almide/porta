@@ -36,6 +36,9 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - agent-check must not instantiate WASM, resolve credentials, contact services, or create a run.
 - Never deserialize native Wasmtime code from agent-controlled files.
 - Native sandbox execution must fail closed on unsupported platforms.
+- A restriction the platform cannot express must refuse the run, never narrow
+  the policy: macOS enforces through `sandbox-exec`, Linux through Landlock,
+  which covers writes and TCP ports but not reads or proxy mode.
 - `run`, `up`, and MCP execution must share native policy generation.
 - Proxy mode permits only the loopback proxy endpoint, without UDP or Unix sockets.
 - MCP stdio uses newline-delimited JSON; diagnostics belong on stderr.

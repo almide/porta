@@ -1,0 +1,7 @@
+{
+  "rules": {
+    "no-assert": false,
+    "no-print": false,
+    "no-printf": false
+  }
+}

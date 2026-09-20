@@ -109,6 +109,49 @@ else:
         result = run('run', '/bin/sh', '--', '-c', 'touch "$1"', 'sh', str(pathlib.Path(__file__).resolve().parent.parent / ('.' + root.name)))
         assert result.returncode != 0, result
         print('PASS: native exit code, porta.toml proxy enforcement, default write denial')
+    elif platform.system() == 'Linux':
+        result = run('run', '/bin/sh', '--', '-c', 'exit 7')
+        assert result.returncode == 7, result
+        workspace = root / 'landlock'
+        workspace.mkdir()
+        # Inside the mount the command writes; outside every grant it cannot.
+        result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'echo x > "$1"', 'sh',
+                     str(workspace / 'inside'))
+        assert result.returncode == 0, result.stderr
+        assert (workspace / 'inside').read_text() == 'x\n'
+        outside = pathlib.Path('/opt') / ('porta-denied-' + root.name)
+        result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'echo x > "$1"', 'sh', str(outside))
+        assert result.returncode != 0, result
+        assert not outside.exists(), outside
+        # A rule this kernel cannot express must refuse the run, not widen it.
+        result = run('run', '/bin/sh', '--allow-net', 'example.com:*', '-v', str(workspace),
+                     '--', '-c', 'echo must-not-execute')
+        assert result.returncode != 0, result
+        assert 'must-not-execute' not in result.stdout, result
+        assert 'numeric TCP port' in result.stdout + result.stderr, result
+        # The same connect succeeds when its port is granted and fails when another is.
+        import socket
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(2)
+        open_port = listener.getsockname()[1]
+        connect = 'import socket,sys;socket.create_connection(("127.0.0.1",int(sys.argv[1])),2)'
+        try:
+            result = run('run', sys.executable, '--allow-net', f'*:{open_port}', '-v', str(workspace),
+                         '--', '-c', connect, str(open_port))
+            assert result.returncode == 0, result.stderr
+            result = run('run', sys.executable, '--allow-net', '*:443', '-v', str(workspace),
+                         '--', '-c', connect, str(open_port))
+            assert result.returncode != 0, result
+        finally:
+            listener.close()
+        # Proxy mode also has to deny UDP and Unix sockets, which Landlock cannot
+        # express, so it stays refused here rather than partly enforced.
+        result = run('run', '/bin/sh', '--proxy-allow', 'api.example.com', '-v', str(workspace),
+                     '--', '-c', 'echo must-not-execute')
+        assert result.returncode != 0, result
+        assert 'must-not-execute' not in result.stdout, result
+        print('PASS: Landlock write denial, port denial, unexpressible rule and proxy mode refused')
     else:
         result = run('run', '/bin/echo', '--', 'must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result

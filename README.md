@@ -140,11 +140,19 @@ published in the same place.
 
 ## Limits
 
-Native restrictions require **macOS**; on Linux native execution fails closed
-and WASM remains available. Native read access is broader than write access:
-this is not a container filesystem or complete secret isolation. HTTPS proxy
-filtering controls connection targets, not TLS contents. `porta run` and
-`porta serve` mount nothing unless you pass `-v`.
+Native restrictions cover **macOS** and **Linux**, and not identically. macOS
+uses `sandbox-exec`; Linux uses Landlock, which enforces writes and TCP ports
+but **does not confine reads** — it is allow-list only and cannot express the
+macOS denial of `~/.ssh` and `~/.gnupg` while leaving other reads permitted.
+HTTPS proxy filtering stays macOS-only: it must also deny UDP and Unix sockets,
+which Landlock cannot express, so proxy mode refuses to run on Linux rather than
+enforce part of a policy. A kernel whose Landlock ABI cannot express a requested
+rule refuses the run instead of widening it.
+
+Native read access is broader than write access on both: this is not a container
+filesystem or complete secret isolation. HTTPS proxy filtering controls
+connection targets, not TLS contents. `porta run` and `porta serve` mount
+nothing unless you pass `-v`.
 
 ## porta.toml
 
@@ -267,9 +275,22 @@ Only HTTPS CONNECT on port 443 is supported. Clients must respect `HTTPS_PROXY`.
 This filters connection targets, not TLS contents. Deny lists are weaker than
 explicit allow lists. It is not a credential broker or a private-address filter.
 
-Native restrictions currently require **macOS**. On Linux native execution
-fails closed; WASM remains available. Native read access is broader than write
-access: this is not a container filesystem or complete secret isolation.
+### Native Restrictions (Linux)
+
+Uses Landlock, unprivileged and without namespaces or an external runtime:
+
+| Control | Behavior |
+|---------|----------|
+| **FS write** | Denied everywhere except `-v` mounted dirs, `/tmp` and `/dev` |
+| **FS read** | Not confined. Landlock is allow-list only, so the macOS denial of `~/.ssh` and `~/.gnupg` has no equivalent |
+| **Network** | Open by default. `--allow-net '*:443'` restricts TCP connect by port, needing Landlock ABI 4 |
+| **Proxy mode** | Refused. It must also deny UDP and Unix sockets, which Landlock cannot express |
+
+A requested rule this kernel cannot express refuses the run rather than widening
+it: partial enforcement is never silently accepted.
+
+Native read access is broader than write access on both platforms: this is not a
+container filesystem or complete secret isolation.
 
 ### WASM Sandbox
 

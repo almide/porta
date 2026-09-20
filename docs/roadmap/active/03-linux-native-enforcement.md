@@ -3,107 +3,84 @@
 
 **Priority: High**
 
-`porta run <native command>` enforces nothing on Linux. `exec_sandboxed_linux`
-in `native/wasmtime_bridge.rs` is a deliberate fail-closed stub that refuses to
-run rather than run unrestricted, which is correct but leaves the feature
-absent.
+`porta run <native command>` now enforces on Linux through Landlock, in
+`native/landlock.rs`. Writes and TCP ports are restricted; reads and proxy mode
+are not, and both refuse rather than pretend.
 
-## Why this is now the largest gap
+## What holds now
 
-The README leads with restricting an agent the reader already runs:
+Landlock is used unprivileged, without namespaces and without an external
+runtime. The ruleset is built before the fork; the child applies it with two
+syscalls and no allocation. For `porta run`, which replaces the process, porta
+restricts itself and then execs — a ruleset survives `execve`.
 
-```bash
-porta run claude --allow-net 'api.anthropic.com:443' -v ./project -- --print "..."
-```
-
-That is the entry point most people will try first, and it is macOS-only. The
-people who most want an agent that cannot write outside one directory or reach
-an unlisted host are running CI and servers on Linux. Until this exists, the
-claim that the OS stops the agent holds on a laptop and not in production.
-
-## Parity target
-
-A Linux backend has to enforce what the macOS `sandbox-exec` profile already
-does, or refuse the specific rule it cannot enforce:
-
-| Control | Current macOS behaviour |
-|---|---|
-| Filesystem write | denied outside `-v` mounts and `/tmp` |
-| Filesystem read | `~/.ssh` and `~/.gnupg` denied |
-| Read-only mounts | `-v ./data:ro` permits read, denies write |
-| Network | open by default; `--allow-net '*:443'` restricts by port |
-| Proxy mode | only the loopback CONNECT proxy; no UDP, no Unix sockets |
-
-## Feasibility probe
-
-`scripts/probes/landlock_probe.c` handles `WRITE_FILE | MAKE_REG` and
-`CONNECT_TCP` in a single process, allows one directory and port 443, then
-calls `prctl(PR_SET_NO_NEW_PRIVS)` and `landlock_restrict_self`. Two hosts so
-far, with identical results:
-
-| Host | Kernel | Landlock |
+| Control | macOS (`sandbox-exec`) | Linux (Landlock) |
 |---|---|---|
-| Docker Desktop VM, aarch64, Docker's default seccomp applied | 6.12.76-linuxkit | ABI 6 |
-| GitHub `ubuntu-latest`, Ubuntu 24.04.5, x86_64, no seccomp filter | 6.17.0-1022-azure | enforcing |
+| Write outside `-v` mounts | denied | denied |
+| `/tmp` and `/dev` | writable | writable |
+| Read `~/.ssh`, `~/.gnupg` | denied | **not confined** |
+| `--allow-net` by port | enforced | enforced, needs ABI 4 |
+| Proxy mode | enforced | **refused** |
 
-| Operation | Before | After |
+`scripts/integration.py` asserts the Linux half in CI: a write inside a mount
+succeeds, a write outside every grant fails and leaves no file, a connect to a
+granted port succeeds while the same connect fails when another port is granted,
+and both an unexpressible rule and proxy mode refuse to run.
+
+## Why reads are still open
+
+Landlock is allow-list only. The macOS profile denies two paths and permits
+every other read, which cannot be expressed: either reads are not handled, and
+those paths stay readable, or they are handled and every path the command
+legitimately reads has to be enumerated.
+
+Replicating the macOS deny-list is the wrong target. Denying `~/.ssh` and
+`~/.gnupg` while `~/.aws/credentials`, `~/.config/gh`, `~/.npmrc` and every
+`.env` stay readable is a mitigation, not a guarantee, and it contradicts the
+claim that porta runs a command with the permissions it was granted.
+
+The intended end state is deny-by-default reads on **both** platforms:
+
+1. Add `--read-policy` with `open` (today's behaviour) and `strict`
+   (allow-list), defaulting to `open`.
+2. Implement `strict` on Linux first, since Landlock can only do that shape.
+3. Refuse any run whose requested policy the platform cannot express, as the
+   write and network paths already do.
+4. Flip the default to `strict` at a version boundary, once the grants a real
+   agent needs are known.
+
+Until then the documents must say plainly that reads are not confined, which
+they now do.
+
+## Why proxy mode is still refused
+
+The invariant is that proxy mode permits only the loopback proxy endpoint,
+without UDP or Unix sockets. Landlock's network rules cover TCP bind and connect
+only, so it cannot deny UDP or Unix-socket egress. Enforcing the TCP half and
+leaving the rest open would be a policy that looks applied and is not, so
+`wt_exec_supervised` keeps returning a failure on Linux.
+
+Closing this needs a mechanism beyond Landlock — a network namespace, or seccomp
+for the socket families — and it is the same work
+`active/01-http-proxy-filtering.md` defers to its v2.
+
+## Measured hosts
+
+`scripts/probes/landlock_probe.c` reports the ABI and demonstrates enforcement
+on a host. Run it on a target before assuming a rule applies there.
+
+| Host | Kernel | Result |
 |---|---|---|
-| `connect 127.0.0.1:80` | ECONNREFUSED | **EACCES** |
-| `connect 127.0.0.1:443` | ECONNREFUSED | ECONNREFUSED (policy passed) |
-| write in the allowed directory | ok | ok |
-| write outside it | ok | **EACCES** |
+| Docker Desktop VM, aarch64, Docker's default seccomp applied | 6.12.76-linuxkit | ABI 6, enforcing |
+| GitHub `ubuntu-latest`, Ubuntu 24.04.5, x86_64 | 6.17.0-1022-azure | enforcing |
 
-No privileges, no namespaces, no external binary, and the CI runner allows
-unprivileged user namespaces as well, so that route stays open if something
-later needs it. Two kernels are not the matrix: older distribution kernels
-report lower ABI levels and network rules need a sufficient one, so Porta must
-read the ABI at runtime and refuse rules the kernel cannot express.
+Two kernels are not the matrix. Older distribution kernels report lower ABI
+levels, so porta reads the ABI at runtime and refuses rules the kernel cannot
+express.
 
-### One semantic gap found
+## Remaining
 
-Landlock is allow-list only. The macOS profile denies reads of `~/.ssh` and
-`~/.gnupg` while leaving every other read permitted, which Landlock cannot
-express: either read access is not handled at all, and those paths stay
-readable, or it is handled and every path the command legitimately reads has to
-be enumerated. This is a decision to make explicitly, not a detail to discover
-during implementation.
-
-## Candidate mechanisms
-
-Landlock now looks sufficient for writes and TCP ports. The rest remain open for
-what it cannot cover.
-- **seccomp** — syscall filtering. No host or port semantics on its own.
-- **User and network namespaces with bind mounts** — closest to the mount model,
-  but changes the process tree and requires unprivileged user namespaces, which
-  some distributions and container hosts disable.
-- **nftables or cgroup eBPF** — egress control, usually needs privileges Porta
-  should not require.
-- **bubblewrap** — would work, at the cost of an external runtime dependency
-  that the macOS path does not have.
-
-Running inside a container is a common deployment and restricts what any of
-these can do, so the design has to state what holds when Porta itself is
-already containerised.
-
-## Must not regress
-
-`Native sandbox execution must fail closed on unsupported platforms` is a
-standing invariant. Partial support must reject the rules it cannot enforce
-instead of accepting a policy it will not apply. A kernel that supports
-filesystem restrictions but not the requested network rule must refuse that run,
-not run it with the network open.
-
-## Acceptance
-
-- The integration tests that cover the macOS restrictions run on Linux in CI,
-  which already builds on `ubuntu-latest`, including denial cases.
-- A run whose policy cannot be fully enforced fails, and the message names the
-  rule that could not be applied.
-- `docs/` stops carrying the macOS-only caveat for the controls that now hold,
-  and keeps it for those that do not.
-
-## Related
-
-`active/01-http-proxy-filtering.md` records the supervised exec path as macOS
-only and defers Linux to its v2; the proxy and the sandbox need the same
-platform backend, so these should land together rather than twice.
+- `--read-policy strict` on both platforms.
+- Proxy mode on Linux, together with `01-http-proxy-filtering` v2.
+- A host with a Landlock ABI below 4, to confirm the refusal path on a real
+  kernel rather than only by construction.

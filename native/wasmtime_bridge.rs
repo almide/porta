@@ -482,6 +482,71 @@ pub fn wt_inspect(wasm_path: impl AsRef<str>) -> String {
     )
 }
 
+/// One sandboxed execution request, parsed once and shared by both entry points.
+struct SandboxRequest {
+    cmd: String,
+    args: Vec<String>,
+    allowed_dirs: Vec<String>,
+    allowed_net: Vec<String>,
+    env_vars: Vec<(String, String)>,
+    cwd: String,
+}
+
+/// Absolute mount path, keeping the `:ro` marker the policy builders read.
+fn resolve_mount(mount: &str) -> String {
+    let clean = mount.trim_end_matches(":ro");
+    let absolute = if clean.starts_with('/') {
+        clean.to_string()
+    } else {
+        std::fs::canonicalize(clean)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| clean.to_string())
+    };
+    if mount.ends_with(":ro") { format!("{}:ro", absolute) } else { absolute }
+}
+
+fn parse_env_pairs(env_json: &str) -> Vec<(String, String)> {
+    serde_json::from_str::<Vec<Vec<String>>>(env_json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|pair| pair.len() == 2)
+        .map(|pair| (pair[0].clone(), pair[1].clone()))
+        .collect()
+}
+
+impl SandboxRequest {
+    fn parse(
+        cmd: &str,
+        args_json: &str,
+        allowed_dirs_json: &str,
+        allowed_net_json: &str,
+        env_json: &str,
+        cwd: &str,
+    ) -> Self {
+        let raw_dirs: Vec<String> = serde_json::from_str(allowed_dirs_json).unwrap_or_default();
+        SandboxRequest {
+            cmd: cmd.to_string(),
+            args: serde_json::from_str(args_json).unwrap_or_default(),
+            allowed_dirs: raw_dirs.iter().map(|dir| resolve_mount(dir)).collect(),
+            allowed_net: serde_json::from_str(allowed_net_json).unwrap_or_default(),
+            env_vars: parse_env_pairs(env_json),
+            cwd: cwd.to_string(),
+        }
+    }
+
+    /// A command carrying this request's arguments, directory and environment.
+    fn command(&self, program: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(program);
+        if !self.cwd.is_empty() && self.cwd != "." {
+            command.current_dir(&self.cwd);
+        }
+        for (key, value) in &self.env_vars {
+            command.env(key, value);
+        }
+        command
+    }
+}
+
 /// Execute a command inside an OS-level sandbox.
 /// Returns JSON: {"exit_code":0,"stdout":"...","stderr":"..."} or {"error":"..."}
 pub fn wt_exec_sandboxed(
@@ -492,79 +557,128 @@ pub fn wt_exec_sandboxed(
     env_json: impl AsRef<str>,
     cwd: impl AsRef<str>,
 ) -> String {
-    let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
-    let allowed_dirs_raw: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
-    // Resolve paths, strip :ro suffix for resolution but keep it for sandbox profile
-    let allowed_dirs: Vec<String> = allowed_dirs_raw.iter().map(|d| {
-        let clean = d.trim_end_matches(":ro");
-        let abs = if clean.starts_with('/') {
-            clean.to_string()
-        } else {
-            std::fs::canonicalize(clean).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| clean.to_string())
-        };
-        if d.ends_with(":ro") { format!("{}:ro", abs) } else { abs }
-    }).collect();
-    let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
-    let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|pair| {
-            if pair.len() == 2 { Some((pair[0].clone(), pair[1].clone())) } else { None }
-        })
-        .collect();
-
-    #[cfg(target_os = "macos")]
-    {
-        exec_sandboxed_macos(cmd.as_ref(), &args, &allowed_dirs, &allowed_net, &env_vars, cwd.as_ref())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        exec_sandboxed_linux(cmd.as_ref(), &args, &allowed_dirs, &allowed_net, &env_vars, cwd.as_ref())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        "{\"error\":\"sandboxed execution not supported on this platform\"}".to_string()
-    }
+    let request = SandboxRequest::parse(
+        cmd.as_ref(), args_json.as_ref(), allowed_dirs_json.as_ref(),
+        allowed_net_json.as_ref(), env_json.as_ref(), cwd.as_ref(),
+    );
+    run_sandboxed(&request)
 }
 
 #[cfg(target_os = "macos")]
-fn exec_sandboxed_macos(
-    cmd: &str, args: &[String], allowed_dirs: &[String], allowed_net: &[String],
-    env_vars: &[(String, String)], cwd: &str,
-) -> String {
-    let profile = build_sandbox_profile_rs(allowed_dirs, allowed_net);
-
-    let mut command = std::process::Command::new("sandbox-exec");
-    command.arg("-p").arg(&profile).arg(cmd).args(args);
-    if !cwd.is_empty() {
-        command.current_dir(cwd);
-    }
-    for (k, v) in env_vars {
-        command.env(k, v);
-    }
-
-    match command.output() {
-        Ok(output) => {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let so = stdout.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
-            let se = stderr.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
-            format!("{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}", exit_code, so, se)
-        }
-        Err(e) => format!("{{\"error\":\"sandbox exec failed: {}\"}}", e),
-    }
+fn run_sandboxed(request: &SandboxRequest) -> String {
+    exec_sandboxed_macos(request)
 }
 
 #[cfg(target_os = "linux")]
-fn exec_sandboxed_linux(
-    cmd: &str, args: &[String], allowed_dirs: &[String], _allowed_net: &[String],
-    env_vars: &[(String, String)], cwd: &str,
-) -> String {
-    // Fail closed until a Linux isolation backend enforces every requested rule.
-    let _ = (cmd, args, allowed_dirs, env_vars, cwd);
-    serde_json::json!({"error": "native sandbox unavailable on Linux; use a WASM agent"}).to_string()
+fn run_sandboxed(request: &SandboxRequest) -> String {
+    exec_sandboxed_linux(request)
+}
 
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn run_sandboxed(_request: &SandboxRequest) -> String {
+    "{\"error\":\"sandboxed execution not supported on this platform\"}".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn exec_sandboxed_macos(request: &SandboxRequest) -> String {
+    let profile = build_sandbox_profile_rs(&request.allowed_dirs, &request.allowed_net);
+    let mut command = request.command("sandbox-exec");
+    command.arg("-p").arg(&profile).arg(&request.cmd).args(&request.args);
+    finish_sandboxed(command.output())
+}
+
+/// The single shape every sandboxed execution reports, whatever enforced it.
+fn finish_sandboxed(result: std::io::Result<std::process::Output>) -> String {
+    let output = match result {
+        Ok(output) => output,
+        Err(e) => return format!("{{\"error\":\"sandbox exec failed: {}\"}}", e),
+    };
+    let exit_code = output.status.code().unwrap_or(-1);
+    format!(
+        "{{\"exit_code\":{},\"stdout\":\"{}\",\"stderr\":\"{}\"}}",
+        exit_code,
+        escape_json_text(&String::from_utf8_lossy(&output.stdout)),
+        escape_json_text(&String::from_utf8_lossy(&output.stderr)),
+    )
+}
+
+fn json_error(reason: &str) -> String {
+    format!("{{\"error\":\"{}\"}}", escape_json_text(reason))
+}
+
+fn escape_json_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Writable roots granted on every run, matching the macOS profile.
+#[cfg(target_os = "linux")]
+const ALWAYS_WRITABLE: [&str; 2] = ["/tmp", "/dev"];
+
+/// TCP ports from `--allow-net` entries, or the entry that cannot be expressed.
+#[cfg(target_os = "linux")]
+fn requested_tcp_ports(allowed_net: &[String]) -> Result<Vec<u16>, String> {
+    let mut ports = Vec::new();
+    for entry in allowed_net {
+        let port = match entry.rsplit_once(':') {
+            Some((_, port)) => port,
+            None => return Err(format!("--allow-net entry has no port: {}", entry)),
+        };
+        // Landlock allows named ports only; "any port" cannot be expressed, and
+        // silently treating it as "all open" would hide an unenforced rule.
+        match port.parse::<u16>() {
+            Ok(parsed) if parsed > 0 => ports.push(parsed),
+            _ => return Err(format!(
+                "Landlock cannot express the port in --allow-net {}; name a numeric TCP port",
+                entry
+            )),
+        }
+    }
+    Ok(ports)
+}
+
+#[cfg(target_os = "linux")]
+fn writable_dirs(allowed_dirs: &[String]) -> Vec<String> {
+    let mut dirs: Vec<String> = allowed_dirs
+        .iter()
+        .filter(|dir| !dir.ends_with(":ro"))
+        .map(|dir| dir.to_string())
+        .collect();
+    dirs.extend(ALWAYS_WRITABLE.iter().map(|dir| dir.to_string()));
+    dirs
+}
+
+/// The Landlock policy a request asks for, or why this kernel cannot apply it.
+#[cfg(target_os = "linux")]
+fn linux_ruleset(request: &SandboxRequest) -> Result<crate::landlock::Ruleset, String> {
+    let policy = crate::landlock::Policy {
+        writable_dirs: writable_dirs(&request.allowed_dirs),
+        tcp_ports: requested_tcp_ports(&request.allowed_net)?,
+        restrict_network: !request.allowed_net.is_empty(),
+    };
+    crate::landlock::prepare(&policy)
+}
+
+#[cfg(target_os = "linux")]
+fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
+    use std::os::unix::process::CommandExt;
+
+    // Built before the fork so the child only has to apply it.
+    let ruleset = match linux_ruleset(request) {
+        Ok(ruleset) => ruleset,
+        Err(reason) => return json_error(&reason),
+    };
+    let ruleset_fd = ruleset.descriptor();
+    let mut command = request.command(&request.cmd);
+    command.args(&request.args);
+    // Runs after fork and before exec: two syscalls, no allocation.
+    unsafe {
+        command.pre_exec(move || crate::landlock::Ruleset::restrict_current_process(ruleset_fd));
+    }
+    finish_sandboxed(command.output())
 }
 
 /// Replace the current process with a sandboxed command (Unix exec).
@@ -578,46 +692,43 @@ pub fn wt_exec_replace(
     env_json: impl AsRef<str>,
     cwd: impl AsRef<str>,
 ) -> String {
-    let args: Vec<String> = serde_json::from_str(args_json.as_ref()).unwrap_or_default();
-    let allowed_dirs_raw: Vec<String> = serde_json::from_str(allowed_dirs_json.as_ref()).unwrap_or_default();
-    let allowed_dirs: Vec<String> = allowed_dirs_raw.iter().map(|d| {
-        let clean = d.trim_end_matches(":ro");
-        let abs = if clean.starts_with('/') {
-            clean.to_string()
-        } else {
-            std::fs::canonicalize(clean).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| clean.to_string())
-        };
-        if d.ends_with(":ro") { format!("{}:ro", abs) } else { abs }
-    }).collect();
-    let allowed_net: Vec<String> = serde_json::from_str(allowed_net_json.as_ref()).unwrap_or_default();
-    let env_vars: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(env_json.as_ref())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|pair| {
-            if pair.len() == 2 { Some((pair[0].clone(), pair[1].clone())) } else { None }
-        })
-        .collect();
+    let request = SandboxRequest::parse(
+        cmd.as_ref(), args_json.as_ref(), allowed_dirs_json.as_ref(),
+        allowed_net_json.as_ref(), env_json.as_ref(), cwd.as_ref(),
+    );
+    replace_with_sandboxed(&request)
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::process::CommandExt;
-        let profile = build_sandbox_profile_rs(&allowed_dirs, &allowed_net);
-        let mut command = std::process::Command::new("sandbox-exec");
-        command.arg("-p").arg(&profile).arg(cmd.as_ref()).args(&args);
-        if !cwd.as_ref().is_empty() && cwd.as_ref() != "." {
-            command.current_dir(cwd.as_ref());
-        }
-        for (k, v) in &env_vars {
-            command.env(k, v);
-        }
-        // exec() replaces the current process — never returns on success
-        let err = command.exec();
-        format!("{{\"error\":\"exec failed: {}\"}}", err)
+#[cfg(target_os = "macos")]
+fn replace_with_sandboxed(request: &SandboxRequest) -> String {
+    use std::os::unix::process::CommandExt;
+    let profile = build_sandbox_profile_rs(&request.allowed_dirs, &request.allowed_net);
+    let mut command = request.command("sandbox-exec");
+    command.arg("-p").arg(&profile).arg(&request.cmd).args(&request.args);
+    // exec() replaces the current process — never returns on success
+    json_error(&format!("exec failed: {}", command.exec()))
+}
+
+#[cfg(target_os = "linux")]
+fn replace_with_sandboxed(request: &SandboxRequest) -> String {
+    use std::os::unix::process::CommandExt;
+    // No fork here: porta restricts itself and then becomes the command. A
+    // Landlock ruleset survives execve, so the restriction outlives this call.
+    let ruleset = match linux_ruleset(request) {
+        Ok(ruleset) => ruleset,
+        Err(reason) => return json_error(&reason),
+    };
+    if let Err(error) = crate::landlock::Ruleset::restrict_current_process(ruleset.descriptor()) {
+        return json_error(&format!("cannot apply the sandbox: {}", error));
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        format!("{{\"error\":\"exec_replace not supported on this platform\"}}")
-    }
+    let mut command = request.command(&request.cmd);
+    command.args(&request.args);
+    json_error(&format!("exec failed: {}", command.exec()))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn replace_with_sandboxed(_request: &SandboxRequest) -> String {
+    "{\"error\":\"exec_replace not supported on this platform\"}".to_string()
 }
 
 fn sandbox_literal(value: &str) -> String {
