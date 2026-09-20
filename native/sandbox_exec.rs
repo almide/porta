@@ -5,6 +5,7 @@
 //! express, refusing the run when it cannot express a requested rule.
 
 use crate::json_text::escape_json_text;
+#[cfg(target_os = "macos")]
 use crate::sandbox_profile::build_sandbox_profile_rs;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
@@ -31,17 +32,17 @@ fn open_reads() -> String { "open".to_string() }
 /// Read policies this build understands.
 const READ_POLICIES: [&str; 2] = ["open", "strict"];
 
-/// Absolute mount path, keeping the `:ro` marker the policy builders read.
+/// Absolute, symlink-free mount path, keeping the `:ro` marker the policy
+/// builders read. Both platforms match a rule against the path the kernel
+/// resolved, so an absolute mount reached through a symlink — `/var/folders/…`,
+/// which is really `/private/var/folders/…` on macOS — has to be named as the
+/// kernel will see it, or the rule is written for a path nothing ever has.
 fn resolve_mount(mount: &str) -> String {
     let clean = mount.trim_end_matches(":ro");
-    let absolute = if clean.starts_with('/') {
-        clean.to_string()
-    } else {
-        std::fs::canonicalize(clean)
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_else(|_| clean.to_string())
-    };
-    if mount.ends_with(":ro") { format!("{}:ro", absolute) } else { absolute }
+    let resolved = std::fs::canonicalize(clean)
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| clean.to_string());
+    if mount.ends_with(":ro") { format!("{}:ro", resolved) } else { resolved }
 }
 
 impl SandboxRequest {
@@ -53,18 +54,23 @@ impl SandboxRequest {
         if !READ_POLICIES.contains(&request.read_policy.as_str()) {
             return Err(format!("unknown read policy: {}; use open or strict", request.read_policy));
         }
-        // macOS cannot express a strict read policy yet. `(deny file-read*)`
-        // with a system allow-list aborts every process on macOS 26.3, and the
-        // profile trace facility that would say what dyld needs is itself
-        // denied. Refusing keeps the guarantee honest, as the network and proxy
-        // paths already do on Linux.
-        #[cfg(target_os = "macos")]
-        if request.read_policy == "strict" {
-            return Err("--read-policy strict is not implemented on macOS; \
-                        porta will not run the command with reads open instead".into());
-        }
         request.allowed_dirs = request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect();
         Ok(request)
+    }
+
+    /// The profile this request asks for. All three macOS entry points build it
+    /// here so none of them can apply a policy the other two do not.
+    #[cfg(target_os = "macos")]
+    fn profile(&self) -> String {
+        build_sandbox_profile_rs(&self.allowed_dirs, &self.allowed_net, &self.read_policy)
+    }
+
+    /// The Landlock ruleset this request asks for, or why this kernel cannot
+    /// apply it. Both Linux entry points come through here for the same reason
+    /// the macOS ones come through [`Self::profile`].
+    #[cfg(target_os = "linux")]
+    fn ruleset(&self) -> Result<crate::landlock::Ruleset, String> {
+        crate::landlock_policy::ruleset(&self.allowed_dirs, &self.allowed_net, &self.read_policy)
     }
 
     /// A command carrying this request's arguments, directory and environment.
@@ -108,7 +114,7 @@ fn run_sandboxed(_request: &SandboxRequest) -> String {
 
 #[cfg(target_os = "macos")]
 fn exec_sandboxed_macos(request: &SandboxRequest) -> String {
-    let profile = build_sandbox_profile_rs(&request.allowed_dirs, &request.allowed_net);
+    let profile = request.profile();
     let mut command = request.command("sandbox-exec");
     command.arg("-p").arg(&profile).arg(&request.cmd).args(&request.args);
     finish_sandboxed(command.output())
@@ -133,80 +139,12 @@ fn json_error(reason: &str) -> String {
     format!("{{\"error\":\"{}\"}}", escape_json_text(reason))
 }
 
-/// The same roots as [`crate::sandbox_profile::PROFILE_WRITABLE`], as Linux
-/// spells them: there is no `/private/tmp` to name.
-#[cfg(target_os = "linux")]
-const ALWAYS_WRITABLE: [&str; 2] = ["/tmp", "/dev"];
-
-/// The platform's own directories, readable under a strict read policy. A
-/// dynamically linked command cannot start without its interpreter, its
-/// libraries and the loader cache, so confining reads to the granted mounts
-/// alone would only mean nothing runs. A caller's home directory is
-/// deliberately absent: that is what this policy exists to close.
-#[cfg(target_os = "linux")]
-const SYSTEM_READABLE: [&str; 7] = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/proc"];
-
-/// TCP ports from `--allow-net` entries, or the entry that cannot be expressed.
-#[cfg(target_os = "linux")]
-fn requested_tcp_ports(allowed_net: &[String]) -> Result<Vec<u16>, String> {
-    let mut ports = Vec::new();
-    for entry in allowed_net {
-        let port = match entry.rsplit_once(':') {
-            Some((_, port)) => port,
-            None => return Err(format!("--allow-net entry has no port: {}", entry)),
-        };
-        // Landlock allows named ports only; "any port" cannot be expressed, and
-        // silently treating it as "all open" would hide an unenforced rule.
-        match port.parse::<u16>() {
-            Ok(parsed) if parsed > 0 => ports.push(parsed),
-            _ => return Err(format!(
-                "Landlock cannot express the port in --allow-net {}; name a numeric TCP port",
-                entry
-            )),
-        }
-    }
-    Ok(ports)
-}
-
-#[cfg(target_os = "linux")]
-fn writable_dirs(allowed_dirs: &[String]) -> Vec<String> {
-    let mut dirs: Vec<String> = allowed_dirs
-        .iter()
-        .filter(|dir| !dir.ends_with(":ro"))
-        .map(|dir| dir.to_string())
-        .collect();
-    dirs.extend(ALWAYS_WRITABLE.iter().map(|dir| dir.to_string()));
-    dirs
-}
-
-/// Every mount the caller was granted, read-only ones included. Under a strict
-/// read policy these and the system directories are the only readable roots.
-#[cfg(target_os = "linux")]
-fn readable_dirs(allowed_dirs: &[String]) -> Vec<String> {
-    allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro").to_string()).collect()
-}
-
-/// The Landlock policy a request asks for, or why this kernel cannot apply it.
-#[cfg(target_os = "linux")]
-fn linux_ruleset(request: &SandboxRequest) -> Result<crate::landlock::Ruleset, String> {
-    let strict = request.read_policy == "strict";
-    let policy = crate::landlock::Policy {
-        writable_dirs: writable_dirs(&request.allowed_dirs),
-        readable_dirs: if strict { readable_dirs(&request.allowed_dirs) } else { Vec::new() },
-        system_dirs: SYSTEM_READABLE.iter().map(|dir| dir.to_string()).collect(),
-        restrict_reads: strict,
-        tcp_ports: requested_tcp_ports(&request.allowed_net)?,
-        restrict_network: !request.allowed_net.is_empty(),
-    };
-    crate::landlock::prepare(&policy)
-}
-
 #[cfg(target_os = "linux")]
 fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
     use std::os::unix::process::CommandExt;
 
     // Built before the fork so the child only has to apply it.
-    let ruleset = match linux_ruleset(request) {
+    let ruleset = match request.ruleset() {
         Ok(ruleset) => ruleset,
         Err(reason) => return json_error(&reason),
     };
@@ -233,7 +171,7 @@ pub fn wt_exec_replace(request_json: impl AsRef<str>) -> String {
 #[cfg(target_os = "macos")]
 fn replace_with_sandboxed(request: &SandboxRequest) -> String {
     use std::os::unix::process::CommandExt;
-    let profile = build_sandbox_profile_rs(&request.allowed_dirs, &request.allowed_net);
+    let profile = request.profile();
     let mut command = request.command("sandbox-exec");
     command.arg("-p").arg(&profile).arg(&request.cmd).args(&request.args);
     // exec() replaces the current process — never returns on success
@@ -245,7 +183,7 @@ fn replace_with_sandboxed(request: &SandboxRequest) -> String {
     use std::os::unix::process::CommandExt;
     // No fork here: porta restricts itself and then becomes the command. A
     // Landlock ruleset survives execve, so the restriction outlives this call.
-    let ruleset = match linux_ruleset(request) {
+    let ruleset = match request.ruleset() {
         Ok(ruleset) => ruleset,
         Err(reason) => return json_error(&reason),
     };
@@ -274,7 +212,7 @@ pub fn wt_exec_supervised(request_json: impl AsRef<str>) -> i64 {
 
 #[cfg(target_os = "macos")]
 fn supervise_sandboxed(request: &SandboxRequest) -> i64 {
-    let profile = build_sandbox_profile_rs(&request.allowed_dirs, &request.allowed_net);
+    let profile = request.profile();
     let mut command = request.command("sandbox-exec");
     command.arg("-p").arg(&profile).arg(&request.cmd).args(&request.args);
     command.stdin(std::process::Stdio::inherit());

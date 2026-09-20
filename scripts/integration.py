@@ -108,15 +108,33 @@ else:
         # Verify actual OS enforcement by attempting a write outside all grants.
         result = run('run', '/bin/sh', '--', '-c', 'touch "$1"', 'sh', str(pathlib.Path(__file__).resolve().parent.parent / ('.' + root.name)))
         assert result.returncode != 0, result
-        # A policy this platform cannot express refuses rather than running open.
-        result = run('run', '/bin/sh', '--read-policy', 'strict', '--', '-c', 'echo must-not-execute')
-        assert result.returncode != 0, result
-        assert 'must-not-execute' not in result.stdout, result
-        assert 'not implemented on macOS' in result.stdout + result.stderr, result
         result = run('run', '/bin/sh', '--read-policy', 'nonsense', '--', '-c', 'echo must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: native exit code, porta.toml proxy enforcement, default write denial, '
-              'unexpressible read policy refused')
+              'unknown read policy refused')
+
+        # --read-policy strict confines reads to the granted mounts and the
+        # platform's own directories. A credential outside both is unreadable.
+        workspace = root / 'confined'
+        workspace.mkdir()
+        (workspace / 'input.txt').write_text('workspace input\n')
+        secrets = root / 'secrets'
+        secrets.mkdir()
+        (secrets / 'credentials').write_text('aws_secret_access_key = EXAMPLE\n')
+        read_secret = f'cat {secrets / "credentials"}'
+        result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', read_secret)
+        assert result.returncode == 0 and 'EXAMPLE' in result.stdout, result
+        result = run('run', '/bin/sh', '--read-policy', 'strict', '-v', str(workspace),
+                     '--', '-c', read_secret)
+        assert result.returncode != 0, result
+        assert 'EXAMPLE' not in result.stdout, result
+        # The granted mount and the system directories a command needs stay
+        # readable, and the shell starts without a denial on its way in.
+        result = run('run', '/bin/sh', '--read-policy', 'strict', '-v', str(workspace),
+                     '--', '-c', f'cat {workspace / "input.txt"}; grep -c . /etc/hosts')
+        assert result.returncode == 0 and 'workspace input' in result.stdout, result
+        assert 'not permitted' not in result.stderr, result
+        print('PASS: strict read policy confines reads to grants and system paths')
     elif platform.system() == 'Linux':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result

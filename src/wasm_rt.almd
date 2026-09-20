@@ -96,10 +96,13 @@ effect fn wt_exec_sandboxed(request_json: String) -> Result[String, String] =
 
 // Keep MCP and native execution on the same policy implementation.
 @extern(rs, "wasmtime_bridge", "wt_sandbox_profile")
-fn native_sandbox_profile(dirs_json: String, net_json: String) -> String
+fn native_sandbox_profile(dirs_json: String, net_json: String, read_policy: String) -> String
 
-fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String]) -> String =
-  native_sandbox_profile(json.stringify(value.array(allowed_dirs |> list.map(value.str))), json.stringify(value.array(allowed_net |> list.map(value.str))))
+fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String], read_policy: String) -> String =
+  native_sandbox_profile(
+    json.stringify(value.array(allowed_dirs |> list.map(value.str))),
+    json.stringify(value.array(allowed_net |> list.map(value.str))),
+    read_policy)
 
 // --- Process management (pure Almide) ---
 

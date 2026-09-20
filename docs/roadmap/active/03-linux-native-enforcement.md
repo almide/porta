@@ -19,14 +19,25 @@ restricts itself and then execs — a ruleset survives `execve`.
 | Write outside `-v` mounts | denied | denied |
 | `/tmp` and `/dev` | writable | writable |
 | Read outside grants, default | denied for `~/.ssh`, `~/.gnupg` only | not confined |
-| Read outside grants, `--read-policy strict` | **refused** (unimplemented) | **denied** |
+| Read outside grants, `--read-policy strict` | denied | denied |
 | `--allow-net` by port | enforced | enforced, needs ABI 4 |
 | Proxy mode | enforced | **refused** |
 
-`scripts/integration.py` asserts the Linux half in CI: a write inside a mount
-succeeds, a write outside every grant fails and leaves no file, a connect to a
-granted port succeeds while the same connect fails when another port is granted,
-and both an unexpressible rule and proxy mode refuse to run.
+`scripts/integration.py` asserts this in CI on both platforms: a write inside a
+mount succeeds while a write outside every grant fails and leaves no file, a
+credential outside every grant is unreadable under `strict` and readable
+without it, and an unknown policy name refuses. On Linux it also asserts that a
+connect to a granted port succeeds while the same connect fails when another
+port is granted, and that both an unexpressible rule and proxy mode refuse.
+
+Each platform's policy is built in its own module — `native/sandbox_profile.rs`
+for the macOS profile text, `native/landlock_policy.rs` for the Landlock
+ruleset — and every entry point on a platform goes through the one function, so
+`run`, `up` and MCP execution cannot drift apart.
+
+A rule names the path the kernel resolved, not a symlink to it: an absolute
+mount is canonicalized before any rule is written, because `/var/folders/…` is
+really `/private/var/folders/…` and a rule for the former matches nothing.
 
 ## Reads: strict is an allow-list, and Linux got it first
 
@@ -53,19 +64,49 @@ refused: these are the platform's directories, not a caller's grant, and
 The default stays `open`. Flipping it is a version boundary, once the grants a
 real agent needs are known.
 
-### macOS is not done
+### macOS, and how its read set was found
 
-`--read-policy strict` refuses on macOS. `sandbox-exec` can express an
-allow-list — `(deny file-read*)` plus `(allow file-read* (subpath ...))` — but a
-naive system set aborts every process with SIGABRT on macOS 26.3, including
-`/bin/echo`: dyld needs paths this list does not name, and the profile `(trace
-...)` facility that would report them is itself denied (exit 71). Determining
-the set empirically is the remaining work. Until then macOS refuses the policy
-rather than running with reads open, which is what the write and network paths
-already do when a rule cannot be expressed.
+`sandbox-exec` expresses the same allow-list — `(deny file-read*)` plus `(allow
+file-read* (subpath ...))` — but a guessed system set aborts every process on
+macOS 26.3, including `/bin/echo`, and the profile's `(trace ...)` facility that
+would report what was missing is itself denied (exit 71).
 
-This leaves the platforms crossed over: macOS denies two named paths by default
-and cannot yet do better, Linux confines everything or nothing.
+The kernel says it anyway. Every denial is recorded in the unified log:
+
+```
+kernel (Sandbox) Sandbox: echo(35707) deny(1) file-read-data /
+```
+
+Running a target under a candidate profile, reading the denials back out of
+`log show --predicate 'senderImagePath CONTAINS "Sandbox"'` and adding exactly
+what was named, repeated to a fixed point, produces the set. The first blocker
+is `/` itself: the loader reads the root directory entry before anything else,
+which is why a subtree list alone aborts. Dropping each entry in turn against a
+sample of commands then showed which are load-bearing.
+
+`scripts/probes/macos_read_set.py` is that loop, and it reads the set out of
+`native/sandbox_profile.rs` rather than repeating it, so it cannot drift from
+what porta applies. `verify` runs the sample under the shipped set, `discover`
+adds what the kernel names until everything runs, `ablate` drops each entry in
+turn. Apple moves these paths between releases; re-run `verify` on a new one.
+
+The result is `PROFILE_READABLE` and `PROFILE_READABLE_LITERALS` in
+`native/sandbox_profile.rs`: `/usr`, `/System`, `/bin`, `/sbin`, `/private/etc`
+and `/private/var/select` as subtrees, and `/`, `/tmp`, `/etc`, `/var` as
+themselves — the last three are symlinks, so granting the link exposes nothing
+that the subtree rules have not already decided. `/private/var/select` holds the
+one symlink `/bin/sh` reads to choose which shell to behave as; without it every
+`sh` run starts with a denial on stderr.
+
+Twenty-six commands — `sh`, `cat`, `grep`, `curl`, `openssl`, `tar`, `perl`,
+`sqlite3`, `find`, `ssh`, `plutil` among them — run clean under it with a home
+directory unreadable. What is *not* in it is as deliberate: `ruby` fails,
+because RubyGems reads `/Library/Ruby/Gems`. That is a language runtime's
+package directory, and it is a mount the caller grants, not a hole this list
+leaves open.
+
+Both platforms now confine reads. The remaining asymmetry is the default: macOS
+denies two named paths, Linux denies nothing, and neither confines until asked.
 
 ## Why proxy mode is still refused
 
@@ -93,9 +134,12 @@ Two kernels are not the matrix. Older distribution kernels report lower ABI
 levels, so porta reads the ABI at runtime and refuses rules the kernel cannot
 express.
 
+The macOS read set is version-dependent in the same way.
+`scripts/probes/macos_read_set.py verify` was clean on macOS 26.3, arm64: 18
+commands, no failure and no denial, with `~/.ssh` unreadable.
+
 ## Remaining
 
-- `--read-policy strict` on macOS: determine the dyld read set empirically.
 - Flip the default to `strict` at a version boundary.
 - Proxy mode on Linux, together with `01-http-proxy-filtering` v2.
 - A host with a Landlock ABI below 4, to confirm the refusal path on a real

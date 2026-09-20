@@ -141,12 +141,10 @@ published in the same place.
 ## Limits
 
 Native restrictions cover **macOS** and **Linux**, and not identically. macOS
-uses `sandbox-exec`; Linux uses Landlock, which enforces writes and TCP ports.
-Reads are open by default on both. On Linux, `--read-policy strict` closes them:
-reads are confined to the mounts you granted plus the system directories a
-command needs to start, so nothing under any home directory is readable. macOS
-cannot express that yet and refuses the flag rather than running with reads
-open.
+uses `sandbox-exec`; Linux uses Landlock. Both enforce writes and TCP ports.
+Reads are open by default on both; `--read-policy strict` closes them on either,
+confining reads to the mounts you granted plus the system directories a command
+needs to start, so nothing under any home directory is readable.
 HTTPS proxy filtering stays macOS-only: it must also deny UDP and Unix sockets,
 which Landlock cannot express, so proxy mode refuses to run on Linux rather than
 enforce part of a policy. A kernel whose Landlock ABI cannot express a requested
@@ -259,7 +257,7 @@ Uses `sandbox-exec` to enforce:
 | Control | Behavior |
 |---------|----------|
 | **FS write** | Denied everywhere except `-v` mounted dirs and `/tmp` |
-| **FS read** | `~/.ssh` and `~/.gnupg` denied (cryptographic keys). Other readable host files remain accessible; `-v` controls writes |
+| **FS read** | By default `~/.ssh` and `~/.gnupg` are denied and other readable host files remain accessible. `--read-policy strict` confines reads to your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` — every home directory is closed |
 | **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
 | **Read-only** | `-v ./data:ro` → read OK, write denied |
 
