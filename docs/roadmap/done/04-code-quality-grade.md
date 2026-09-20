@@ -2,8 +2,15 @@
 <!-- done: 2026-09-20 -->
 # Code Quality Grade
 
-`codopsy analyze .` scores the repository **91 (A)**. It scored 75 (B) when
-this item was opened. Grade A starts at 90.
+`codopsy analyze .` scores the repository **90 (A)** with the pinned v2.2.0
+release, and **93 (A)** with a newer local build. It scored 75 (B) when this
+item was opened. Grade A starts at 90.
+
+The two numbers differ because the newer build fails to parse seven `.almd`
+files outright and drops them from the report, while the pinned release parses
+them partially and includes them. CI installs the pinned release through
+`scripts/install-codopsy.sh` and fails below 90, so the floor is the grade-A
+boundary rather than a number that moves with the analyzer.
 
 ## How the number is built
 
@@ -16,12 +23,14 @@ structure component subtracts 10 for a file over 300 lines, up to 12 for
 excess nesting depth and up to 10 for excess parameters. `max-*` warnings do
 not touch the issues component but do count toward the global penalty.
 
+Measured with the pinned v2.2.0 release:
+
 | | Start | Now |
 |---|---:|---:|
-| Weighted mean | 86.1 | 97.2 |
-| Issues | 176 | 56 |
-| Penalty | 10.6 | 6.0 |
-| **Overall** | **75 (B)** | **91 (A)** |
+| Weighted mean | 86.1 | 97.0 |
+| Issues | 176 | 69 |
+| Penalty | 10.6 | 6.7 |
+| **Overall** | **75 (B)** | **90 (A)** |
 
 ## What moved it
 
@@ -51,25 +60,28 @@ Every step kept `almide test --ci` (106 tests), the macOS integration suites
 
 ## What is left, and why
 
-56 issues remain. 29 of them are one per `.almd` file: codopsy's Almide
+69 issues remain. 29 of them are one per `.almd` file: codopsy's Almide
 grammar cannot parse every construct and reports the coverage gap as a
 `syntax-error`. That is a property of the analyzer, not of this repository,
-and it puts a floor of about 4.3 on the penalty.
+and it puts a floor of about 4.3 on the penalty. Worse, where coverage is poor
+the reported function boundaries are wrong: `src/agent.almd` is 56% unparsed
+and `src/engine.almd` 40%, so everything after the first unparsed region is
+counted inside one function. Splitting those files does not move the number,
+which is why the remaining `.almd` complexity warnings stay.
 
 Of the rest:
 
 - **5 `no-unsafe`** — the Landlock syscall wrapper, `prctl`, `from_raw_fd`,
   `pre_exec`, and one in the bridge. Each is the minimum unsafe needed to
   reach the kernel, and each sits behind a checked boundary.
-- **14 `max-complexity` / 7 `max-cognitive-complexity`** — mostly flat
-  dispatch: `wasi_call` (15 branches, cognitive 1), `parse_capability`,
-  `print_help`, the CLI command match in `mod.almd`, the WASI interpreter in
-  `agent.almd`. A flat match over names is already the clearest expression of
-  what those do; grouping their arms to move a counter would make them worse.
-- **7 `max-lines` / 11 `max-depth` / 5 `max-params`** — the evaluation
-  harnesses (`evaluate_containment.py`, `evaluate_agents.py`) and the WASI
-  interpreter. Splitting a linear harness into helpers to move a depth counter
-  makes the harness harder to audit, which is the one thing it exists for.
+- **`max-complexity` on flat dispatch** — `wasi_call` (15 branches, cognitive
+  1), `parse_capability`, `print_help`, the CLI command match in `mod.almd`.
+  A flat match over names is already the clearest expression of what those do;
+  grouping their arms to move a counter would make them worse.
+- **`max-lines` on three evaluation harnesses** — `evaluate_containment.py`,
+  `evaluate_agents.py` and `mcp_agent_integration.py` are each one linear
+  scenario driver around one fixture service. Splitting a harness to move a
+  line count makes it harder to audit, which is the one thing it exists for.
 
 ## Rule
 

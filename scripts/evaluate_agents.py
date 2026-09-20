@@ -71,7 +71,9 @@ model_busy = threading.Condition()
 # it reads what the boundary recorded.
 inflight = SimpleNamespace(count=0)
 class NoRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, new_url):
+    """Never follow a redirect: where a request may go is the policy's call."""
+
+    def redirect_request(self, *_request):
         return None
 
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirects())

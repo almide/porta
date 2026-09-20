@@ -70,7 +70,9 @@ tool_lock = threading.RLock()
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, new_url):
+    """Never follow a redirect: where a request may go is the policy's call."""
+
+    def redirect_request(self, *_request):
         return None
 
 
@@ -308,7 +310,10 @@ def inline_toml(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def invoke(command, cwd, env, register=True, timeout=TIMEOUT + 5):
+def invoke(command, cwd, env, probe=None):
+    """Run one command to completion. A `probe` is a platform check rather than
+    a trial, so it is not registered as the active run and has its own timeout."""
+    register, timeout = probe is None, TIMEOUT + 5 if probe is None else probe
     start = time.perf_counter()
     process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -325,6 +330,21 @@ def invoke(command, cwd, env, register=True, timeout=TIMEOUT + 5):
         active['process'] = None
     return {'exit_code': process.returncode, 'timed_out': timed_out,
             'elapsed_seconds': time.perf_counter() - start, 'stdout': stdout, 'stderr': stderr}
+
+
+def run_commands(arm, root, journal, session_db):
+    """The command that starts a run and the one that resumes it, for one arm.
+    The start command still needs the task prompt appended."""
+    if arm == 'porta_wasm':
+        return ([porta, 'agent', str(root / 'porta.toml'), '--record', str(journal), '--'],
+                [porta, 'agent-resume', str(root / 'porta.toml'), str(journal)])
+    base = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo', '--session-db', session_db]
+    start, resume = list(base), base + ['--session', '-1']
+    if arm == 'docker_agent_sandboxed':
+        start.append('--sandbox')
+        resume.append('--sandbox')
+    resume.append('Continue the interrupted task.')
+    return start, resume
 
 
 def settle():
@@ -575,7 +595,7 @@ input_schema = {inline_toml(tool['inputSchema'])}
                   '--data-dir', str(root / 'data'), '--cache-dir', str(root / 'cache')]
         # The isolation-matched arm is a platform capability, not an assumption.
         probe = invoke(docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                 '--sandbox', '--dry-run', 'probe'], root, env, register=False, timeout=90)
+                                 '--sandbox', '--dry-run', 'probe'], root, env, probe=90)
         report['sandbox_probe'] = {'available': probe['exit_code'] == 0, 'exit_code': probe['exit_code'],
                                    'stderr': probe['stderr'][-2000:], 'stdout': probe['stdout'][-2000:],
                                    'docker_desktop': subprocess.run(
@@ -608,27 +628,13 @@ input_schema = {inline_toml(tool['inputSchema'])}
                         raise AssertionError('fixture path confinement failed')
                     session_db = str(workspace / 'session.db')
                     journal = journals / f'{repeat}-{task["id"]}-{arm}.jsonl'
-                    if arm == 'porta_wasm':
-                        command = [porta, 'agent', str(root / 'porta.toml'), '--record', str(journal), '--', task['prompt']]
-                    else:
-                        command = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                            '--session-db', session_db]
-                        if arm == 'docker_agent_sandboxed':
-                            command.append('--sandbox')
-                        command.append(task['prompt'])
+                    start, resume_command = run_commands(arm, root, journal, session_db)
+                    command = start + [task['prompt']]
                     result = invoke(command, workspace, env)
                     settle()
                     recovery = None
                     if task.get('kill_on_write'):
                         active['phase'] = 'resume'
-                        if arm == 'porta_wasm':
-                            resume_command = [porta, 'agent-resume', str(root / 'porta.toml'), str(journal)]
-                        else:
-                            resume_command = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                                       '--session-db', session_db, '--session', '-1']
-                            if arm == 'docker_agent_sandboxed':
-                                resume_command.append('--sandbox')
-                            resume_command.append('Continue the interrupted task.')
                         recovery = invoke(resume_command, workspace, env)
                         recovery['command'] = resume_command
                         settle()

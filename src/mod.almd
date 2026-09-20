@@ -12,6 +12,24 @@ import self.agent
 fn has_help_flag(args: List[String]) -> Bool =
   args |> list.any((a) => a == "--help" or a == "-h")
 
+// A command that acts on a target. `--help`, or no target at all, prints that
+// command's help and returns nothing to act on.
+effect fn target_options(args: List[String], topic: String) -> Option[cli.Options] =
+  if has_help_flag(args) then { help.print_help(topic); none }
+  else {
+    let opts = cli.parse_options(args, 2, cli.default_options())
+    if opts.path == "" then { help.print_help(topic); none }
+    else some(opts)
+  }
+
+// porta ps/stop/kill/logs/rm all name one instance and say the same thing
+// when it is missing.
+effect fn instance_id(args: List[String], command: String) -> Option[String] = {
+  let id = list.get(args, 2) ?? ""
+  if id == "" then { println("usage: porta ${command} <instance-id>"); none }
+  else some(id)
+}
+
 effect fn main() -> Result[Unit, String] = {
   let args = process.args()
   let cmd = list.get(args, 1) ?? "help"
@@ -30,22 +48,15 @@ effect fn main() -> Result[Unit, String] = {
     "agent" => agent.command(list.drop(args, 2), "run"),
     "agent-resume" => agent.command(list.drop(args, 2), "resume"),
     "agent-replay" => agent.command(list.drop(args, 2), "replay"),
-    "serve" => {
-      if has_help_flag(args) then { help.print_help("serve"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("serve"); ok(()) }
-        else engine.serve(opts)
-      }
+    "serve" => match target_options(args, "serve")! {
+      none => ok(()),
+      some(opts) => engine.serve(opts),
     },
-    "run" => {
-      if has_help_flag(args) then { help.print_help("run"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("run"); ok(()) }
-        else if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
-        else engine.run_native(opts)
-      }
+    "run" => match target_options(args, "run")! {
+      none => ok(()),
+      some(opts) =>
+        if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
+        else engine.run_native(opts),
     },
     "up" => {
       let rest = list.drop(args, 2)
@@ -58,38 +69,22 @@ effect fn main() -> Result[Unit, String] = {
       if command == "" then { help.print_help("init"); ok(()) }
       else project.porta_init(runtime_type, command)
     },
-    "run-native" => {
-      // Alias: porta run-native is equivalent to porta run <non-wasm>
-      if has_help_flag(args) then { help.print_help("run"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("run"); ok(()) }
-        else engine.run_native(opts)
-      }
+    // Alias: porta run-native is equivalent to porta run <non-wasm>
+    "run-native" => match target_options(args, "run")! {
+      none => ok(()),
+      some(opts) => engine.run_native(opts),
     },
-    "inspect" => {
-      if has_help_flag(args) then { help.print_help("inspect"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("inspect"); ok(()) }
-        else engine.inspect(opts.path)
-      }
+    "inspect" => match target_options(args, "inspect")! {
+      none => ok(()),
+      some(opts) => engine.inspect(opts.path),
     },
-    "validate" => {
-      if has_help_flag(args) then { help.print_help("validate"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("validate"); ok(()) }
-        else engine.validate(opts)
-      }
+    "validate" => match target_options(args, "validate")! {
+      none => ok(()),
+      some(opts) => engine.validate(opts),
     },
-    "build" => {
-      if has_help_flag(args) then { help.print_help("build"); ok(()) }
-      else {
-        let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { help.print_help("build"); ok(()) }
-        else build.build_package(opts)
-      }
+    "build" => match target_options(args, "build")! {
+      none => ok(()),
+      some(opts) => build.build_package(opts),
     },
     "help" => {
       let topic = list.get(args, 2) ?? ""
@@ -99,25 +94,21 @@ effect fn main() -> Result[Unit, String] = {
     "ps" => {
       ops.list_instances()
     },
-    "stop" => {
-      let id = list.get(args, 2) ?? ""
-      if id == "" then { println("usage: porta stop <instance-id>"); ok(()) }
-      else ops.signal_instance(id, 15)
+    "stop" => match instance_id(args, "stop")! {
+      none => ok(()),
+      some(id) => ops.signal_instance(id, 15),
     },
-    "kill" => {
-      let id = list.get(args, 2) ?? ""
-      if id == "" then { println("usage: porta kill <instance-id>"); ok(()) }
-      else ops.signal_instance(id, 9)
+    "kill" => match instance_id(args, "kill")! {
+      none => ok(()),
+      some(id) => ops.signal_instance(id, 9),
     },
-    "logs" => {
-      let id = list.get(args, 2) ?? ""
-      if id == "" then { println("usage: porta logs <instance-id>"); ok(()) }
-      else ops.show_logs(id)
+    "logs" => match instance_id(args, "logs")! {
+      none => ok(()),
+      some(id) => ops.show_logs(id),
     },
-    "rm" => {
-      let id = list.get(args, 2) ?? ""
-      if id == "" then { println("usage: porta rm <instance-id>"); ok(()) }
-      else ops.remove_instance(id)
+    "rm" => match instance_id(args, "rm")! {
+      none => ok(()),
+      some(id) => ops.remove_instance(id),
     },
     "version" => {
       println("porta 0.4.0")
