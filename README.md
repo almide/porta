@@ -5,107 +5,146 @@
 <h1 align="center">Porta</h1>
 
 <p align="center">
-  Agents and teams running inside WebAssembly.<br>
-  Isolated tools, host-held credentials, and shared execution budgets.
+  Run an agent with the permissions you actually granted it.<br>
+  OS-enforced limits for the CLI agents you already use, and a WASM runtime for the ones you build.
 </p>
 
 <p align="center">
   <a href="https://github.com/almide/almide">Almide</a> + <a href="https://wasmtime.dev">Wasmtime</a> · No Docker required
 </p>
 
+<p align="center">
+  English · <a href="README.ja.md">日本語</a>
+</p>
+
 ---
 
-## What is Porta?
+## Who this is for
 
-Porta runs an agent's decision loop and its tools inside WASM. Agents can ask a
-model, use explicitly granted WASM tools, delegate to other WASM agents, and
-return a result. Porta keeps model credentials outside the guests and enforces
-budgets across the complete team. Explicitly granted [remote MCP tools](docs/agent-mcp.md)
-can be used from the same loop. No Docker daemon is needed.
+- **You run a CLI agent** and want it unable to write outside one directory or
+  reach hosts you did not allow — enforced by the OS, not by a prompt.
+- **You hand agents to a team** and need a record of where they tried to connect.
+- **You build agents** and need a run that can be resumed after a crash without
+  repeating work, and a completion check the agent cannot talk its way past.
 
-It also exposes WASM tools over MCP and supports restricted native commands on
-macOS. The primary runtime is WASM.
+If none of these are your problem yet, Porta will not be interesting. It is a
+runtime and a set of restrictions, not an agent.
 
-## Quick Start
-
-### Run a WASM agent or team
+## Install
 
 ```bash
 bash scripts/install-almide.sh
 .tools/almide/almide build src/mod.almd -o target/porta
-.tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
-.tools/almide/almide build examples/demo-agent/src/mod.almd --target wasm -o examples/demo-agent/agent.wasm
-# Set your model endpoint/name in examples/chat-agent/agent.toml and team.toml.
-target/porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
-target/porta agent examples/chat-agent/team.toml -- "Ask the calculator to add 20 and 22."
+cp target/porta ~/.local/bin/
 ```
 
-See [WASM agents and teams](docs/agent-runtime.md) for configuration, grants,
-protocol, execution limits, and the offline integration suite. Tool arguments are
-validated before WASM execution; schema errors can be corrected by the agent
-within its existing budget.
-The optional [WASM computation tool](examples/compute/README.md) executes bounded
-scripts for decimal arithmetic and JSON transformations, without filesystem or
-network access. Its results can feed separately granted writing tools.
-It can also be served to other MCP clients with `porta serve` using its manifest.
-WASM `run` and `serve` require explicit `-v` directory grants; the current directory
-is not mounted automatically.
-Stopped journals can be inspected with `porta agent-journal` without loading code
-or revealing the conversation. Runs can be [checkpointed, resumed, and replayed](docs/agent-journals.md) without
-repeating completed model calls or tool writes. [Completion checks](docs/completion-checks.md)
-can require independent WASM validation before accepting the final answer.
-[Offline team inspection](docs/agent-check.md) validates settings and reports
-grants, budgets and artifacts without credentials or execution.
-[Artifact pins](docs/artifact-pins.md) bind WASM and delegated policies to reviewed
-SHA-256 values, with strict enforcement across the team.
-[Pre-tool checks](docs/before-tool-checks.md) can enforce prerequisites before writes,
-remote calls or delegation execute.
-[Measured startup overhead](docs/benchmarks/README.md) is published with raw
-samples and explicit comparison limits. The [first real-model comparison](docs/benchmarks/real-model-evaluation.md)
-and [verification-assisted follow-up](docs/benchmarks/verified-model-evaluation.md)
-record failures as well as successes. A [compact-result follow-up](docs/benchmarks/compact-results-evaluation.md)
-reduces model calls on the passing release task. With an explicit pre-tool policy,
-the [latest small-suite comparison](docs/benchmarks/pre-tool-policy-evaluation.md) records
-6/12 full passes for Porta versus 3/12 for Docker Agent following instructions alone;
-this does not demonstrate broader quality superiority or exclude equivalent Docker policies.
+Needs Almide 0.63.0, a Rust toolchain, Python 3 and curl. Full verification
+steps and the compiler pin are in [Build from source](#build-from-source).
 
-### Run Claude Code with restrictions
+## Quick Start
+
+### 1. Restrict an agent you already use
 
 ```bash
-porta run claude --allow-net '*:443' -v . -e "HOME=$HOME" -- --print "Fix the bug"
+porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME" \
+  -- --print "Fix the bug in main.rs"
 ```
 
-Or declaratively:
+`claude` runs normally, but it can write only inside `./project` and connect
+only to the host you listed. No Docker daemon, no container image, no change to
+the agent itself.
+
+### 2. See a restriction actually stop something
+
+A working restriction is invisible, so watch one fail:
 
 ```bash
-porta init native claude
+porta run curl -- https://example.com                    # network open by default
+porta run curl --allow-net '*:443' -- https://example.com # HTTPS allowed → works
+porta run curl --allow-net '*:80'  -- https://example.com # → exit status 7, port 443 denied
+```
+
+Record where an agent tried to go:
+
+```bash
+porta run claude --proxy-allow 'api.anthropic.com' --proxy-audit egress.jsonl \
+  -v ./project -- --print "..."
+```
+
+### 3. Keep the settings instead of retyping them
+
+```bash
+porta init native claude   # writes porta.toml
 porta up -- --print "Fix the bug in main.rs"
 ```
 
-### Verify network restrictions
+### 4. Build an agent that runs inside WASM
 
 ```bash
-# Network open by default (like Docker)
-porta run curl -- https://example.com
-# → works
-
-# Restrict to HTTPS only
-porta run curl --allow-net '*:443' -- https://example.com
-# → works
-
-# Restrict to port 80 — HTTPS blocked
-porta run curl --allow-net '*:80' -- https://example.com
-# → exit status: 7 (port 443 not allowed)
+.tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
+# Set your model endpoint and name in examples/chat-agent/agent.toml
+porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
 ```
 
-### Run a WASM agent
+The decision loop and its tools both run in WASM. Model credentials stay in the
+host, budgets are shared across a delegating team, and tool arguments are
+validated before anything executes. Record a run to survive a crash:
 
 ```bash
-porta run agent.wasm --profile full -v ./workspace
-porta serve agent.wasm   # Start as MCP server
+porta agent agent.toml --record run.jsonl -- "..."
+porta agent-resume agent.toml run.jsonl   # completed writes are not repeated
+porta agent-journal run.jsonl             # read-only, no code loaded
 ```
 
-`porta run` auto-detects mode: `.wasm` files run in WASM sandbox, everything else runs as a native command with OS-level restrictions.
+## What Porta enforces
+
+| Concern | Mechanism |
+|---|---|
+| Writes outside the workspace | `-v` mounts; nothing is mounted implicitly |
+| Network egress | `--allow-net` at the OS layer, `--proxy-allow` per host over HTTPS CONNECT |
+| Secrets reaching the guest | model credentials are held by the host, never the agent |
+| An agent declaring itself finished | [completion checks](docs/completion-checks.md): operator-owned WASM the guest cannot bypass |
+| Prerequisites before an effect | [pre-tool checks](docs/before-tool-checks.md) run before writes, remote calls or delegation |
+| Wrong or injected tool arguments | validated against the declared schema before execution |
+| Crash in the middle of work | [journals](docs/agent-journals.md): resume without repeating completed writes; uncertain operations are never retried |
+| Code drifting from what was reviewed | [artifact pins](docs/artifact-pins.md) bind WASM and delegated policies to SHA-256 values |
+
+## Evidence
+
+Every published number keeps its raw report, source hashes and an audit that
+regrades it, and CI runs those audits. Results that do not favour Porta are
+published in the same place.
+
+- [Startup and memory](docs/benchmarks/startup-and-memory.md) — fixed-response
+  measurements with explicit comparison limits, not task quality.
+- [Containment and recovery](docs/benchmarks/containment-evaluation.md) — under
+  hostile inputs, scored on what escaped rather than what succeeded. One of five
+  scenarios separated the runtimes, and the containment cost task completion.
+- [Real-task quality](docs/benchmarks/README.md) — small matched suites on a
+  local model. Porta has not demonstrated general quality superiority, and the
+  shared-compute follow-up was rejected rather than published as a win.
+
+## Learn more
+
+| Topic | Document |
+|---|---|
+| WASM agents, teams, grants, limits | [agent-runtime.md](docs/agent-runtime.md) |
+| Checkpoint, resume, replay | [agent-journals.md](docs/agent-journals.md) |
+| Remote MCP tools from an agent | [agent-mcp.md](docs/agent-mcp.md) |
+| Offline team inspection | [agent-check.md](docs/agent-check.md) |
+| Completion checks | [completion-checks.md](docs/completion-checks.md) |
+| Pre-tool checks | [before-tool-checks.md](docs/before-tool-checks.md) |
+| Artifact pins | [artifact-pins.md](docs/artifact-pins.md) |
+| Bounded computation tool | [examples/compute](examples/compute/README.md) |
+| Measurements | [docs/benchmarks](docs/benchmarks/README.md) |
+
+## Limits
+
+Native restrictions require **macOS**; on Linux native execution fails closed
+and WASM remains available. Native read access is broader than write access:
+this is not a container filesystem or complete secret isolation. HTTPS proxy
+filtering controls connection targets, not TLS contents. `porta run` and
+`porta serve` mount nothing unless you pass `-v`.
 
 ## porta.toml
 
@@ -316,7 +355,7 @@ porta
     └── wasi.almd       — WASI Preview 1 host functions
 ```
 
-## Install
+## Build from source
 
 ```bash
 # From source (Almide 0.63.0, Rust toolchain, Python 3, curl)
