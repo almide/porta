@@ -40,6 +40,40 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
     assert replies[-1]['id'] == '日本語-1999'
     print('PASS: WASM, untrusted cache, MCP stdio, Unicode, notifications, 2000 requests')
 
+    # Resources and prompts: what the manifest declares is what the server
+    # lists, reading one dispatches a reserved tool into the module, and a name
+    # the manifest does not carry is refused rather than dispatched.
+    described = root / 'described.wasm'
+    described.write_bytes(wasm.read_bytes())
+    (root / 'described.manifest.json').write_text(json.dumps({
+        'schema_version': '1.0', 'name': 'described', 'version': '1.0.0', 'capabilities': [],
+        'entry': '_start', 'tools': [],
+        'resources': [{'uri': 'file:///notes.txt', 'name': 'notes',
+                       'description': 'Some notes', 'mime_type': 'text/plain'}],
+        'prompts': [{'name': 'greet', 'description': 'Greet someone',
+                     'arguments': [{'name': 'who', 'description': 'who to greet', 'required': True}]}],
+    }))
+    asked = [{'jsonrpc': '2.0', 'id': 1, 'method': 'resources/list', 'params': {}},
+             {'jsonrpc': '2.0', 'id': 2, 'method': 'resources/read', 'params': {'uri': 'file:///notes.txt'}},
+             {'jsonrpc': '2.0', 'id': 3, 'method': 'resources/read', 'params': {'uri': 'file:///missing'}},
+             {'jsonrpc': '2.0', 'id': 4, 'method': 'prompts/list', 'params': {}},
+             {'jsonrpc': '2.0', 'id': 5, 'method': 'prompts/get',
+              'params': {'name': 'greet', 'arguments': {'who': 'world'}}},
+             {'jsonrpc': '2.0', 'id': 6, 'method': 'prompts/get', 'params': {'name': 'nope'}}]
+    result = run('serve', str(described), input=''.join(json.dumps(m) + '\n' for m in asked))
+    assert result.returncode == 0, result.stderr
+    answers = {reply['id']: reply for reply in map(json.loads, result.stdout.splitlines())}
+    assert answers[1]['result']['resources'] == [{
+        'uri': 'file:///notes.txt', 'name': 'notes',
+        'description': 'Some notes', 'mimeType': 'text/plain'}], answers[1]
+    assert answers[2]['result']['contents'][0]['mimeType'] == 'text/plain', answers[2]
+    assert 'Unknown resource' in answers[3]['error']['message'], answers[3]
+    assert answers[4]['result']['prompts'][0]['arguments'][0] == {
+        'name': 'who', 'description': 'who to greet', 'required': True}, answers[4]
+    assert answers[5]['result']['messages'][0]['role'] == 'user', answers[5]
+    assert 'Unknown prompt' in answers[6]['error']['message'], answers[6]
+    print('PASS: resources and prompts listed from the manifest; unknown names refused')
+
     # Imported host functions must be rejected before instantiation, even with full profile.
     for name in ('exec_command', 'http_request'):
         payload = b'\x01\x05porta' + bytes([len(name)]) + name.encode() + b'\x00\x00'
