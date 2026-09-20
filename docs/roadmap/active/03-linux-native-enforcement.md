@@ -140,6 +140,14 @@ Two details are the difference between a filter and a claim:
   things in different tables, so a filter that returned an errno there would be
   guessing. This is the one case where an errno would be a lie.
 
+The two platforms hold the same invariant at different points, which is worth
+knowing before reading either one's test. macOS refuses at `connect` and `send`
+— a UDP socket is created happily and then cannot reach anything — while Linux
+refuses at `socket(2)`, so the socket never exists. `scripts/integration.py`
+asserts the outcome on both and the mechanism on neither: on macOS that a UDP
+send, a Unix-socket connect and a direct TCP connect all fail with `EPERM`, and
+on Linux that those sockets do not open at all.
+
 `socketpair(2)` is deliberately left alone: it makes an anonymous pair both of
 whose ends the process already holds, so it reaches nothing, and runtimes use
 it for their own plumbing.

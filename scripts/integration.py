@@ -113,17 +113,25 @@ proxy = urllib.parse.urlsplit(os.environ['HTTPS_PROXY'])
 with socket.create_connection((proxy.hostname, proxy.port), 2) as stream:
     stream.sendall(b'CONNECT blocked.example:443 HTTP/1.1\r\n\r\n')
     assert b'403 Forbidden' in stream.recv(4096)
-try:
-    socket.create_connection(('127.0.0.1', int(sys.argv[1])), 2)
-except OSError as error:
-    assert error.errno in (errno.EPERM, errno.EACCES), error
-else:
-    raise AssertionError('direct socket bypassed the proxy')
+def denied(attempt):
+    """Whether an egress attempt was refused by the sandbox rather than served."""
+    try:
+        attempt()
+    except OSError as error:
+        assert error.errno in (errno.EPERM, errno.EACCES), error
+        return True
+    raise AssertionError('egress bypassed the proxy')
+
+# The proxy is the only way out. macOS refuses at connect and send rather than
+# at socket(), so creating one of these proves nothing — the send has to fail.
+assert denied(lambda: socket.create_connection(('127.0.0.1', int(sys.argv[1])), 2))
+assert denied(lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('8.8.8.8', 53)))
+assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect('/var/run/syslog'))
 '''
             result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
                          '--', '-c', probe, str(port))
             assert result.returncode == 0, result.stderr
-            print('PASS: CONNECT policy denial and direct-socket bypass blocked')
+            print('PASS: CONNECT policy denial; direct TCP, UDP and Unix-socket egress blocked')
     finally:
         server.shutdown()
         server.server_close()
