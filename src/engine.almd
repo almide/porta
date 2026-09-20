@@ -140,53 +140,16 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
 
 effect fn validate(opts: cli.Options) -> Result[Unit, String] = {
   println("Validating: ${opts.path}")
-
-  let manifest_path = if opts.manifest_path != "" then opts.manifest_path
-    else string.replace(opts.path, ".wasm", ".manifest.json")
-  let has_manifest = fs.exists(manifest_path)
-
-  let caps = if opts.profile != "" then
-    match opts.profile {
-      "ai-agent" => sandbox.profile_ai_agent(),
-      "worker" => sandbox.profile_worker(),
-      "full" => sandbox.profile_full(),
-      _ => sandbox.profile_ai_agent(),
-    }
-  else if has_manifest then {
-    let m = manifest.load_manifest(manifest_path)!
-    if list.len(m.capabilities) > 0 then sandbox.from_manifest(m.capabilities)
-    else sandbox.profile_full()
-  }
-  else sandbox.profile_full()
-
-  // Use native inspect for any size WASM
-  let info_json = wasm_rt.wt_inspect(opts.path)
-  let info = json.parse(info_json)!
-  let all_imports = json.get_array(info, "imports") ?? []
-  let wasi_imports = all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
+  let caps = validation_capabilities(opts)!
+  let wasi_imports = wasi_imports_of(opts.path)!
 
   println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
-  let _has_fail = false
   for imp in wasi_imports {
     let name = json.get_string(imp, "name") ?? ""
-    let req = sandbox.required_capability(name)
-    let status = match req {
-      none => "  ok",
-      some(cap) =>
-        if sandbox.has_capability(caps, cap) then "  ok"
-        else "  DENIED (requires ${sandbox.cap_name(cap)})",
-    }
-    println("    ${name}${status}")
+    println("    ${name}${import_status(caps, name)}")
   }
 
-  // Check for denied imports
-  let denied = wasi_imports |> list.filter((imp) => {
-    let name = json.get_string(imp, "name") ?? ""
-    match sandbox.required_capability(name) {
-      none => false,
-      some(cap) => not sandbox.has_capability(caps, cap),
-    }
-  })
+  let denied = wasi_imports |> list.filter((imp) => is_denied(caps, json.get_string(imp, "name") ?? ""))
   if list.len(denied) > 0 then {
     let first_name = json.get_string(list.get(denied, 0) ?? value.object([]), "name") ?? ""
     println("  Result: FAIL — capability denied for '${first_name}'")
@@ -194,6 +157,51 @@ effect fn validate(opts: cli.Options) -> Result[Unit, String] = {
   else println("  Result: PASS")
   ok(())
 }
+
+// What this run would be allowed: an explicit --profile first, then the
+// manifest beside the module, and a full profile only when neither says.
+effect fn validation_capabilities(opts: cli.Options) -> Result[sandbox.CapabilitySet, String] = {
+  if opts.profile != "" then ok(named_profile(opts.profile))
+  else {
+    let manifest_path = if opts.manifest_path != "" then opts.manifest_path
+      else string.replace(opts.path, ".wasm", ".manifest.json")
+    if not fs.exists(manifest_path) then ok(sandbox.profile_full())
+    else {
+      let m = manifest.load_manifest(manifest_path)!
+      if list.len(m.capabilities) > 0 then ok(sandbox.from_manifest(m.capabilities))
+      else ok(sandbox.profile_full())
+    }
+  }
+}
+
+// "ai-agent" is both a name and the default for an unrecognised one.
+fn named_profile(name: String) -> sandbox.CapabilitySet =
+  match name {
+    "worker" => sandbox.profile_worker(),
+    "full" => sandbox.profile_full(),
+    _ => sandbox.profile_ai_agent(),
+  }
+
+// Imports are read from the module without instantiating it.
+effect fn wasi_imports_of(path: String) -> Result[List[Value], String] = {
+  let info = json.parse(wasm_rt.wt_inspect(path))!
+  let all_imports = json.get_array(info, "imports") ?? []
+  ok(all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1"))
+}
+
+fn is_denied(caps: sandbox.CapabilitySet, name: String) -> Bool =
+  match sandbox.required_capability(name) {
+    none => false,
+    some(cap) => not sandbox.has_capability(caps, cap),
+  }
+
+fn import_status(caps: sandbox.CapabilitySet, name: String) -> String =
+  match sandbox.required_capability(name) {
+    none => "  ok",
+    some(cap) =>
+      if sandbox.has_capability(caps, cap) then "  ok"
+      else "  DENIED (requires ${sandbox.cap_name(cap)})",
+  }
 
 // --- Inspect ---
 

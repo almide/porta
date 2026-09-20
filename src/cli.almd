@@ -52,49 +52,67 @@ fn default_options() -> Options = {
   proxy_audit: "",
 }
 
+// One argument applied. `consumed` is how many arguments it took: two for an
+// option with a value, one for a flag or a bare word.
+type ParsedOption = { opts: Options, consumed: Int }
+
 fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
   if idx >= list.len(args) then opts
   else {
     let arg = list.get(args, idx) ?? ""
-    let next = list.get(args, idx + 1) ?? ""
-    match arg {
-      "--entry" => parse_options(args, idx + 2, {...opts, entry: next}),
-      "--step-limit" => parse_options(args, idx + 2, {...opts, step_limit: util.parse_int(next)}),
-      "--max-memory" => parse_options(args, idx + 2, {...opts, max_memory_pages: util.parse_int(next)}),
-      "--restart" => parse_options(args, idx + 2, {...opts, restart: next}),
-      "--profile" => parse_options(args, idx + 2, {...opts, profile: next}),
-      "--manifest" => parse_options(args, idx + 2, {...opts, manifest_path: next}),
-      "-e" => match util.split_at_eq(next) {
-        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
-        none => parse_options(args, idx + 2, opts),
-      },
-      "--env" => match util.split_at_eq(next) {
-        some(kv) => parse_options(args, idx + 2, {...opts, env_vars: opts.env_vars + [kv]}),
-        none => parse_options(args, idx + 2, opts),
-      },
-      "--env-file" => parse_options(args, idx + 2, {...opts, env_file: next}),
-      "--secret" => match util.split_at_eq(next) {
-        some(kv) => parse_options(args, idx + 2, {...opts, secrets: opts.secrets + [kv]}),
-        none => parse_options(args, idx + 2, opts),
-      },
-      "-v" => {
-        let dir = next
-        parse_options(args, idx + 2, {...opts, preopen_dirs: opts.preopen_dirs + [dir]})
-      },
-      "--allow-net" => parse_options(args, idx + 2, {...opts, allow_net: opts.allow_net + [next]}),
-      "--allow-exec" => parse_options(args, idx + 2, {...opts, allow_exec: opts.allow_exec + string.split(next, ",")}),
-      "--proxy-allow" => parse_options(args, idx + 2, {...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
-      "--proxy-deny" => parse_options(args, idx + 2, {...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
-      "--proxy-audit" => parse_options(args, idx + 2, {...opts, proxy_audit: next}),
-      "-d" => parse_options(args, idx + 1, {...opts, detach: true}),
-      "--detach" => parse_options(args, idx + 1, {...opts, detach: true}),
-      "--_daemon" => parse_options(args, idx + 2, {...opts, daemon_id: next}),
-      "--" => {...opts, wasm_args: list.drop(args, idx + 1)},
-      _ =>
-        if string.starts_with(arg, "--") then parse_options(args, idx + 2, opts)
-        else if opts.path == "" then parse_options(args, idx + 1, {...opts, path: arg})
-        else parse_options(args, idx + 1, opts),
+    // Everything after `--` belongs to the program being run, not to porta.
+    if arg == "--" then {...opts, wasm_args: list.drop(args, idx + 1)}
+    else {
+      let step = apply_option(opts, arg, list.get(args, idx + 1) ?? "")
+      parse_options(args, idx + step.consumed, step.opts)
     }
+  }
+
+fn apply_option(opts: Options, arg: String, next: String) -> ParsedOption =
+  match arg {
+    "--entry" => valued({...opts, entry: next}),
+    "--step-limit" => valued({...opts, step_limit: util.parse_int(next)}),
+    "--max-memory" => valued({...opts, max_memory_pages: util.parse_int(next)}),
+    "--restart" => valued({...opts, restart: next}),
+    "--profile" => valued({...opts, profile: next}),
+    "--manifest" => valued({...opts, manifest_path: next}),
+    "-e" => valued(with_env(opts, next)),
+    "--env" => valued(with_env(opts, next)),
+    "--env-file" => valued({...opts, env_file: next}),
+    "--secret" => valued(with_secret(opts, next)),
+    "-v" => valued({...opts, preopen_dirs: opts.preopen_dirs + [next]}),
+    "--allow-net" => valued({...opts, allow_net: opts.allow_net + [next]}),
+    "--allow-exec" => valued({...opts, allow_exec: opts.allow_exec + string.split(next, ",")}),
+    "--proxy-allow" => valued({...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
+    "--proxy-deny" => valued({...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
+    "--proxy-audit" => valued({...opts, proxy_audit: next}),
+    "-d" => flag({...opts, detach: true}),
+    "--detach" => flag({...opts, detach: true}),
+    "--_daemon" => valued({...opts, daemon_id: next}),
+    _ => unrecognized(opts, arg),
+  }
+
+fn valued(opts: Options) -> ParsedOption = {opts: opts, consumed: 2}
+fn flag(opts: Options) -> ParsedOption = {opts: opts, consumed: 1}
+
+// An unknown --option is skipped along with its value. The first bare word is
+// the path; any later one is an argument for the program being run.
+fn unrecognized(opts: Options, arg: String) -> ParsedOption =
+  if string.starts_with(arg, "--") then {opts: opts, consumed: 2}
+  else if opts.path == "" then {opts: {...opts, path: arg}, consumed: 1}
+  else {opts: opts, consumed: 1}
+
+// -e, --env and --secret take key=value; a value without '=' adds nothing.
+fn with_env(opts: Options, text: String) -> Options =
+  match util.split_at_eq(text) {
+    some(kv) => {...opts, env_vars: opts.env_vars + [kv]},
+    none => opts,
+  }
+
+fn with_secret(opts: Options, text: String) -> Options =
+  match util.split_at_eq(text) {
+    some(kv) => {...opts, secrets: opts.secrets + [kv]},
+    none => opts,
   }
 
 // --- Environment resolution ---
@@ -155,131 +173,3 @@ fn build_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, e
     allowed_hosts: opts.allow_net,
   }
 }
-
-// --- Help ---
-
-fn print_common_runtime_opts() -> Unit = {
-  println("  -e, --env <KEY=VALUE>   Set environment variable (repeatable)")
-  println("  --env-file <path>       Load env vars from file")
-  println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
-  println("  --profile <name>        Capability profile: ai-agent, worker, full")
-  println("  --entry <name>          Entry point (default: _start)")
-  println("  --step-limit <n>        Max instructions (0 = unlimited)")
-  println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
-  println("  -v <path>               Mount directory (repeatable, append :ro for read-only)")
-  println("  --allow-net <host:port> Allow network to host:port (repeatable)")
-  println("  --allow-exec <cmd,...>  Allow commands (comma-separated)")
-  println("  --proxy-allow <hosts>   HTTPS proxy allowlist (comma-separated, *.wildcard ok)")
-  println("  --proxy-deny <hosts>    HTTPS proxy denylist (comma-separated, *.wildcard ok)")
-  println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
-}
-
-fn print_help(topic: String) -> Unit =
-  match topic {
-    "run" => {
-      println("porta run <target> [options] [-- args...]")
-      println("")
-      println("Execute a WASM binary or native command.")
-      println("Auto-detects mode: .wasm files run in WASM sandbox, everything else")
-      println("runs as a native command with filesystem and network restrictions.")
-      println("")
-      println("examples:")
-      println("  porta run agent.wasm --profile full -v .")
-      println("  porta run claude --allow-net '*:443' -v . -e \"HOME=$HOME\"")
-      println("  porta run python --allow-net '*:443' -v . -- script.py")
-      println("")
-      println("options:")
-      print_common_runtime_opts()
-      println("  --restart <policy>      Restart policy: no, on-failure, always (WASM only)")
-      println("  --manifest <path>       Path to manifest.json (WASM only)")
-      println("  -d, --detach            Run as background daemon (WASM only)")
-    },
-    "serve" => {
-      println("porta serve <agent.wasm> [options]")
-      println("")
-      println("Start MCP server on stdio (JSON-RPC 2.0).")
-      println("Exposes WASM agent tools via the MCP protocol.")
-      println("")
-      println("options:")
-      print_common_runtime_opts()
-      println("  --manifest <path>       Path to manifest.json")
-    },
-    "run-native" => print_help("run"),
-    "up" => {
-      println("porta up [-- extra-args...]")
-      println("")
-      println("Run agent from porta.toml in the current directory.")
-      println("Supports both WASM and native runtimes.")
-    },
-    "init" => {
-      println("porta init [native|wasm] [command]")
-      println("")
-      println("Create a porta.toml in the current directory.")
-      println("")
-      println("examples:")
-      println("  porta init native claude    Create native config for 'claude'")
-      println("  porta init wasm agent.wasm  Create WASM config")
-    },
-    "build" => {
-      println("porta build <agent.wasm> [options]")
-      println("")
-      println("Generate manifest.json from WASM binary.")
-      println("Extracts exported functions as MCP tools and lists WASI imports.")
-      println("")
-      println("options:")
-      println("  --manifest <path>       Output path (default: <agent>.manifest.json)")
-    },
-    "inspect" => {
-      println("porta inspect <agent.wasm>")
-      println("")
-      println("Show WASM module info: imports, exports, and memory layout.")
-    },
-    "validate" => {
-      println("porta validate <agent.wasm> [options]")
-      println("")
-      println("Check WASI imports against a capability profile.")
-      println("Reports which imports are allowed or denied.")
-      println("")
-      println("options:")
-      println("  --manifest <path>       Path to manifest.json")
-      println("  --profile <name>        Capability profile: ai-agent, worker, full")
-    },
-    "ps" => {
-      println("porta ps")
-      println("")
-      println("List running and stopped instances.")
-    },
-    _ => {
-      println("porta — WASM agents, teams, and MCP tools")
-      println("")
-      println("Project:")
-      println("  init          Create porta.toml")
-      println("  up            Run from porta.toml")
-      println("")
-      println("Runtime:")
-      println("  agent-journal Inspect a stopped journal without replay or effects")
-      println("  agent-check   Validate and inspect a team without executing it")
-      println("  agent         Run a WASM agent or team; optionally record/checkpoint")
-      println("  agent-resume  Continue a recorded WASM run")
-      println("  agent-replay  Verify a completed run without external operations")
-      println("  run           Execute WASM or native command")
-      println("  serve         Start MCP server")
-      println("")
-      println("Development:")
-      println("  build         Generate manifest.json from WASM binary")
-      println("  inspect       Show WASM module info")
-      println("  validate      Check WASI imports against capabilities")
-      println("")
-      println("Instances:")
-      println("  ps            List instances")
-      println("  stop <id>     Stop instance (SIGTERM)")
-      println("  kill <id>     Kill instance (SIGKILL)")
-      println("  logs <id>     View instance logs")
-      println("  rm <id>       Remove stopped instance")
-      println("")
-      println("  version       Show version")
-      println("  help [cmd]    Show help for a command")
-      println("")
-      println("Run 'porta help <command>' for command-specific options.")
-    },
-  }

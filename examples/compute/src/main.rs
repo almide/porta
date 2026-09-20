@@ -77,40 +77,60 @@ fn object_to_script(values: serde_json::Map<String, Value>, depth: usize, nodes:
     Ok(values?.into())
 }
 
+/// The script engine is dynamically typed, so the result's type is asked for
+/// one kind at a time. A type with no JSON counterpart is an error, never a
+/// best-effort rendering.
 fn to_json(value: Dynamic, depth: usize, nodes: &mut usize) -> Result<Value, String> {
     visit(depth, nodes)?;
     if value.is_unit() {
-        Ok(Value::Null)
-    } else if value.is::<bool>() {
-        Ok(Value::Bool(value.cast()))
-    } else if value.is::<INT>() {
-        Ok(Value::Number(value.cast::<INT>().into()))
-    } else if value.is::<Decimal>() {
-        let text = value.cast::<Decimal>().to_string();
-        Ok(Value::Number(
-            serde_json::Number::from_str(&text).map_err(|_| "invalid decimal result")?,
-        ))
-    } else if value.is::<ImmutableString>() {
-        Ok(Value::String(value.cast::<ImmutableString>().into()))
-    } else if value.is::<char>() {
-        Ok(Value::String(value.cast::<char>().to_string()))
-    } else if value.is::<Array>() {
-        value
-            .cast::<Array>()
-            .into_iter()
-            .map(|v| to_json(v, depth + 1, nodes))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array)
-    } else if value.is::<Map>() {
-        value
-            .cast::<Map>()
-            .into_iter()
-            .map(|(k, v)| Ok((k.into(), to_json(v, depth + 1, nodes)?)))
-            .collect::<Result<serde_json::Map<_, _>, String>>()
-            .map(Value::Object)
-    } else {
-        Err("script result is not JSON-compatible".into())
+        return Ok(Value::Null);
     }
+    if value.is::<bool>() {
+        return Ok(Value::Bool(value.cast()));
+    }
+    if value.is::<INT>() {
+        return Ok(Value::Number(value.cast::<INT>().into()));
+    }
+    if value.is::<Decimal>() {
+        return decimal_to_json(value.cast::<Decimal>());
+    }
+    if value.is::<ImmutableString>() {
+        return Ok(Value::String(value.cast::<ImmutableString>().into()));
+    }
+    if value.is::<char>() {
+        return Ok(Value::String(value.cast::<char>().to_string()));
+    }
+    if value.is::<Array>() {
+        return array_to_json(value.cast(), depth, nodes);
+    }
+    if value.is::<Map>() {
+        return map_to_json(value.cast(), depth, nodes);
+    }
+    Err("script result is not JSON-compatible".into())
+}
+
+/// A decimal crosses back as its exact text, never as a float.
+fn decimal_to_json(decimal: Decimal) -> Result<Value, String> {
+    let text = decimal.to_string();
+    Ok(Value::Number(
+        serde_json::Number::from_str(&text).map_err(|_| "invalid decimal result")?,
+    ))
+}
+
+fn array_to_json(values: Array, depth: usize, nodes: &mut usize) -> Result<Value, String> {
+    values
+        .into_iter()
+        .map(|v| to_json(v, depth + 1, nodes))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
+}
+
+fn map_to_json(values: Map, depth: usize, nodes: &mut usize) -> Result<Value, String> {
+    values
+        .into_iter()
+        .map(|(k, v)| Ok((k.into(), to_json(v, depth + 1, nodes)?)))
+        .collect::<Result<serde_json::Map<_, _>, String>>()
+        .map(Value::Object)
 }
 
 fn compute(request: Value) -> Result<Value, String> {

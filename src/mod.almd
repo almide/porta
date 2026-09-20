@@ -2,6 +2,7 @@
 
 import process
 import self.cli
+import self.help
 import self.engine
 import self.ops
 import self.build
@@ -21,7 +22,7 @@ effect fn main() -> Result[Unit, String] = {
       ok(())
     },
     "--help" => {
-      cli.print_help("")
+      help.print_help("")
       ok(())
     },
     "agent-journal" => agent.journal_info(list.drop(args, 2)),
@@ -30,18 +31,18 @@ effect fn main() -> Result[Unit, String] = {
     "agent-resume" => agent.command(list.drop(args, 2), "resume"),
     "agent-replay" => agent.command(list.drop(args, 2), "replay"),
     "serve" => {
-      if has_help_flag(args) then { cli.print_help("serve"); ok(()) }
+      if has_help_flag(args) then { help.print_help("serve"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("serve"); ok(()) }
+        if opts.path == "" then { help.print_help("serve"); ok(()) }
         else engine.serve(opts)
       }
     },
     "run" => {
-      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
+      if has_help_flag(args) then { help.print_help("run"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("run"); ok(()) }
+        if opts.path == "" then { help.print_help("run"); ok(()) }
         else if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
         else engine.run_native(opts)
       }
@@ -54,45 +55,45 @@ effect fn main() -> Result[Unit, String] = {
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
       let command = list.get(args, 3) ?? ""
-      if command == "" then { cli.print_help("init"); ok(()) }
+      if command == "" then { help.print_help("init"); ok(()) }
       else project.porta_init(runtime_type, command)
     },
     "run-native" => {
       // Alias: porta run-native is equivalent to porta run <non-wasm>
-      if has_help_flag(args) then { cli.print_help("run"); ok(()) }
+      if has_help_flag(args) then { help.print_help("run"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("run"); ok(()) }
+        if opts.path == "" then { help.print_help("run"); ok(()) }
         else engine.run_native(opts)
       }
     },
     "inspect" => {
-      if has_help_flag(args) then { cli.print_help("inspect"); ok(()) }
+      if has_help_flag(args) then { help.print_help("inspect"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("inspect"); ok(()) }
+        if opts.path == "" then { help.print_help("inspect"); ok(()) }
         else engine.inspect(opts.path)
       }
     },
     "validate" => {
-      if has_help_flag(args) then { cli.print_help("validate"); ok(()) }
+      if has_help_flag(args) then { help.print_help("validate"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("validate"); ok(()) }
+        if opts.path == "" then { help.print_help("validate"); ok(()) }
         else engine.validate(opts)
       }
     },
     "build" => {
-      if has_help_flag(args) then { cli.print_help("build"); ok(()) }
+      if has_help_flag(args) then { help.print_help("build"); ok(()) }
       else {
         let opts = cli.parse_options(args, 2, cli.default_options())
-        if opts.path == "" then { cli.print_help("build"); ok(()) }
+        if opts.path == "" then { help.print_help("build"); ok(()) }
         else build.build_package(opts)
       }
     },
     "help" => {
       let topic = list.get(args, 2) ?? ""
-      cli.print_help(topic)
+      help.print_help(topic)
       ok(())
     },
     "ps" => {

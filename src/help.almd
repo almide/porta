@@ -1,0 +1,131 @@
+// Command-line help text.
+//
+// Every topic prints the same shape: a usage line, what the command does,
+// then its options. Kept apart from cli.almd so that argument parsing and
+// the prose describing it do not share a file.
+
+fn print_common_runtime_opts() -> Unit = {
+  println("  -e, --env <KEY=VALUE>   Set environment variable (repeatable)")
+  println("  --env-file <path>       Load env vars from file")
+  println("  --secret <KEY=VALUE>    Inject secret as env var (repeatable)")
+  println("  --profile <name>        Capability profile: ai-agent, worker, full")
+  println("  --entry <name>          Entry point (default: _start)")
+  println("  --step-limit <n>        Max instructions (0 = unlimited)")
+  println("  --max-memory <pages>    Max WASM memory pages (0 = unlimited)")
+  println("  -v <path>               Mount directory (repeatable, append :ro for read-only)")
+  println("  --allow-net <host:port> Allow network to host:port (repeatable)")
+  println("  --allow-exec <cmd,...>  Allow commands (comma-separated)")
+  println("  --proxy-allow <hosts>   HTTPS proxy allowlist (comma-separated, *.wildcard ok)")
+  println("  --proxy-deny <hosts>    HTTPS proxy denylist (comma-separated, *.wildcard ok)")
+  println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
+}
+
+fn print_help(topic: String) -> Unit =
+  match topic {
+    "run" => {
+      println("porta run <target> [options] [-- args...]")
+      println("")
+      println("Execute a WASM binary or native command.")
+      println("Auto-detects mode: .wasm files run in WASM sandbox, everything else")
+      println("runs as a native command with filesystem and network restrictions.")
+      println("")
+      println("examples:")
+      println("  porta run agent.wasm --profile full -v .")
+      println("  porta run claude --allow-net '*:443' -v . -e \"HOME=$HOME\"")
+      println("  porta run python --allow-net '*:443' -v . -- script.py")
+      println("")
+      println("options:")
+      print_common_runtime_opts()
+      println("  --restart <policy>      Restart policy: no, on-failure, always (WASM only)")
+      println("  --manifest <path>       Path to manifest.json (WASM only)")
+      println("  -d, --detach            Run as background daemon (WASM only)")
+    },
+    "serve" => {
+      println("porta serve <agent.wasm> [options]")
+      println("")
+      println("Start MCP server on stdio (JSON-RPC 2.0).")
+      println("Exposes WASM agent tools via the MCP protocol.")
+      println("")
+      println("options:")
+      print_common_runtime_opts()
+      println("  --manifest <path>       Path to manifest.json")
+    },
+    "run-native" => print_help("run"),
+    "up" => {
+      println("porta up [-- extra-args...]")
+      println("")
+      println("Run agent from porta.toml in the current directory.")
+      println("Supports both WASM and native runtimes.")
+    },
+    "init" => {
+      println("porta init [native|wasm] [command]")
+      println("")
+      println("Create a porta.toml in the current directory.")
+      println("")
+      println("examples:")
+      println("  porta init native claude    Create native config for 'claude'")
+      println("  porta init wasm agent.wasm  Create WASM config")
+    },
+    "build" => {
+      println("porta build <agent.wasm> [options]")
+      println("")
+      println("Generate manifest.json from WASM binary.")
+      println("Extracts exported functions as MCP tools and lists WASI imports.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Output path (default: <agent>.manifest.json)")
+    },
+    "inspect" => {
+      println("porta inspect <agent.wasm>")
+      println("")
+      println("Show WASM module info: imports, exports, and memory layout.")
+    },
+    "validate" => {
+      println("porta validate <agent.wasm> [options]")
+      println("")
+      println("Check WASI imports against a capability profile.")
+      println("Reports which imports are allowed or denied.")
+      println("")
+      println("options:")
+      println("  --manifest <path>       Path to manifest.json")
+      println("  --profile <name>        Capability profile: ai-agent, worker, full")
+    },
+    "ps" => {
+      println("porta ps")
+      println("")
+      println("List running and stopped instances.")
+    },
+    _ => {
+      println("porta — WASM agents, teams, and MCP tools")
+      println("")
+      println("Project:")
+      println("  init          Create porta.toml")
+      println("  up            Run from porta.toml")
+      println("")
+      println("Runtime:")
+      println("  agent-journal Inspect a stopped journal without replay or effects")
+      println("  agent-check   Validate and inspect a team without executing it")
+      println("  agent         Run a WASM agent or team; optionally record/checkpoint")
+      println("  agent-resume  Continue a recorded WASM run")
+      println("  agent-replay  Verify a completed run without external operations")
+      println("  run           Execute WASM or native command")
+      println("  serve         Start MCP server")
+      println("")
+      println("Development:")
+      println("  build         Generate manifest.json from WASM binary")
+      println("  inspect       Show WASM module info")
+      println("  validate      Check WASI imports against capabilities")
+      println("")
+      println("Instances:")
+      println("  ps            List instances")
+      println("  stop <id>     Stop instance (SIGTERM)")
+      println("  kill <id>     Kill instance (SIGKILL)")
+      println("  logs <id>     View instance logs")
+      println("  rm <id>       Remove stopped instance")
+      println("")
+      println("  version       Show version")
+      println("  help [cmd]    Show help for a command")
+      println("")
+      println("Run 'porta help <command>' for command-specific options.")
+    },
+  }
