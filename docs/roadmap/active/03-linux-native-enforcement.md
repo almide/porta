@@ -48,9 +48,24 @@ Landlock is allow-list only, so the macOS deny-list cannot be ported. That
 turned out to be the better shape. `--read-policy strict` handles
 `READ_FILE | READ_DIR` and grants reads beneath exactly two sets: the mounts the
 caller was given, and the platform's own directories — `/usr`, `/lib`,
-`/lib64`, `/bin`, `/sbin`, `/etc`, `/proc`, plus the always-writable `/tmp` and
-`/dev`. Everything else in the filesystem is closed, including every home
-directory.
+`/lib64`, `/bin`, `/sbin`, `/etc`, plus the always-writable `/tmp` and `/dev`.
+Everything else in the filesystem is closed, including every home directory.
+
+`/proc` is not in that set, and its absence is a security decision rather than
+a loader one. It was there on the assumption an interpreter needs it. Measured,
+none of `sh`, `python3`, `curl`, `perl` or `grep` does — and granting it hands
+a confined command the command line of every other process the same user is
+running, credentials included, plus the host's connection table and mount
+layout. Landlock cannot narrow it to the process's own entry: the ruleset is
+built before the fork, so the child's PID does not exist yet. A command that
+genuinely needs `/proc` takes it as a mount the caller grants.
+
+This was the one place where the two platforms' read sets were derived
+differently. macOS's came from the kernel's own denial records, because nothing
+else could produce it. Linux's was written from an assumption and never
+checked. The assumption was wrong, and `scripts/integration.py` now asserts it:
+a strict run cannot read another process's command line, with a decoy carrying
+a credential to make the failure visible.
 
 That is a guarantee rather than a mitigation. The deny-list this item
 originally rejected would have left `~/.aws/credentials`, `~/.config/gh`,
@@ -59,6 +74,17 @@ enumerating them. It needs ABI 1 — a lower bar than the ABI 4 the network rule
 need — and `scripts/integration.py` asserts on Linux that a credential outside
 every grant is unreadable, that the granted mount and a system interpreter
 still are, and that an unknown policy name refuses.
+
+`/etc` is granted as a whole, and that is the set's remaining sharp edge. It
+carries what a command genuinely needs — `ld.so.cache`, `localtime`, `hosts`,
+`resolv.conf`, `nsswitch.conf`, `ssl/certs` — and also `shadow`, `sudoers` and
+any host key beside them. File permissions are what separates those for an
+ordinary user; a run as root has nothing between it and `/etc/shadow`. An
+adversarial sweep confirmed this and confirmed the rest of the surface holds:
+home directories, `/root`, `/sys`, `/var/log` and `/proc` are all closed, a
+symlink inside a granted mount pointing at a home directory or at `/` is
+refused, and so is a write through one. Narrowing `/etc` to the files a loader
+actually reads is open work; unlike `/proc` it cannot simply be dropped.
 
 A path in the system set that does not exist on a host is skipped rather than
 refused: these are the platform's directories, not a caller's grant, and

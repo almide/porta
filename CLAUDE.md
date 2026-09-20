@@ -105,6 +105,24 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - Resume counts previous model calls and steps and must not repeat completed writes.
 - Journals stay outside every tool mount, including delegated agents.
 
+## Releasing
+
+```bash
+git tag v0.5.0 && git push origin v0.5.0     # builds, tests and publishes
+bash scripts/verify_release.sh v0.5.0        # installs it the way a user would
+```
+
+`.github/workflows/release.yml` runs the integration suite against the binary
+it is about to publish, on the machine that produced it. `verify_release.sh`
+then checks the published release from outside the repository: the archive
+exists for this host, its checksum is listed and matches, the binary runs,
+reports the version the tag claims, and still refuses a write outside every
+mount. Publishing and being installable are different things.
+
+Bump the version in `util.version()` and `almide.toml` together; the
+integration suite asserts the binary, the generated manifest and `almide.toml`
+all say the same thing.
+
 ## Repository workflow
 
 - `main` accepts PRs from `develop`; work on `develop`.

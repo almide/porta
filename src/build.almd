@@ -1,4 +1,5 @@
 import value
+import self.util
 // Build: manifest and package generation
 
 import fs
@@ -38,7 +39,7 @@ effect fn build_package(opts: cli.Options) -> Result[Unit, String] = {
   let manifest_json = value.object([
     ("schema_version", value.str("1.0")),
     ("name", value.str(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
-    ("version", value.str("0.4.0")),
+    ("version", value.str(util.version())),
     ("description", value.str("")),
     ("entry", value.str("_start")),
     ("capabilities", value.array([])),

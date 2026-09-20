@@ -26,6 +26,10 @@ type ExecRequest = {
   // egress. The native side cannot infer it from `net`, and it decides
   // whether the channels a TCP rule cannot reach are closed too.
   proxy: Bool,
+  // Whether the caller said running as root is what they meant. porta refuses
+  // otherwise: for root, the file permissions this policy leans on separate
+  // nothing.
+  allow_root: Bool,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -42,6 +46,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("cwd", value.str(req.cwd)),
     ("read_policy", value.str(req.read_policy)),
     ("proxy", value.bool(req.proxy)),
+    ("allow_root", value.bool(req.allow_root)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

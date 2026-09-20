@@ -34,13 +34,20 @@
 ## インストール
 
 ```bash
-bash scripts/install-almide.sh
-.tools/almide/almide build src/mod.almd -o target/porta
-cp target/porta ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-Almide 0.63.0、Rust ツールチェーン、Python 3、curl が必要です。検証手順と
-コンパイラのピン留めについては[ソースからのビルド](#ソースからのビルド)を参照してください。
+macOS (Apple silicon) と Linux (x86-64) 向けの単一バイナリです。公開された
+SHA-256 と照合してからインストールします。バージョンは `PORTA_RELEASE_TAG`、
+インストール先は第1引数で指定できます。
+
+公開されるバイナリは、**それをビルドしたマシン上で integration スイートを
+通過したそのファイル**です。リリースワークフローは、これから公開するファイル
+そのものに対してスイートを回します。再ビルドしたものではありません。
+
+他のプラットフォーム、または自分でビルドする場合は
+[ソースからのビルド](#ソースからのビルド)を参照してください。Almide 0.63.0、
+Rust ツールチェーン、Python 3、curl が必要です。
 
 `porta run` はネイティブコマンドと `.wasm` モジュールのどちらも取ります。WASI に
 コンパイルできるものなら動きます — Almide や、`python.wasm` 経由の Python 3.14 など。
@@ -273,6 +280,7 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `--proxy-deny <hosts>` | 同様に、これらのホストを拒否 |
 | `--proxy-audit <path>` | プロキシの判断を JSONL に追記 |
 | `--read-policy <open\|strict>` | `strict` で読み取りを mount とシステムディレクトリだけに限定 (既定は `open`) |
+| `--allow-root` | root でも実行する。既定は拒否 — `/etc` は読めなければならず、そこには `shadow` があり、それを隔てていたのはパーミッションだけです |
 | `--allow-exec <cmd,...>` | 特定コマンドを許可 (カンマ区切り) |
 | `--profile <name>` | ケイパビリティプロファイル: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | WASM の最大命令数 |
@@ -301,7 +309,7 @@ Porta は 2 つのレベルで制限を強制します。
 |---|---|---|
 | **書き込み** | `-v` マウントと `/tmp` 以外は拒否 | `-v` マウントと `/tmp`、`/dev` 以外は拒否 |
 | **読み取り、既定** | `~/.ssh` と `~/.gnupg` を拒否、それ以外は読める | 制限なし |
-| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/proc` `/tmp` `/dev` |
+| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/tmp` `/dev` |
 | **読み取り専用マウント** | `-v ./data:ro` → 読める、書けない | 同じ |
 | **ポート単位のネットワーク** | `--allow-net '*:443'` | 同じ。Landlock ABI 4 以上が必要 |
 | **ホスト単位のネットワーク** | `--proxy-allow` のみ。`--allow-net` では不可 | 同じ |
@@ -309,8 +317,10 @@ Porta は 2 つのレベルで制限を強制します。
 
 `strict` ではホームディレクトリは全て閉じます。**コマンド自身もその対象**で、
 これらの外に置かれたコマンドは起動できません。`/opt` 配下のツールチェーンなら
-インストールディレクトリ全体を `-v` で渡す必要があり、porta は素の
-`Permission denied` ではなく、どの grant が足りないかを名指しします。
+インストールディレクトリ全体を渡す必要がありますが、**読み取り専用の形を使って
+ください**。`-v /opt/toolchain:ro` ならインタプリタは動いたままですが、
+`-v /opt/toolchain` はエージェントにツールチェーン自体の書き換えを許します。
+porta は素の `Permission denied` ではなく、どの grant が足りないかを名指しします。
 
 Linux の Landlock は非特権で、名前空間も外部ランタイムも使いません。実行中の
 カーネルが表現できない規則を要求された場合は、緩めるのではなく実行を拒否します。

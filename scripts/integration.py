@@ -5,6 +5,7 @@ import http.server
 import threading
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,22 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
     assert len(replies) == 2001, len(replies)
     assert replies[-1]['id'] == '日本語-1999'
     print('PASS: WASM, untrusted cache, MCP stdio, Unicode, notifications, 2000 requests')
+
+    # One version, said the same way everywhere. It used to be written in five
+    # places, so `porta --version` and the manifest porta generates could
+    # disagree about what produced a file. almide.toml still carries it because
+    # the build needs it before any module exists, so the two are checked here.
+    declared = next(line.split('"')[1] for line in
+                    pathlib.Path('almide.toml').read_text().splitlines()
+                    if line.startswith('version'))
+    reported = run('--version').stdout.split()[-1]
+    assert reported == declared, f'porta reports {reported}, almide.toml says {declared}'
+    built = root / 'versioned.wasm'
+    built.write_bytes(wasm.read_bytes())
+    assert run('build', str(built)).returncode == 0
+    generated = json.loads((root / 'versioned.manifest.json').read_text())['version']
+    assert generated == declared, f'generated manifest says {generated}, not {declared}'
+    print(f'PASS: one version ({declared}) in the binary, the manifest and almide.toml')
 
     # Resources and prompts: what the manifest declares is what the server
     # lists, reading one dispatches a reserved tool into the module, and a name
@@ -138,6 +155,13 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         thread.join()
     print('PASS: checked HTTP tool does not follow redirects')
 
+    # A directory the run is never granted. It has to be somewhere an ordinary
+    # user can create — porta refuses to run as root, so /opt is out — and
+    # outside both the always-writable roots and the strict read set, or the
+    # tests below would assert nothing. A home directory is exactly that: not
+    # /tmp, not /dev, not a system directory, and closed unless mounted.
+    ungranted = pathlib.Path(tempfile.mkdtemp(prefix='porta-ungranted-', dir=pathlib.Path.home()))
+
     if platform.system() == 'Darwin':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result
@@ -196,7 +220,9 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
                      str(workspace / 'inside'))
         assert result.returncode == 0, result.stderr
         assert (workspace / 'inside').read_text() == 'x\n'
-        outside = pathlib.Path('/opt') / ('porta-denied-' + root.name)
+        # Outside every grant, but somewhere an ordinary user can create:
+        # the suite must not need root, because porta refuses to run as it.
+        outside = ungranted / 'porta-denied'
         result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'echo x > "$1"', 'sh', str(outside))
         assert result.returncode != 0, result
         assert not outside.exists(), outside
@@ -242,7 +268,7 @@ print('netlink', opens(socket.AF_NETLINK, socket.SOCK_RAW, 0))
 print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
 '''
         result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
-                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro',
                      '--', '-c', families)
         assert result.returncode == 0, result.stderr
         opened = dict(line.split() for line in result.stdout.split('\n') if line)
@@ -251,14 +277,14 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         # Without proxy mode nothing claims to be the only egress, so nothing is
         # filtered: the restriction follows the claim, it is not always on.
         result = run('run', sys.executable, '-v', str(workspace),
-                     '-v', str(pathlib.Path(sys.base_prefix).resolve()), '--', '-c', families)
+                     '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro', '--', '-c', families)
         assert result.returncode == 0, result.stderr
         assert 'udp4 True' in result.stdout and 'unix True' in result.stdout, result.stdout
         print('PASS: proxy mode is the only egress — UDP, Unix, IPv6 and netlink all denied')
 
         # --read-policy strict confines reads to the granted mounts and the
         # platform's own directories. A credential outside both is unreadable.
-        secrets = pathlib.Path('/opt') / ('porta-secrets-' + root.name)
+        secrets = ungranted / 'porta-secrets'
         secrets.mkdir()
         (secrets / 'credentials').write_text('aws_secret_access_key = EXAMPLE\n')
         (workspace / 'input.txt').write_text('workspace input\n')
@@ -281,7 +307,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         # The grant is the whole installation: an interpreter outside the
         # system set cannot reach its own standard library either.
         result = run('run', str(interpreter), '--read-policy', 'strict',
-                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro',
                      '--', '-c', 'print("interpreter ran")')
         assert result.returncode == 0 and 'interpreter ran' in result.stdout, result
         if not str(interpreter).startswith('/usr'):
@@ -295,7 +321,30 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: strict read policy confines reads to grants and system paths, '
               'leaving an interpreter runnable')
+
+        # /proc is what the same user's other processes are visible through:
+        # their command lines carry credentials. It is not in the system set,
+        # and no interpreter here needs it, so a strict run must not reach it.
+        decoy = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)',
+                                  '--token=sk-live-MUST-NOT-LEAK'])
+        try:
+            peek = ('import glob,sys\n'
+                    'seen=[]\n'
+                    'for d in glob.glob("/proc/[0-9]*"):\n'
+                    '    try: seen.append(open(d+"/cmdline").read())\n'
+                    '    except OSError: pass\n'
+                    'print("READ", len(seen), "MUST-NOT-LEAK" in "".join(seen))')
+            result = run('run', sys.executable, '--read-policy', 'strict', '-v', str(workspace),
+                         '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro', '--', '-c', peek)
+            assert result.returncode == 0, result.stderr
+            assert 'READ 0 False' in result.stdout, result.stdout
+        finally:
+            decoy.terminate()
+            decoy.wait()
+        print('PASS: a strict run cannot enumerate other processes through /proc')
     else:
         result = run('run', '/bin/echo', '--', 'must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: unsupported native sandbox fails closed')
+
+    shutil.rmtree(ungranted, ignore_errors=True)

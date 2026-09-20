@@ -3,6 +3,12 @@
 import self.dispatch
 import self.sandbox
 
+// The one place this number is written. It had been in five, which is four
+// chances for `porta --version` and the manifest porta generates to disagree
+// about what produced a file. `almide.toml` carries it too, because the build
+// needs it before this module exists; `src/mod_test.almd` asserts they match.
+fn version() -> String = "0.5.0"
+
 // --- Int parsing ---
 
 fn parse_int(s: String) -> Int =
