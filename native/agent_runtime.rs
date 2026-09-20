@@ -158,6 +158,55 @@ fn load_checks(configs: &mut Vec<CheckConfig>, engine: &Engine, base: &Path, lab
     }
     Ok(checks)
 }
+/// Settings that must hold before anything is compiled or resolved.
+fn validate_settings(config: &AgentConfig, task: &str) -> Result<(), String> {
+    if config.version != 1 { return Err("unsupported agent config version (expected 1)".into()); }
+    let limits = &config.limits;
+    if limits.max_steps == 0 || limits.max_model_calls == 0 || limits.fuel_per_step == 0 || limits.memory_pages == 0 || limits.memory_pages > 65536 || limits.timeout_seconds == 0 || limits.timeout_seconds > 86400 || limits.max_output_tokens == 0 {
+        return Err("agent budgets must be positive; memory <= 65536 pages and timeout <= 86400 seconds".into());
+    }
+    if task.is_empty() || task.len() > MAX_MESSAGE / 2 { return Err("task must be nonempty and at most 512 KiB".into()); }
+    if config.model.temperature.is_some_and(|v| !v.is_finite() || !(0.0..=2.0).contains(&v)) { return Err("model.temperature must be finite and between 0 and 2".into()); }
+    if config.model.name.trim().is_empty() { return Err("model.name is required".into()); }
+    validate_endpoint(&config.model.endpoint)
+}
+
+/// The model endpoint may not carry credentials and is plaintext only on loopback.
+fn validate_endpoint(endpoint: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(endpoint).map_err(|_| "invalid model endpoint")?;
+    let loopback = url.host_str().is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "[::1]");
+    if !(url.scheme() == "https" || url.scheme() == "http" && loopback) || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+        return Err("model endpoint must use HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
+    }
+    Ok(())
+}
+
+/// A name is unique across every tool and delegated agent in one team.
+fn claim_name(names: &mut HashSet<String>, name: &str, kind: &str) -> Result<(), String> {
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || !names.insert(name.to_string()) {
+        return Err(format!("{kind} names must be unique, nonempty ASCII letters, numbers, underscores or hyphens"));
+    }
+    Ok(())
+}
+
+/// Schema validation never reaches the network or the host filesystem.
+fn offline_validator(schema: &Value, name: &str) -> Result<jsonschema::Validator, String> {
+    jsonschema::options().offline().should_validate_formats(true)
+        .should_ignore_unknown_formats(false).build(schema)
+        .map_err(|_| format!("tool {name} has an invalid or unresolved input_schema"))
+}
+
+/// Resolve every tool mount before the guest runs, so nothing can widen it later.
+fn resolve_tool_mounts(tool: &mut ToolConfig, base: &Path) -> Result<(), String> {
+    let mut guest_paths = HashSet::new();
+    for mount in &mut tool.mounts {
+        if mount.guest.is_empty() || !guest_paths.insert(mount.guest.clone()) { return Err("tool mount guest paths must be nonempty and unique".into()); }
+        mount.host = std::fs::canonicalize(relative(base, &mount.host)).map_err(|e| format!("resolve tool mount: {e}"))?;
+        if !mount.host.is_dir() { return Err("tool mount must be a directory".into()); }
+    }
+    Ok(())
+}
+
 impl Runtime {
     fn open(path: &Path, task: &str) -> Result<Self, String> {
         Self::load(path, task, &[], None, "root", false, false, None)
@@ -171,20 +220,9 @@ impl Runtime {
         let source = std::fs::read_to_string(&path).map_err(|e| format!("read agent config: {e}"))?;
         let config_digest = verified_digest(source.as_bytes(), expected_config, inherited_hashes, &format!("agent config {}", path.display()))?;
         let mut config: AgentConfig = toml::from_str(&source).map_err(|e| format!("invalid agent config: {e}"))?;
-        if config.version != 1 { return Err("unsupported agent config version (expected 1)".into()); }
+        validate_settings(&config, task)?;
         let require_hashes = inherited_hashes || config.require_artifact_hashes;
         let limits = &config.limits;
-        if limits.max_steps == 0 || limits.max_model_calls == 0 || limits.fuel_per_step == 0 || limits.memory_pages == 0 || limits.memory_pages > 65536 || limits.timeout_seconds == 0 || limits.timeout_seconds > 86400 || limits.max_output_tokens == 0 {
-            return Err("agent budgets must be positive; memory <= 65536 pages and timeout <= 86400 seconds".into());
-        }
-        if task.is_empty() || task.len() > MAX_MESSAGE / 2 { return Err("task must be nonempty and at most 512 KiB".into()); }
-        if config.model.temperature.is_some_and(|v| !v.is_finite() || !(0.0..=2.0).contains(&v)) { return Err("model.temperature must be finite and between 0 and 2".into()); }
-        if config.model.name.trim().is_empty() { return Err("model.name is required".into()); }
-        let url = reqwest::Url::parse(&config.model.endpoint).map_err(|_| "invalid model endpoint")?;
-        let loopback = url.host_str().is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "[::1]");
-        if !(url.scheme() == "https" || url.scheme() == "http" && loopback) || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
-            return Err("model endpoint must use HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
-        }
         let budget = shared.unwrap_or_else(|| Arc::new(Mutex::new(Budget {
             max_steps: limits.max_steps, max_model_calls: limits.max_model_calls,
             steps: 0, model_calls: 0, tool_calls: 0, delegations: 0, verification_calls: 0, verification_failures: 0, fuel: 0,
@@ -204,33 +242,17 @@ impl Runtime {
         let mut tools = BTreeMap::new();
         let mut schemas = BTreeMap::new();
         for tool in &mut config.tools {
-            if tool.name.is_empty() || !tool.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || !names.insert(tool.name.clone()) {
-                return Err("tool names must be unique, nonempty ASCII letters, numbers, underscores or hyphens".into());
-            }
+            claim_name(&mut names, &tool.name, "tool")?;
             if !tool.input_schema.is_object() { return Err(format!("tool {} input_schema must be an object", tool.name)); }
-            // Never fetch schema references from the network or host filesystem.
-            let validator = jsonschema::options().offline().should_validate_formats(true)
-                .should_ignore_unknown_formats(false).build(&tool.input_schema)
-                .map_err(|_| format!("tool {} has an invalid or unresolved input_schema", tool.name))?;
-            schemas.insert(tool.name.clone(), validator);
-            let mut guest_paths = HashSet::new();
-            for mount in &mut tool.mounts {
-                if mount.guest.is_empty() || !guest_paths.insert(mount.guest.clone()) { return Err("tool mount guest paths must be nonempty and unique".into()); }
-                mount.host = std::fs::canonicalize(relative(base, &mount.host)).map_err(|e| format!("resolve tool mount: {e}"))?;
-                if !mount.host.is_dir() { return Err("tool mount must be a directory".into()); }
-            }
+            schemas.insert(tool.name.clone(), offline_validator(&tool.input_schema, &tool.name)?);
+            resolve_tool_mounts(tool, base)?;
             let (prepared, digest) = compile(&engine, &relative(base, &tool.wasm), tool.sha256.as_deref(), require_hashes)?;
             tools.insert(tool.name.clone(), Guest { prepared, digest, mounts: std::mem::take(&mut tool.mounts) });
         }
         for tool in &config.mcp_tools {
-            if tool.name.is_empty() || !tool.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || !names.insert(tool.name.clone()) {
-                return Err("MCP tool names must be unique nonempty ASCII letters, numbers, underscores or hyphens".into());
-            }
+            claim_name(&mut names, &tool.name, "MCP tool")?;
             tool.check()?;
-            let validator = jsonschema::options().offline().should_validate_formats(true)
-                .should_ignore_unknown_formats(false).build(&tool.input_schema)
-                .map_err(|_| format!("tool {} has an invalid or unresolved input_schema", tool.name))?;
-            schemas.insert(tool.name.clone(), validator);
+            schemas.insert(tool.name.clone(), offline_validator(&tool.input_schema, &tool.name)?);
         }
         let checks = load_checks(&mut config.completion_checks, &engine, base, "completion", require_hashes)?;
         let before_checks = load_checks(&mut config.before_tool_checks, &engine, base, "before-tool", require_hashes)?;
