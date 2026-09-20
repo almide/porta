@@ -36,11 +36,15 @@ does, or refuse the specific rule it cannot enforce:
 
 ## Feasibility probe
 
-Measured on kernel 6.12.76-linuxkit, aarch64, inside Docker Desktop's VM, with
-Docker's default seccomp profile already applied. `landlock_create_ruleset` with
-`LANDLOCK_CREATE_RULESET_VERSION` reported **ABI 6**. A single process then
-handled `WRITE_FILE | MAKE_REG` and `CONNECT_TCP`, allowed one directory and
-port 443, and called `prctl(PR_SET_NO_NEW_PRIVS)` plus `landlock_restrict_self`:
+`scripts/probes/landlock_probe.c` handles `WRITE_FILE | MAKE_REG` and
+`CONNECT_TCP` in a single process, allows one directory and port 443, then
+calls `prctl(PR_SET_NO_NEW_PRIVS)` and `landlock_restrict_self`. Two hosts so
+far, with identical results:
+
+| Host | Kernel | Landlock |
+|---|---|---|
+| Docker Desktop VM, aarch64, Docker's default seccomp applied | 6.12.76-linuxkit | ABI 6 |
+| GitHub `ubuntu-latest`, Ubuntu 24.04.5, x86_64, no seccomp filter | 6.17.0-1022-azure | enforcing |
 
 | Operation | Before | After |
 |---|---|---|
@@ -49,10 +53,11 @@ port 443, and called `prctl(PR_SET_NO_NEW_PRIVS)` plus `landlock_restrict_self`:
 | write in the allowed directory | ok | ok |
 | write outside it | ok | **EACCES** |
 
-No privileges, no namespaces, no external binary. This is one kernel, not the
-matrix: the target hosts, including the GitHub `ubuntu-latest` runner, still
-have to be probed, and network rules need a sufficient ABI. Porta must read the
-ABI at runtime and refuse rules the kernel cannot express.
+No privileges, no namespaces, no external binary, and the CI runner allows
+unprivileged user namespaces as well, so that route stays open if something
+later needs it. Two kernels are not the matrix: older distribution kernels
+report lower ABI levels and network rules need a sufficient one, so Porta must
+read the ABI at runtime and refuse rules the kernel cannot express.
 
 ### One semantic gap found
 
