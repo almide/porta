@@ -26,8 +26,11 @@ jobs:
             ~/.cargo
             ~/.almide
             target
-          key: ${{ runner.os }}-porta-${{ hashFiles('almide.toml', '.almide-version') }}
-          restore-keys: ${{ runner.os }}-porta-
+          # The cached path list is not part of the key, so adding a path to an
+          # existing key would restore the old entry and never save the new one.
+          # Bump this token whenever the paths change.
+          key: ${{ runner.os }}-porta-v2-${{ hashFiles('almide.toml', '.almide-version') }}
+          restore-keys: ${{ runner.os }}-porta-v2-
       - name: Install pinned Almide
         run: bash scripts/install-almide.sh
       - name: Install pinned Wasmtime
