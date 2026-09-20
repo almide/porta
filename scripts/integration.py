@@ -5,6 +5,7 @@ import http.server
 import threading
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -138,6 +139,13 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         thread.join()
     print('PASS: checked HTTP tool does not follow redirects')
 
+    # A directory the run is never granted. It has to be somewhere an ordinary
+    # user can create — porta refuses to run as root, so /opt is out — and
+    # outside both the always-writable roots and the strict read set, or the
+    # tests below would assert nothing. A home directory is exactly that: not
+    # /tmp, not /dev, not a system directory, and closed unless mounted.
+    ungranted = pathlib.Path(tempfile.mkdtemp(prefix='porta-ungranted-', dir=pathlib.Path.home()))
+
     if platform.system() == 'Darwin':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result
@@ -196,7 +204,9 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
                      str(workspace / 'inside'))
         assert result.returncode == 0, result.stderr
         assert (workspace / 'inside').read_text() == 'x\n'
-        outside = pathlib.Path('/opt') / ('porta-denied-' + root.name)
+        # Outside every grant, but somewhere an ordinary user can create:
+        # the suite must not need root, because porta refuses to run as it.
+        outside = ungranted / 'porta-denied'
         result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'echo x > "$1"', 'sh', str(outside))
         assert result.returncode != 0, result
         assert not outside.exists(), outside
@@ -258,7 +268,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
 
         # --read-policy strict confines reads to the granted mounts and the
         # platform's own directories. A credential outside both is unreadable.
-        secrets = pathlib.Path('/opt') / ('porta-secrets-' + root.name)
+        secrets = ungranted / 'porta-secrets'
         secrets.mkdir()
         (secrets / 'credentials').write_text('aws_secret_access_key = EXAMPLE\n')
         (workspace / 'input.txt').write_text('workspace input\n')
@@ -320,3 +330,5 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         result = run('run', '/bin/echo', '--', 'must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: unsupported native sandbox fails closed')
+
+    shutil.rmtree(ungranted, ignore_errors=True)

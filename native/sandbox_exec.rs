@@ -32,6 +32,9 @@ struct SandboxRequest {
     /// port for its own reasons — and it decides whether every non-TCP egress
     /// channel has to be closed as well.
     #[serde(default)] proxy: bool,
+    /// Whether the caller has said, in so many words, that running as root is
+    /// what they meant. Nothing infers it.
+    #[serde(default)] allow_root: bool,
 }
 
 fn open_reads() -> String { "open".to_string() }
@@ -61,12 +64,44 @@ impl SandboxRequest {
         if !READ_POLICIES.contains(&request.read_policy.as_str()) {
             return Err(format!("unknown read policy: {}; use open or strict", request.read_policy));
         }
+        if let Some(reason) = request.running_as_root() {
+            return Err(reason);
+        }
         request.allowed_dirs = request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect();
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(reason) = request.unreadable_command() {
             return Err(reason);
         }
         Ok(request)
+    }
+
+    /// Why this run is refused for being root, if it is.
+    ///
+    /// Half of what keeps a confined command away from a secret is file
+    /// permissions, not this policy. `/etc` has to be readable for anything to
+    /// start, and it carries `shadow` and host keys beside the `ld.so.cache`
+    /// and `ssl/certs` a command genuinely needs; for an ordinary user those
+    /// are separated by their mode bits, and for root they are not separated
+    /// at all. porta would be claiming a confinement it does not have, so it
+    /// refuses instead — the same answer it gives a rule the kernel cannot
+    /// express.
+    ///
+    /// A container image whose only user is root is a real place to run this,
+    /// so `--allow-root` proceeds. It is not a flag anything sets by default:
+    /// the caller has to have decided that permissions are not part of the
+    /// boundary they wanted.
+    fn running_as_root(&self) -> Option<String> {
+        if self.allow_root || unsafe { libc::geteuid() } != 0 {
+            return None;
+        }
+        Some(
+            "refusing to run as root: file permissions are part of what keeps a confined \
+             command away from a secret, and for root they separate nothing — /etc must be \
+             readable for a command to start, and it holds shadow and host keys. Run as an \
+             ordinary user, or pass --allow-root if you have decided permissions are not \
+             part of the boundary you wanted."
+                .to_string(),
+        )
     }
 
     /// Why a strict read policy cannot start this command, if it cannot. A

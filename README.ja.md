@@ -280,6 +280,7 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `--proxy-deny <hosts>` | 同様に、これらのホストを拒否 |
 | `--proxy-audit <path>` | プロキシの判断を JSONL に追記 |
 | `--read-policy <open\|strict>` | `strict` で読み取りを mount とシステムディレクトリだけに限定 (既定は `open`) |
+| `--allow-root` | root でも実行する。既定は拒否 — `/etc` は読めなければならず、そこには `shadow` があり、それを隔てていたのはパーミッションだけです |
 | `--allow-exec <cmd,...>` | 特定コマンドを許可 (カンマ区切り) |
 | `--profile <name>` | ケイパビリティプロファイル: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | WASM の最大命令数 |

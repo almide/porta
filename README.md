@@ -280,6 +280,7 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--proxy-deny <hosts>` | Same, denying these hosts |
 | `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
 | `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
+| `--allow-root` | Run as root anyway. Refused by default: `/etc` has to be readable and it holds `shadow`, which only permissions were keeping away |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
