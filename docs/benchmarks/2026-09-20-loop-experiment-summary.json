@@ -1,0 +1,252 @@
+{
+  "decision": "Reject repeated-tool notices for the default guest: no observed quality benefit in this suite; retain source and all results.",
+  "scope": "Sequential two-matrix ablation; one small local model, four authored tasks, three repeats per runtime/task; not general superiority or a causal estimate for historical score changes.",
+  "matrices": {
+    "notice": {
+      "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+      "model_source": {
+        "repository": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+        "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+        "path": "/private/tmp/porta-real-model"
+      },
+      "parameters": {
+        "temperature": 0,
+        "max_tokens": 512,
+        "max_model_calls": 8,
+        "timeout_seconds": 120
+      },
+      "versions": {
+        "porta": "porta 0.4.0",
+        "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963",
+        "mcp_sdk": "1.30.0"
+      },
+      "sha256": {
+        "porta": "8accf1034b85535115a79e735453c413752f47efade70510c161dac524f39bf1",
+        "guest": "8bf45fb7785ba01d6e5aee38dbd2dbd5a6353a1ca00316b22e0f27dadaf1c603",
+        "tasks": "48c1f6b201afb99872b2cddef0e8cfbee12ed098af64d300f9b6acc4d3eca8d0",
+        "harness": "2d99f860e95f8ac10160d21ee7018573c2591e73cf7d84e8a2608a10f6211b8f",
+        "grader": "505f32bf7d2c15e27fa7976fd595d6e9b8859631a64ece03eafd14cd91a69b9b",
+        "python_fixture": "ae0f6067e0380831b8b61aaea178e8221261cc977659cacb01af4333dbc12309",
+        "feedback": "653bdfed6825d971e04b72677bbf4d945c848f8605eea6ab208bba68d112ff82",
+        "completion_check": "95c55714c25e94e817faf6148236216724ada625ffb0ecab76df05f03782f512",
+        "before_tool_check": "cbc8da4c280401b98493a5c72a1c117007a68228d136bb94e31365e12b860c46"
+      },
+      "summary": {
+        "porta_wasm": {
+          "passed": 3,
+          "total": 12,
+          "median_seconds_all_runs": 5.265983853983926
+        },
+        "docker_agent_native": {
+          "passed": 3,
+          "total": 12,
+          "median_seconds_all_runs": 6.277654291508952
+        }
+      },
+      "raw_report": {
+        "file": "2026-09-20-loop-notice.json.gz",
+        "compressed_sha256": "3d36e49fe0be470fbda206529d910ed5b6e764f731dbbcedd0587c66916b38cc",
+        "uncompressed_sha256": "febcf4431cbdc263d96de17b8142dcb7841eca37c4ba2d9110d24884f1ee93f3"
+      },
+      "per_task": [
+        {
+          "runtime": "porta_wasm",
+          "task": "invoice_totals",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "config_migration",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "mean_empty_fix",
+          "full_pass": 3,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "release_lookup",
+          "full_pass": 0,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "invoice_totals",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "config_migration",
+          "full_pass": 0,
+          "artifact_pass": 1,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "mean_empty_fix",
+          "full_pass": 0,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "release_lookup",
+          "full_pass": 3,
+          "artifact_pass": 3,
+          "total": 3
+        }
+      ],
+      "notices": [
+        {
+          "task": "invoice_totals",
+          "repeat": 0,
+          "model_call": 8
+        },
+        {
+          "task": "invoice_totals",
+          "repeat": 1,
+          "model_call": 8
+        },
+        {
+          "task": "invoice_totals",
+          "repeat": 2,
+          "model_call": 8
+        }
+      ]
+    },
+    "control": {
+      "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+      "model_source": {
+        "repository": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+        "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+        "path": "/private/tmp/porta-real-model"
+      },
+      "parameters": {
+        "temperature": 0,
+        "max_tokens": 512,
+        "max_model_calls": 8,
+        "timeout_seconds": 120
+      },
+      "versions": {
+        "porta": "porta 0.4.0",
+        "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963",
+        "mcp_sdk": "1.30.0"
+      },
+      "sha256": {
+        "porta": "8accf1034b85535115a79e735453c413752f47efade70510c161dac524f39bf1",
+        "guest": "f897f457a2b5c961c3ab08b9d0eca950bdd47b4cc4decc20f46e6d61a6fb3188",
+        "tasks": "48c1f6b201afb99872b2cddef0e8cfbee12ed098af64d300f9b6acc4d3eca8d0",
+        "harness": "2d99f860e95f8ac10160d21ee7018573c2591e73cf7d84e8a2608a10f6211b8f",
+        "grader": "505f32bf7d2c15e27fa7976fd595d6e9b8859631a64ece03eafd14cd91a69b9b",
+        "python_fixture": "ae0f6067e0380831b8b61aaea178e8221261cc977659cacb01af4333dbc12309",
+        "feedback": "653bdfed6825d971e04b72677bbf4d945c848f8605eea6ab208bba68d112ff82",
+        "completion_check": "95c55714c25e94e817faf6148236216724ada625ffb0ecab76df05f03782f512",
+        "before_tool_check": "cbc8da4c280401b98493a5c72a1c117007a68228d136bb94e31365e12b860c46"
+      },
+      "summary": {
+        "porta_wasm": {
+          "passed": 4,
+          "total": 12,
+          "median_seconds_all_runs": 5.4584054999868385
+        },
+        "docker_agent_native": {
+          "passed": 3,
+          "total": 12,
+          "median_seconds_all_runs": 6.418039187527029
+        }
+      },
+      "raw_report": {
+        "file": "2026-09-20-loop-control.json.gz",
+        "compressed_sha256": "f73ee13bafaaca137a8d3e6ed81d572453ab36607987fc853a4f2f6458192000",
+        "uncompressed_sha256": "2920aec6490526cc11760d184e421ab21a4f44c3cb800daf33dee69263d5bf3d"
+      },
+      "per_task": [
+        {
+          "runtime": "porta_wasm",
+          "task": "invoice_totals",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "config_migration",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "mean_empty_fix",
+          "full_pass": 3,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "porta_wasm",
+          "task": "release_lookup",
+          "full_pass": 1,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "invoice_totals",
+          "full_pass": 0,
+          "artifact_pass": 0,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "config_migration",
+          "full_pass": 0,
+          "artifact_pass": 1,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "mean_empty_fix",
+          "full_pass": 0,
+          "artifact_pass": 3,
+          "total": 3
+        },
+        {
+          "runtime": "docker_agent_native",
+          "task": "release_lookup",
+          "full_pass": 3,
+          "artifact_pass": 3,
+          "total": 3
+        }
+      ],
+      "notices": []
+    }
+  },
+  "source_artifacts": {
+    "2026-09-20-loop-control-guest.almd.gz": {
+      "compressed_sha256": "2f205176780e2f0de3b37d57b8b637e20f0e47a28cb9f78283228ee5de40cd45",
+      "uncompressed_sha256": "0db8c02d05e6b0326c65331a631f0e31229cbaaa804e80d2656b881758462e4c"
+    },
+    "2026-09-20-loop-evaluation-harness.py.gz": {
+      "compressed_sha256": "c3bce8f522c367613633ed84ec1235461b2297cff4da3b4e2bddd2e70862a459",
+      "uncompressed_sha256": "2d99f860e95f8ac10160d21ee7018573c2591e73cf7d84e8a2608a10f6211b8f"
+    },
+    "2026-09-20-loop-notice-guest.almd.gz": {
+      "compressed_sha256": "6a318cad015e365bef3de523f35868feaf150489f98826d6b003d4462c590034",
+      "uncompressed_sha256": "6d8966357d3cf5775576acc479f39b5296ce99cdd6d35e2253baa3b3682ac980"
+    },
+    "2026-09-20-loop-notice-tests.py.gz": {
+      "compressed_sha256": "a5a0336253b9c77dd3e7b1dd42b46753f03258cc1dbb6bddfd39384647b64902",
+      "uncompressed_sha256": "f4f38b267f518f9e611df27507de194d3d86721521666e0fe1b4f28c5907a661"
+    }
+  }
+}

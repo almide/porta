@@ -1,0 +1,20 @@
+version = 1
+
+[agent]
+wasm = "agent.wasm"
+instruction = "You coordinate a WASM agent team. Delegate arithmetic to the calculator, then report the answer."
+
+[model]
+endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+name = "your-model"
+# token_env = "MODEL_API_KEY"
+
+[limits]
+max_steps = 64
+max_model_calls = 16
+timeout_seconds = 120
+
+[[agents]]
+name = "calculator"
+config = "agent.toml"
+description = "Solve arithmetic with an isolated WASM calculation tool."

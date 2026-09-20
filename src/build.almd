@@ -1,3 +1,4 @@
+import value
 // Build: manifest and package generation
 
 import fs
@@ -23,26 +24,26 @@ effect fn build_package(opts: cli.Options) -> Result[Unit, String] = {
     })
     |> list.map((exp) => {
       let name = json.get_string(exp, "name") ?? ""
-      json.object([
-        ("name", json.from_string(name)),
-        ("description", json.from_string(name)),
-        ("inputSchema", json.object([("type", json.from_string("object"))])),
+      value.object([
+        ("name", value.str(name)),
+        ("description", value.str(name)),
+        ("inputSchema", value.object([("type", value.str("object"))])),
       ])
     })
 
   let wasi_imports = all_imports
     |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
-    |> list.map((imp) => json.from_string(json.get_string(imp, "name") ?? ""))
+    |> list.map((imp) => value.str(json.get_string(imp, "name") ?? ""))
 
-  let manifest_json = json.object([
-    ("schema_version", json.from_string("1.0")),
-    ("name", json.from_string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
-    ("version", json.from_string("0.4.0")),
-    ("description", json.from_string("")),
-    ("entry", json.from_string("_start")),
-    ("capabilities", json.array([])),
-    ("tools", json.array(export_tools)),
-    ("wasi_imports", json.array(wasi_imports)),
+  let manifest_json = value.object([
+    ("schema_version", value.str("1.0")),
+    ("name", value.str(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
+    ("version", value.str("0.4.0")),
+    ("description", value.str("")),
+    ("entry", value.str("_start")),
+    ("capabilities", value.array([])),
+    ("tools", value.array(export_tools)),
+    ("wasi_imports", value.array(wasi_imports)),
   ])
 
   let content = json.stringify(manifest_json)

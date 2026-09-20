@@ -2,9 +2,18 @@
 
 > Auto-generated from directory structure. Run `bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md` to update.
 
+## Active
+
+2 items
+
+| Item | Description |
+|------|-------------|
+| [HTTP Proxy Filtering](active/01-http-proxy-filtering.md) | Host-level HTTP filtering via local CONNECT proxy |
+| [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
+
 ## On Hold
 
-7 items
+8 items
 
 | Item | Description |
 |------|-------------|
@@ -12,6 +21,7 @@
 | [Full Almide Migration](on-hold/full-almide.md) | Migrate Rust bridge functions to pure Almide where possible |
 | [Image Distribution](on-hold/image-distribution.md) | OCI-compatible image push/pull for porta agent distribution |
 | [Networking](on-hold/networking.md) | Port publishing, service discovery, and capability-routed networking |
+| [Replaceable WASM Engine](on-hold/replaceable-wasm-engine.md) | Put the execution engine behind a seam so it can be replaced |
 | [Self-Hosted WASM Runtime](on-hold/self-hosted-wasm-runtime.md) | Build Almide-native WASM runtime to eventually replace wasmtime |
 | [Snapshot & Replay](on-hold/snapshot-and-replay.md) | Instance snapshot, suspend/resume, and deterministic execution replay |
 | [Supply Chain Security](on-hold/supply-chain.md) | Image signing, provenance attestation, SBOM, and dependency locking |

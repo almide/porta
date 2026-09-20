@@ -1,3 +1,4 @@
+import value
 // Manifest parser for porta agent packages
 
 import json
@@ -56,11 +57,11 @@ effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
 
   let caps = json.get_array(v, "capabilities") ?? []
   let capabilities = caps
-    |> list.filter_map((c) => json.as_string(c))
+    |> list.filter_map((c) => match value.as_string(c) { ok(s) => some(s), err(_) => none })
 
   let wasi_arr = json.get_array(v, "wasi_imports") ?? []
   let wasi_imports = wasi_arr
-    |> list.filter_map((w) => json.as_string(w))
+    |> list.filter_map((w) => match value.as_string(w) { ok(s) => some(s), err(_) => none })
 
   let tools_arr = json.get_array(v, "tools") ?? []
   let tools = tools_arr |> list.map(parse_tool)
@@ -88,7 +89,7 @@ effect fn parse_manifest(v: Value) -> Result[Manifest, String] = {
 fn parse_tool(t: Value) -> ToolDef = {
   let name = json.get_string(t, "name") ?? ""
   let description = json.get_string(t, "description") ?? ""
-  let input_schema = json.get(t, "inputSchema") ?? json.object([])
+  let input_schema = value.field(t, "inputSchema") ?? value.object([])
   {name: name, description: description, input_schema: input_schema}
 }
 

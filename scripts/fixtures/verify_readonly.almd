@@ -1,0 +1,14 @@
+import io
+import fs
+import json
+import value
+
+effect fn main() -> Result[Unit, String] = {
+  let _ = io.read_line()
+  let denied = match fs.write("tamper.txt", "unexpected") { ok(_) => false, err(_) => true }
+  let read_denied = match fs.read_text("/etc/passwd") { ok(_) => false, err(_) => true }
+  println(json.stringify(value.object([
+    ("passed", value.bool(denied and read_denied)), ("feedback", value.str("Verifier unexpectedly wrote to its mount")),
+  ])))
+  ok(())
+}

@@ -90,3 +90,35 @@ error[E0423]: expected function, found macro `eprintln`
 | 8 | eprintln codegen | ✅ |
 
 全課題解決。`porta run` が動作している。
+
+
+## 0.63.0 WASM error propagation observation (2026-09-19)
+
+During the real WASM agent/tool integration, the demo's `write_file` branch using
+`fs.write(path, content)!` reported `{"ok":"wrote 19 bytes to result.txt"}` even
+though a read-only WASI preopen correctly prevented creation of the file.
+Replacing that call with an explicit `match fs.write(...) { ok(_) => ..., err(e)
+=> ... }` produced the expected error result. `read_file` now uses the same
+explicit error handling. This is an observed behavior difference under the
+published v0.63.0-rc1 compiler; its precise compiler cause is not established.
+
+The regression is exercised by `scripts/agent_integration.py`: it checks both
+actual filesystem state and the tool error delivered back to the model. Do not
+weaken the test to accept a false-success tool response. No upstream source was
+modified as part of this workaround.
+
+## 0.63.0 stock-WASI JSON artifact checker wall (2026-09-19)
+
+`scripts/fixtures/verify_json_compiler_repro.almd` reads a JSON-line request,
+reads a file through `fs.read_text`, parses that file as JSON, and prints a
+verification verdict. With the pinned v0.63.0-rc1 compiler, stock-WASI build
+refuses this shape: the incumbent renderer reports `heap-result match outside
+the executable subset`, and the structural renderer reports `host op 1 has no
+stock-WASI service`. Simplifying result-returning helpers and inlining the match
+branches did not eliminate the refusal. The exact compiler cause is not established.
+
+Reproduce with `almide build scripts/fixtures/verify_json_compiler_repro.almd --target wasm -o /tmp/verify-repro.wasm`. No unverified renderer fallback is used.
+The working sample `examples/verify-json` instead compiles Rust/serde_json to
+`wasm32-wasip1`; the Porta CLI, agent loop and permission probes stay on Almide
+0.63.0. The completion protocol accepts standard WASI artifacts independently
+of the guest implementation language.

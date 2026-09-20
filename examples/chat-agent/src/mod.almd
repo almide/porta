@@ -1,0 +1,176 @@
+// This whole decision loop compiles to WASM. The host only executes declared
+// actions; provider credentials, arbitrary HTTP and process execution are absent.
+import io
+import json
+import value
+
+fn field(v: Value, name: String) -> Value = value.field(v, name) ?? value.null()
+fn array(v: Value, name: String) -> List[Value] = json.get_array(v, name) ?? []
+
+// Render a single, unambiguous MCP text result directly for the model.
+// The broker still journals and verifies the complete original result.
+fn tool_content(result: Value) -> String = {
+  let fallback = json.stringify(result)
+  let blocks = array(result, "content")
+  let error_flag = json.stringify(field(result, "isError"))
+  if list.len(blocks) != 1 or (error_flag != "false" and error_flag != "null") then fallback
+  else {
+    let block = list.get(blocks, 0) ?? value.null()
+    let text = json.get_string(block, "text") ?? ""
+    let has_text = match json.get_string(block, "text") { some(_) => true, none => false }
+    if list.len(value.keys(block)) != 2 or not has_text or (json.get_string(block, "type") ?? "") != "text" then fallback
+    else {
+      let structured = field(result, "structuredContent")
+      let encoded = json.stringify(structured)
+      let wrapped = json.stringify(value.object([("result", value.str(text))]))
+      let same_json = match json.parse(text) {
+        ok(parsed) => json.stringify(parsed) == encoded,
+        err(_) => false,
+      }
+      if encoded == "null" or encoded == wrapped or same_json then text
+      else fallback
+    }
+  }
+}
+
+fn model(messages: List[Value]) -> Value = value.object([
+  ("action", value.str("model")),
+  ("messages", value.array(messages)),
+  ("state", value.object([("messages", value.array(messages))])),
+])
+
+// Recovery is a new, budgeted model action, never a replay of a tool action.
+// Keep the counter in guest state so journal reconstruction preserves the limit.
+fn recover_response(messages: List[Value], state: Value, reason: String) -> Result[Value, String] = {
+  let attempts = json.get_int(state, "response_repairs") ?? 0
+  if attempts >= 2 then err("model response remained invalid after two recovery attempts")
+  else {
+    let updated = messages + [value.object([
+      ("role", value.str("user")),
+      ("content", value.str(reason + " Continue from the existing tool results. Return valid tool calls or a final answer; do not repeat completed operations merely to recover the response.")),
+    ])]
+    ok(value.object([
+      ("action", value.str("model")),
+      ("messages", value.array(updated)),
+      ("state", value.object([
+        ("messages", value.array(updated)),
+        ("response_repairs", value.int(attempts + 1)),
+      ])),
+    ]))
+  }
+}
+
+// Validate the entire provider batch before executing its first tool. This
+// checks wire structure only; host grants, schemas and policies remain separate.
+fn validate_calls(calls: List[Value]) -> Result[Unit, String] = {
+  var ids: List[String] = []
+  for call in calls {
+    let id = json.get_string(call, "id") ?? ""
+    let function = field(call, "function")
+    let name = json.get_string(function, "name") ?? ""
+    let valid_arguments = match json.get_string(function, "arguments") {
+      some(raw) => match json.parse(raw) {
+        ok(parsed) => string.starts_with(json.stringify(parsed), "{"),
+        err(_) => false,
+      },
+      none => false,
+    }
+    if string.trim(id) == "" or list.any(ids, (previous) => previous == id) then {
+      err("Tool call IDs must be nonempty and unique within the response.")!
+    } else ()
+    if (json.get_string(call, "type") ?? "") != "function" or string.trim(name) == "" then {
+      err("Each tool call must have type function and a nonempty function name.")!
+    } else ()
+    if not valid_arguments then {
+      err("Each tool call must contain an arguments string encoding a valid JSON object.")!
+    } else ()
+    ids = ids + [id]
+  }
+  ok(())
+}
+
+fn next_tool(messages: List[Value], pending: List[Value]) -> Result[Value, String] = {
+  let call = list.get(pending, 0) ?? value.null()
+  let function = field(call, "function")
+  let name = json.get_string(function, "name") ?? ""
+  let arguments = json.parse(json.get_string(function, "arguments") ?? "{}")!
+  if name == "" then err("model returned a tool call without a name")
+  else ok(value.object([
+    ("action", value.str("tool")),
+    ("name", value.str(name)),
+    ("arguments", arguments),
+    ("state", value.object([
+      ("messages", value.array(messages)),
+      ("pending", value.array(pending)),
+    ])),
+  ]))
+}
+
+fn decide(event: Value) -> Result[Value, String] = {
+  let state = field(event, "state")
+  let messages = array(state, "messages")
+  match json.get_string(event, "kind") ?? "" {
+    "start" => ok(model([
+      value.object([
+        ("role", value.str("system")),
+        ("content", field(event, "instruction")),
+      ]),
+      value.object([
+        ("role", value.str("user")),
+        ("content", field(event, "task")),
+      ]),
+    ])),
+    "model" => {
+      let response = field(event, "response")
+      let choice = list.get(array(response, "choices"), 0) ?? value.null()
+      let message = field(choice, "message")
+      let calls = array(message, "tool_calls")
+      let encoded_calls = json.stringify(field(message, "tool_calls"))
+      if (json.get_string(message, "refusal") ?? "") != "" then err("model refused the request")
+      else if encoded_calls != "null" and not string.starts_with(encoded_calls, "[") then recover_response(messages, state, "The tool_calls field must be an array; no tool call from that response executed.")
+      else if list.len(calls) > 0 and (json.get_string(message, "role") ?? "") != "assistant" then recover_response(messages, state, "Tool calls must be returned in an assistant message; no call in that batch executed.")
+      else if list.len(calls) > 0 then match validate_calls(calls) {
+        ok(_) => next_tool(messages + [message], calls),
+        err(reason) => recover_response(messages, state, "Your tool-call batch was rejected before any call in that batch executed. " + reason),
+      }
+      else {
+        let content = json.get_string(message, "content") ?? ""
+        if string.trim(content) == "" then recover_response(messages, state, "Your last response contained neither usable text nor tool calls.")
+        else ok(value.object([
+          ("action", value.str("done")), ("output", value.str(content)),
+          ("state", value.object([("messages", value.array(messages + [message]))])),
+        ]))
+      }
+    },
+    "verification_failed" => ok(model(messages + [value.object([
+      ("role", value.str("user")),
+      ("content", value.str("Completion verification failed. Correct the artifacts and verify your work before finishing. " + json.stringify(field(event, "failure")))),
+    ])])),
+    "tool" => {
+      let pending = array(state, "pending")
+      let call = list.get(pending, 0) ?? value.null()
+      let result = value.object([
+        ("role", value.str("tool")),
+        ("tool_call_id", field(call, "id")),
+        ("content", value.str(tool_content(field(event, "result")))),
+      ])
+      let updated = messages + [result]
+      let remaining = list.drop(pending, 1)
+      if list.len(remaining) > 0 then next_tool(updated, remaining)
+      else ok(model(updated))
+    },
+    _ => err("unsupported agent event"),
+  }
+}
+
+effect fn main() -> Result[Unit, String] = {
+  let event = json.parse(io.read_line())!
+  let decision = decide(event)
+  match decision {
+    ok(action) => println(json.stringify(action)),
+    err(error) => println(json.stringify(value.object([
+      ("action", value.str("fail")), ("error", value.str(error)),
+    ]))),
+  }
+  ok(())
+}

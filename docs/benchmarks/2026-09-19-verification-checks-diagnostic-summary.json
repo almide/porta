@@ -1,0 +1,55 @@
+{
+  "scope": "local real-model small task suite; same shared MCP tools; not general coding quality",
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "model_source": {
+    "repository": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "path": "/private/tmp/porta-real-model"
+  },
+  "parameters": {
+    "temperature": 0,
+    "max_tokens": 512,
+    "max_model_calls": 8,
+    "timeout_seconds": 120
+  },
+  "versions": {
+    "porta": "porta 0.4.0",
+    "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963",
+    "mcp_sdk": "1.30.0"
+  },
+  "sha256": {
+    "porta": "812dec38057b3c0ab8469e13d76442ae38f55289405730caa36878a7c4e9fc5f",
+    "guest": "e68a32d7139d9947d61e812e173b03ad707869c93f72c8161b3ec5a286ea611e",
+    "tasks": "48c1f6b201afb99872b2cddef0e8cfbee12ed098af64d300f9b6acc4d3eca8d0",
+    "harness": "4ca5c0820592297e1ad39d8a541f175786c043c2f7f1062cc956ba63e75abd83",
+    "grader": "505f32bf7d2c15e27fa7976fd595d6e9b8859631a64ece03eafd14cd91a69b9b",
+    "python_fixture": "ae0f6067e0380831b8b61aaea178e8221261cc977659cacb01af4333dbc12309",
+    "completion_check": "ca67db434f1e2403513beb69f4d5f7b9affc503cb1dd01b5847e1b52ee4735d4"
+  },
+  "limitations": [
+    "4 author-created tasks; not a public benchmark",
+    "small quantized local model",
+    "warm inference server, fresh runtime processes",
+    "gateway buffers both streaming and JSON replies; no time-to-first-token measurement",
+    "runtime-generated message/tool-result formats may differ; raw requests are retained",
+    "bounded Python function fixture, not arbitrary repository tests"
+  ],
+  "summary": {
+    "porta_wasm": {
+      "passed": 0,
+      "total": 12,
+      "median_seconds_all_runs": 7.948114187485771
+    },
+    "docker_agent_native": {
+      "passed": 0,
+      "total": 12,
+      "median_seconds_all_runs": 8.15223093747045
+    }
+  },
+  "status": "diagnostic: initial verifier rejects FastMCP structured string wrapper; not corrected-gate evidence",
+  "raw_report": {
+    "file": "2026-09-19-verification-checks-diagnostic.json.gz",
+    "uncompressed_sha256": "8053ae90778b0a03cf61c7c47204114c8e6ebea471906a94e5d2709b6cc578f0",
+    "compressed_sha256": "0794f406a881add7c578b4180f9ba5764c2dd2f966924fa30e0cc9470749c56a"
+  }
+}

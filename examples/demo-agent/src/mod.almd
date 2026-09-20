@@ -1,3 +1,4 @@
+import value
 // Demo MCP agent for porta
 // Reads length-prefixed JSON tool calls from stdin, writes JSON results to stdout.
 
@@ -17,12 +18,12 @@ effect fn main() -> Result[Unit, String] = {
   let payload = io.read_n_bytes(len)
   let cmd = json.parse(string.from_bytes(payload))!
   let tool = json.get_string(cmd, "tool") ?? ""
-  let args = json.get(cmd, "arguments") ?? json.object([])
+  let args = value.field(cmd, "arguments") ?? value.object([])
 
   let result = dispatch(tool, args)
   match result {
     ok(v) => println(json.stringify(v)),
-    err(e) => println(json.stringify(json.object([("err", json.from_string(e))]))),
+    err(e) => println(json.stringify(value.object([("err", value.str(e))]))),
   }
   ok(())
 }
@@ -31,35 +32,39 @@ effect fn dispatch(tool: String, args: Value) -> Result[Value, String] =
   match tool {
     "hello" => {
       let name = json.get_string(args, "name") ?? "world"
-      ok(json.object([("ok", json.from_string("Hello, ${name}!"))]))
+      ok(value.object([("ok", value.str("Hello, ${name}!"))]))
     },
     "add" => {
       let a = json.get_int(args, "a") ?? 0
       let b = json.get_int(args, "b") ?? 0
-      ok(json.object([("ok", json.from_string(int.to_string(a + b)))]))
+      ok(value.object([("ok", value.str(int.to_string(a + b)))]))
     },
     "read_file" => {
       let path = json.get_string(args, "path") ?? ""
-      if path == "" then ok(json.object([("err", json.from_string("path is required"))]))
+      if path == "" then ok(value.object([("err", value.str("path is required"))]))
       else {
-        let content = fs.read_text(path)!
-        ok(json.object([("ok", json.from_string(content))]))
+        match fs.read_text(path) {
+          ok(content) => ok(value.object([("ok", value.str(content))])),
+          err(error) => ok(value.object([("err", value.str(error))])),
+        }
       }
     },
     "list_files" => {
       let dir = json.get_string(args, "directory") ?? "."
       let files = fs.list_dir(dir)!
-      let file_list = files |> list.map(json.from_string) |> json.array
-      ok(json.object([("ok", file_list)]))
+      let file_list = files |> list.map(value.str) |> value.array
+      ok(value.object([("ok", file_list)]))
     },
     "write_file" => {
       let path = json.get_string(args, "path") ?? ""
       let content = json.get_string(args, "content") ?? ""
-      if path == "" then ok(json.object([("err", json.from_string("path is required"))]))
+      if path == "" then ok(value.object([("err", value.str("path is required"))]))
       else {
-        fs.write(path, content)!
-        ok(json.object([("ok", json.from_string("wrote ${int.to_string(string.len(content))} bytes to ${path}"))]))
+        match fs.write(path, content) {
+          ok(_) => ok(value.object([("ok", value.str("wrote ${int.to_string(string.len(content))} bytes to ${path}"))])),
+          err(error) => ok(value.object([("err", value.str(error))])),
+        }
       }
     },
-    _ => ok(json.object([("err", json.from_string("unknown tool: ${tool}"))])),
+    _ => ok(value.object([("err", value.str("unknown tool: ${tool}"))])),
   }

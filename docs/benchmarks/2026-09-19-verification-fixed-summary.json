@@ -1,0 +1,71 @@
+{
+  "scope": "local real-model small task suite; same shared MCP tools; not general coding quality",
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "model_source": {
+    "repository": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "path": "/private/tmp/porta-real-model"
+  },
+  "parameters": {
+    "temperature": 0,
+    "max_tokens": 512,
+    "max_model_calls": 8,
+    "timeout_seconds": 120
+  },
+  "versions": {
+    "porta": "porta 0.4.0",
+    "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963",
+    "mcp_sdk": "1.30.0"
+  },
+  "sha256": {
+    "porta": "812dec38057b3c0ab8469e13d76442ae38f55289405730caa36878a7c4e9fc5f",
+    "guest": "e68a32d7139d9947d61e812e173b03ad707869c93f72c8161b3ec5a286ea611e",
+    "tasks": "48c1f6b201afb99872b2cddef0e8cfbee12ed098af64d300f9b6acc4d3eca8d0",
+    "harness": "ac2f259c2684c5a44b9386d87ef626a8753232e55820daf4500580174d183393",
+    "grader": "505f32bf7d2c15e27fa7976fd595d6e9b8859631a64ece03eafd14cd91a69b9b",
+    "python_fixture": "ae0f6067e0380831b8b61aaea178e8221261cc977659cacb01af4333dbc12309",
+    "feedback": "653bdfed6825d971e04b72677bbf4d945c848f8605eea6ab208bba68d112ff82",
+    "completion_check": "95c55714c25e94e817faf6148236216724ada625ffb0ecab76df05f03782f512"
+  },
+  "limitations": [
+    "4 author-created tasks; not a public benchmark",
+    "small quantized local model",
+    "warm inference server, fresh runtime processes",
+    "gateway buffers both streaming and JSON replies; no time-to-first-token measurement",
+    "runtime-generated message/tool-result formats may differ; raw requests are retained",
+    "bounded Python function fixture, not arbitrary repository tests"
+  ],
+  "summary": {
+    "porta_wasm": {
+      "passed": 3,
+      "total": 12,
+      "median_seconds_all_runs": 5.600485416478477
+    },
+    "docker_agent_native": {
+      "passed": 3,
+      "total": 12,
+      "median_seconds_all_runs": 6.376787958492059
+    }
+  },
+  "evaluation_mode": "shared_verification_tool_with_porta_completion_gate",
+  "verification_feedback": "actionable",
+  "raw_report": {
+    "file": "2026-09-19-verification-fixed.json.gz",
+    "uncompressed_sha256": "a1b9cf358c6a0843e4c778cc7b21368f39c5ff34006f71a5d4c5b214425b5d38",
+    "compressed_sha256": "4d8fde897d5e15c559aed9b1e744defa14beb47b4a5460f709cddd56db02bca0"
+  },
+  "independent_counts": {
+    "porta_wasm": {
+      "full_pass": 3,
+      "artifact_pass": 6,
+      "nonzero_exit": 9,
+      "total": 12
+    },
+    "docker_agent_native": {
+      "full_pass": 3,
+      "artifact_pass": 6,
+      "nonzero_exit": 9,
+      "total": 12
+    }
+  }
+}

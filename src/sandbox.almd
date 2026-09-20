@@ -130,7 +130,7 @@ fn validate_imports_acc(imports: List[binary.Import], set: CapabilitySet, idx: I
           ok(_) => validate_imports_acc(imports, set, idx + 1),
           err(msg) => err("import validation failed: ${imp.name} — ${msg}"),
         }
-      else validate_imports_acc(imports, set, idx + 1),
+      else err("unsupported host import: ${imp.mod_name}.${imp.name}; use MCP tools"),
   }
 
 // --- Built-in profiles ---

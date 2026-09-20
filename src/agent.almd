@@ -1,0 +1,142 @@
+// The guest owns decisions; the host brokers grants and durable operations.
+import json
+import value
+import self.util
+
+@extern(rs, "agent_runtime", "agent_journal_inspect")
+fn inspect_journal(path: String) -> String
+
+@extern(rs, "agent_runtime", "agent_check")
+fn check_config(path: String) -> String
+
+@extern(rs, "agent_runtime", "agent_open")
+fn open(path: String, task: String) -> String
+
+@extern(rs, "agent_runtime", "agent_open_record")
+fn open_record(path: String, task: String, journal: String) -> String
+
+@extern(rs, "agent_runtime", "agent_open_resume")
+fn open_resume(path: String, journal: String, replay: Bool) -> String
+
+@extern(rs, "agent_runtime", "agent_step")
+fn step(handle: Int) -> String
+
+@extern(rs, "agent_runtime", "agent_checkpoint")
+fn checkpoint(handle: Int) -> String
+
+@extern(rs, "agent_runtime", "agent_close")
+fn close(handle: Int) -> Int
+
+effect fn drive(handle: Int, pause_after: Int) -> Result[Unit, String] = {
+  var done = false
+  var steps = 0
+  while not done and (pause_after == 0 or steps < pause_after) {
+    let event = json.parse(step(handle))!
+    let error = json.get_string(event, "error") ?? ""
+    if error != "" then err(error)! else ()
+    done = json.get_bool(event, "done") ?? false
+    steps = steps + 1
+    let metrics = value.field(event, "metrics") ?? value.object([])
+    eprintln("[porta agent] " + json.stringify(metrics))
+    if done then println(json.get_string(event, "output") ?? "") else ()
+  }
+  if not done then {
+    let saved = json.parse(checkpoint(handle))!
+    let error = json.get_string(saved, "error") ?? ""
+    if error != "" then err(error)! else ()
+    eprintln("[porta agent] checkpoint saved; use agent-resume to continue")
+  } else ()
+  ok(())
+}
+
+effect fn execute(opened_json: String, pause_after: Int) -> Result[Unit, String] = {
+  let opened = json.parse(opened_json)!
+  let error = json.get_string(opened, "error") ?? ""
+  if error != "" then err(error)
+  else {
+    let handle = json.get_int(opened, "handle") ?? -1
+    match drive(handle, pause_after) {
+      ok(_) => { let _ = close(handle); ok(()) },
+      err(message) => { let _ = close(handle); err(message) },
+    }
+  }
+}
+
+effect fn run(path: String, task: String) -> Result[Unit, String] = execute(open(path, task), 0)
+
+effect fn journal_info(args: List[String]) -> Result[Unit, String] = {
+  let path = list.get(args, 0) ?? ""
+  if path == "--help" or path == "-h" then {
+    println("porta agent-journal <journal.jsonl>")
+    println("Inspect a stopped journal without executing or resuming the agent.")
+    ok(())
+  } else if list.len(args) != 1 then err("expected one journal path")
+  else {
+    let report = inspect_journal(path)
+    let parsed = json.parse(report)!
+    let error = json.get_string(parsed, "error") ?? ""
+    if error != "" then err(error)
+    else { println(report); ok(()) }
+  }
+}
+
+effect fn inspect_config(args: List[String]) -> Result[Unit, String] = {
+  let path = list.get(args, 0) ?? ""
+  if path == "--help" or path == "-h" then {
+    println("porta agent-check <agent.toml>")
+    println("Validate and inspect a complete team without model calls or guest execution.")
+    ok(())
+  } else if list.len(args) != 1 then err("expected one agent config path")
+  else {
+    let report = check_config(path)
+    let parsed = json.parse(report)!
+    let error = json.get_string(parsed, "error") ?? ""
+    if error != "" then err(error)
+    else { println(report); ok(()) }
+  }
+}
+
+effect fn command(args: List[String], mode: String) -> Result[Unit, String] = {
+  let path = list.get(args, 0) ?? ""
+  if path == "" or path == "--help" or path == "-h" then {
+    println("porta agent <agent.toml> [--record <journal>] [--pause-after <root-turns>] -- <task>")
+    println("porta agent-resume <agent.toml> <journal>")
+    println("porta agent-replay <agent.toml> <journal>")
+    ok(())
+  } else if mode != "run" then {
+    if list.len(args) != 2 then err("expected agent config and journal path")
+    else execute(open_resume(path, list.get(args, 1) ?? "", mode == "replay"), 0)
+  } else {
+    var index = 1
+    var journal = ""
+    var pause_after = 0
+    var task_args: List[String] = []
+    while index < list.len(args) {
+      let arg = list.get(args, index) ?? ""
+      let next = list.get(args, index + 1) ?? ""
+      if arg == "--" then {
+        task_args = list.drop(args, index + 1)
+        index = list.len(args)
+      } else if arg == "--record" then {
+        if next == "" or string.starts_with(next, "--") then err("--record requires a journal path")! else ()
+        journal = next
+        index = index + 2
+      } else if arg == "--pause-after" then {
+        if string.len(next) > 9 then err("--pause-after is too large")! else ()
+        let count = util.parse_int(next)
+        if count <= 0 or int.to_string(count) != next then err("--pause-after requires a positive integer")! else ()
+        pause_after = count
+        index = index + 2
+      } else if string.starts_with(arg, "--") then {
+        err("unknown agent option: ${arg}")!
+      } else {
+        task_args = list.drop(args, index)
+        index = list.len(args)
+      }
+    }
+    let task = string.join(task_args, " ")
+    if pause_after > 0 and journal == "" then err("--pause-after requires --record")
+    else if journal == "" then execute(open(path, task), 0)
+    else execute(open_record(path, task, journal), pause_after)
+  }
+}

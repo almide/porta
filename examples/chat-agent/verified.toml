@@ -1,0 +1,30 @@
+version = 1
+
+[agent]
+wasm = "agent.wasm"
+instruction = "Produce result.json containing the requested JSON object. Read the output to inspect it. If completion verification fails, correct the artifact and retry."
+
+[model]
+endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+name = "your-model"
+# token_env = "MODEL_API_KEY"
+
+[[tools]]
+name = "write_file"
+wasm = "../demo-agent/agent.wasm"
+description = "Write a file in the workspace."
+input_schema = { type = "object", properties = { path = { const = "result.json" }, content = { type = "string" } }, required = ["path", "content"], additionalProperties = false }
+mounts = [{host="../../target/verified-workspace", guest=".", read_only=false}]
+
+[[tools]]
+name = "read_file"
+wasm = "../demo-agent/agent.wasm"
+description = "Read a file to inspect the result."
+input_schema = { type = "object", properties = { path = { const = "result.json" } }, required = ["path"], additionalProperties = false }
+mounts = [{host="../../target/verified-workspace", guest="."}]
+
+[[completion_checks]]
+name = "artifact_and_inspection"
+wasm = "../verify-json/check.wasm"
+parameters = {path="result.json", expected={value=42}, required_tool_calls={write_file=1, read_file=1}}
+mounts = [{host="../../target/verified-workspace", guest="."}]

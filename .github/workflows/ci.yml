@@ -1,32 +1,108 @@
 name: CI
-
 on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
-
+    branches: [main, develop]
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      - uses: actions/setup-python@v5
         with:
-          path: ~/.cargo
-          key: cargo-almide-${{ hashFiles('**/almide.toml') }}
-          restore-keys: cargo-almide-
-
-      - name: Install Almide
-        run: cargo install --git https://github.com/almide/almide.git
-
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: actions/cache@v4
+        with:
+          # ~/.almide holds the build cache for test files that take Almide's
+          # native path; without it every run rebuilds them from scratch.
+          path: |
+            ~/.cargo
+            ~/.almide
+            target
+          # The cached path list is not part of the key, so adding a path to an
+          # existing key would restore the old entry and never save the new one.
+          # Bump this token whenever the paths change.
+          key: ${{ runner.os }}-porta-v2-${{ hashFiles('almide.toml', '.almide-version') }}
+          restore-keys: ${{ runner.os }}-porta-v2-
+      - name: Install pinned Almide
+        run: bash scripts/install-almide.sh
+      - name: Install pinned Wasmtime
+        # Almide runs a test file through wasmtime when it is on PATH and
+        # otherwise builds it natively, which dominated the job time. This is an
+        # accelerator, not a dependency: a failed download must leave the job
+        # slow rather than red, so the tests still decide whether CI passes.
+        continue-on-error: true
+        run: |
+          bash scripts/install-wasmtime.sh
+          echo "$PWD/.tools/wasmtime" >> "$GITHUB_PATH"
+      - name: Evaluation grader tests
+        run: |
+          python3 -m unittest discover -s scripts/evals -p 'test_*.py'
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-19-real-model.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-19-verification-fixed.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-19-compact-results.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-19-pre-tool-policy.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-loop-notice.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-loop-control.json.gz
+          python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-shared-compute.json.gz
+          python3 scripts/audit_containment.py docs/benchmarks/2026-09-20-containment.json.gz
+          python3 scripts/audit_compute_smoke.py docs/benchmarks/2026-09-20-compute-smoke.json.gz
+      - name: Audit saved startup and memory measurements
+        run: |
+          python3 scripts/audit_benchmark.py docs/benchmarks/2026-09-20-startup.json.gz
+          python3 scripts/audit_benchmark.py docs/benchmarks/2026-09-20-startup-recorded.json.gz --porta-record
+      - name: Check
+        run: .tools/almide/almide check src/mod.almd
       - name: Build
-        run: almide build
-
+        run: .tools/almide/almide build src/mod.almd -o target/porta
       - name: Test
-        run: almide test
+        run: .tools/almide/almide test --ci
+      - name: Integration
+        run: python3 scripts/integration.py target/porta
+      - name: Build WASM agents and probes
+        run: |
+          .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
+          .tools/almide/almide build examples/demo-agent/src/mod.almd --target wasm -o examples/demo-agent/agent.wasm
+          .tools/almide/almide build scripts/fixtures/guest_isolation.almd --target wasm -o target/guest-isolation.wasm
+          .tools/almide/almide build scripts/fixtures/verify_readonly.almd --target wasm -o target/verify-readonly.wasm
+          cargo test --locked --manifest-path examples/verify-json/Cargo.toml --target-dir target/verify-json
+          cargo build --locked --manifest-path examples/verify-json/Cargo.toml --target wasm32-wasip1 --release --target-dir target/verify-json
+          cp target/verify-json/wasm32-wasip1/release/porta-verify-json.wasm examples/verify-json/check.wasm
+          cp target/verify-json/wasm32-wasip1/release/verify-tool.wasm examples/verify-json/verify-tool.wasm
+          cp target/verify-json/wasm32-wasip1/release/before-tool.wasm examples/verify-json/before-tool.wasm
+          cargo test --locked --manifest-path examples/compute/Cargo.toml --target-dir target/compute
+          cargo build --locked --manifest-path examples/compute/Cargo.toml --target wasm32-wasip1 --release --target-dir target/compute
+          cp target/compute/wasm32-wasip1/release/porta-compute.wasm examples/compute/compute.wasm
+      - name: WASM computation and exact JSON transport
+        run: python3 scripts/compute_integration.py target/porta examples/chat-agent/agent.wasm examples/compute/compute.wasm examples/demo-agent/agent.wasm
+      - name: WASM agents and teams
+        run: python3 scripts/agent_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm target/guest-isolation.wasm
+      - name: Durable resume and replay
+        run: python3 scripts/journal_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
+      - name: Tool argument validation
+        run: python3 scripts/schema_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
+      - name: MCP agent security and recovery
+        run: python3 scripts/mcp_agent_integration.py target/porta examples/chat-agent/agent.wasm examples/verify-json/verify-tool.wasm
+      - name: Official MCP SDK interoperability
+        run: |
+          python3 -m venv "$RUNNER_TEMP/porta-mcp-sdk"
+          "$RUNNER_TEMP/porta-mcp-sdk/bin/python" -m pip install mcp==1.30.0
+          "$RUNNER_TEMP/porta-mcp-sdk/bin/python" scripts/mcp_sdk_integration.py target/porta examples/chat-agent/agent.wasm
+          "$RUNNER_TEMP/porta-mcp-sdk/bin/python" scripts/compute_mcp_integration.py target/porta examples/compute/compute.wasm examples/demo-agent/agent.wasm
+      - name: Verified completion and recovery
+        run: python3 scripts/verification_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm examples/verify-json/check.wasm target/verify-readonly.wasm
+      - name: Pre-tool policies and recovery
+        run: python3 scripts/before_tool_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm examples/verify-json/before-tool.wasm examples/verify-json/check.wasm
+      - name: Model batch repair and recovery
+        run: python3 scripts/batch_recovery_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
+      - name: Artifact pins and strict team loading
+        run: python3 scripts/artifact_pins_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
+      - name: Offline team configuration inspection
+        run: python3 scripts/agent_check_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm

@@ -1,3 +1,4 @@
+import value
 import json
 import self.manifest
 
@@ -32,8 +33,8 @@ test "parse_manifest: tool parsing" {
   let v = json.parse("{\"tools\":[{\"name\":\"add\",\"description\":\"Add numbers\",\"inputSchema\":{\"type\":\"object\"}},{\"name\":\"sub\",\"description\":\"Subtract\"}]}")!
   let m = manifest.parse_manifest(v)!
   assert_eq(list.len(m.tools), 2)
-  let t0 = list.get(m.tools, 0) ?? {name: "", description: "", input_schema: json.null()}
-  let t1 = list.get(m.tools, 1) ?? {name: "", description: "", input_schema: json.null()}
+  let t0 = list.get(m.tools, 0) ?? {name: "", description: "", input_schema: value.null()}
+  let t1 = list.get(m.tools, 1) ?? {name: "", description: "", input_schema: value.null()}
   assert_eq(t0.name, "add")
   assert_eq(t0.description, "Add numbers")
   assert_eq(t1.name, "sub")

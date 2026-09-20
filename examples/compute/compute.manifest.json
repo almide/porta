@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "name": "porta-compute",
+  "version": "0.1.0",
+  "description": "Bounded computation in WASM without script I/O",
+  "entry": "_start",
+  "capabilities": [
+    "io",
+    "process",
+    "env",
+    "random"
+  ],
+  "tools": [
+    {
+      "name": "compute",
+      "description": "Run bounded Rhai code without I/O. input_json is parsed into the variable input; the final expression is returned as serialized JSON in the json field. Supports loops, arrays, maps, string processing and decimal arithmetic. Example script: input.a + input.b with input_json {\"a\":0.1,\"b\":0.2} returns json 0.3. No Python, JavaScript, imports, file, network, environment or clock access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "input_json": {
+            "type": "string",
+            "maxLength": 131072
+          }
+        },
+        "required": [
+          "script",
+          "input_json"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "wasi_imports": [
+    "random_get",
+    "environ_get",
+    "environ_sizes_get",
+    "fd_read",
+    "fd_write",
+    "poll_oneoff",
+    "proc_exit"
+  ]
+}

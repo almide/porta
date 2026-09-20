@@ -2,7 +2,11 @@
 
 # Snapshot & Replay
 
-Leverage WASM's deterministic execution model for state capture and reproduction. These capabilities are difficult or impossible to achieve reliably with OS-level containers — this is where porta's architecture pays off most clearly.
+Broker-boundary journals, checkpoint/resume, and verified offline replay are now
+implemented for `porta agent`; see [agent journals](../../agent-journals.md).
+They reconstruct the guest continuation from recorded inputs and do not snapshot
+linear memory, stacks, or files. The full-instance work below remains deferred.
+Do not describe the proposed commands or universal determinism as shipped.
 
 ## Snapshot / Checkpoint
 

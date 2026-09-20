@@ -1,19 +1,8 @@
+import value
 import json
 import self.wasm_rt
 
 // --- wt_http_request ---
-
-test "wt_http_request: GET httpbin" {
-  let resp = wasm_rt.wt_http_request("GET", "https://httpbin.org/ip", "{}", "")!
-  let parsed = json.parse(resp)
-  match parsed {
-    ok(v) => {
-      let status = json.get_int(v, "status") ?? 0
-      assert_eq(status, 200)
-    },
-    err(_) => assert(false),
-  }
-}
 
 test "wt_http_request: invalid URL" {
   let resp = wasm_rt.wt_http_request("GET", "http://invalid.invalid.invalid", "{}", "")!
@@ -89,15 +78,22 @@ test "wt_inspect: invalid path" {
 
 // --- build_sandbox_profile ---
 
-test "build_sandbox_profile: empty allowed_net means network open" {
-  let profile = wasm_rt.build_sandbox_profile(["."], [])
+test "build_sandbox_profile: no dirs and no net means minimal sandbox" {
+  let profile = wasm_rt.build_sandbox_profile([], [])
+  assert(string.contains(profile, "(deny file-write*)"))
   assert(not string.contains(profile, "(deny network-outbound)"))
+  assert(string.contains(profile, ".ssh"))
+}
+
+test "build_sandbox_profile: dirs specified enables write restrictions" {
+  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  assert(string.contains(profile, "(deny file-write*)"))
 }
 
 test "build_sandbox_profile: allow_net restricts to listed ports" {
   let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"])
   assert(string.contains(profile, "(deny network-outbound)"))
-  assert(string.contains(profile, "(allow network-outbound (local udp))"))
+  assert(not string.contains(profile, "(allow network-outbound (local udp))"))
 }
 
 test "build_sandbox_profile: allowed_net adds port-based TCP rules" {
@@ -121,13 +117,12 @@ test "build_sandbox_profile: writable mount has file-write rule" {
   assert(string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
 }
 
-test "build_sandbox_profile: sensitive dirs denied" {
+test "build_sandbox_profile: cryptographic keys denied" {
   let profile = wasm_rt.build_sandbox_profile(["."], [])
   assert(string.contains(profile, ".ssh"))
   assert(string.contains(profile, ".gnupg"))
-  assert(string.contains(profile, ".aws"))
-  assert(string.contains(profile, ".kube"))
-  assert(string.contains(profile, ".docker"))
+  assert(not string.contains(profile, ".aws"))
+  assert(not string.contains(profile, "Documents"))
 }
 
 // --- wt_getpid ---
@@ -142,4 +137,34 @@ test "wt_getpid: returns positive" {
 test "wt_home_dir: returns non-empty" {
   let home = wasm_rt.wt_home_dir()
   assert(string.len(home) > 0)
+}
+
+test "proxy profile restricts egress to loopback without UDP or unix sockets" {
+  let profile = wasm_rt.build_sandbox_profile([], ["127.0.0.1:42123"])
+  assert(string.contains(profile, "remote tcp \"localhost:42123\""))
+  assert(not string.contains(profile, "*:42123"))
+  assert(not string.contains(profile, "local udp"))
+  assert(not string.contains(profile, "unix-socket"))
+}
+
+test "malformed network rules never grant unrestricted TCP" {
+  let profile = wasm_rt.build_sandbox_profile([], ["example.com", "*:oops", "*:0"])
+  assert(string.contains(profile, "(deny network-outbound)"))
+  assert(not string.contains(profile, "(allow network-outbound"))
+}
+
+test "sandbox escapes injected profile expressions in mount paths" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace/\") (allow network*) ;"], ["*:443"])
+  assert(string.contains(profile, "\\\""))
+  assert(not string.contains(profile, "subpath \"/private/var\""))
+  assert(not string.contains(profile, "subpath \"/var\""))
+}
+
+test "TOML parser preserves nested tables and rejects malformed config" {
+  let parsed = json.parse(wasm_rt.wt_parse_toml("[sandbox]\nmounts = []\n[proxy]\nallow = [\"api.example.com\"]"))!
+  let config = value.field(parsed, "value")!
+  let empty: List[Value] = []
+  assert_eq(json.get_array(value.field(config, "sandbox")!, "mounts"), some(empty))
+  let invalid = json.parse(wasm_rt.wt_parse_toml("[broken"))!
+  assert((json.get_string(invalid, "error") ?? "") != "")
 }

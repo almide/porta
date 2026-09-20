@@ -1,0 +1,131 @@
+{
+  "scope": "fresh process to final answer; one local fixture model call; no tools",
+  "isolation": {
+    "porta_wasm": "WASM guest",
+    "docker_agent_native": "native, no --sandbox"
+  },
+  "not_measured": [
+    "real-model quality",
+    "Docker sandbox startup",
+    "memory",
+    "tool throughput",
+    "production latency"
+  ],
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "versions": {
+    "porta": "porta 0.4.0",
+    "docker_agent": "docker agent version v1.98.0\nCommit: 9cd759f9ae2bf9220d80655e9cfff9040d0aa963"
+  },
+  "samples_ms": {
+    "porta_wasm": [
+      18.89583299634978,
+      17.910916008986533,
+      16.594542015809566,
+      16.89658302348107,
+      16.068957978859544,
+      16.443250002339482,
+      15.471332997549325
+    ],
+    "docker_agent_native": [
+      246.9839999685064,
+      246.0105000063777,
+      245.11875002644956,
+      245.10066700167954,
+      245.46816700603813,
+      248.89799999073148,
+      251.29554205341265
+    ]
+  },
+  "median_ms": {
+    "porta_wasm": 16.594542015809566,
+    "docker_agent_native": 246.0105000063777
+  },
+  "guest_bytes": 31167,
+  "runtime_bytes": 34339016,
+  "requests": [
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": false
+    },
+    {
+      "path": "/v1/chat/completions",
+      "model": "fixture",
+      "stream": true
+    }
+  ],
+  "sha256": {
+    "porta": "a9cbb55f84f75618108a1e1c7376799c133d3e6d3abbdad8b413367abac5ed39",
+    "guest": "a1538060b488f7882c1aea9c16266b9573e7d7e4aaac2bd25489f96bdc651016"
+  }
+}

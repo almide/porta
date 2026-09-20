@@ -1,3 +1,4 @@
+import value
 // Instance Lifecycle & Dispatch
 
 import json
@@ -70,7 +71,7 @@ fn default_config(wasm_path: String, caps: sandbox.CapabilitySet) -> InstanceCon
   capabilities: caps,
   env_vars: [],
   secrets: [],
-  preopen_dirs: ["."],
+  preopen_dirs: [],
   wasm_args: [],
   allowed_commands: [],
   allowed_hosts: [],
@@ -96,7 +97,7 @@ fn setup_dirs(handle: Int, dirs: List[String], idx: Int) -> Unit =
 
 fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
   let full_args = [wasm_path] + args
-  let args_json = json.stringify(json.array(full_args |> list.map(json.from_string)))
+  let args_json = json.stringify(value.array(full_args |> list.map(value.str)))
   let _ = wasm_rt.wt_set_args(handle, args_json)
   ()
 }
