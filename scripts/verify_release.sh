@@ -27,14 +27,41 @@ echo "   porta --version -> $reported"
   exit 1
 }
 
-echo "== it enforces something, rather than merely starting"
+echo "== it enforces, and still does the job"
 work="$scratch/work"
 mkdir -p "$work"
-if "$scratch/bin/porta" run /bin/sh -v "$work" -- -c 'echo x > "$1"' sh "$scratch/escape" 2>/dev/null; then
-  echo "   a write outside every mount succeeded; this binary enforces nothing" >&2
+
+# Both halves, because either alone passes a binary that is useless. A refusal
+# on its own is what a porta that cannot run anything looks like; a successful
+# write on its own is what a porta that enforces nothing looks like.
+"$scratch/bin/porta" run /bin/sh -v "$work" -- -c 'echo x > "$1"' sh "$scratch/escape" 2>/dev/null || true
+if [ -e "$scratch/escape" ]; then
+  echo "   a write outside every mount landed; this binary enforces nothing" >&2
   exit 1
 fi
 echo "   a write outside every mount was refused"
+
+inside=$("$scratch/bin/porta" run /bin/sh -v "$work" -- -c 'echo x > "$1"' sh "$work/inside" 2>&1 || true)
+if [ ! -e "$work/inside" ]; then
+  # Never discard the reason. A refusal here is porta working as designed on a
+  # host whose kernel cannot restrict anything — an emulated container, an old
+  # kernel — and that reads exactly like a broken binary if the message is
+  # thrown away.
+  echo "   a write inside the granted mount did not land: ${inside:-no output}" >&2
+  case "$inside" in
+    *"no usable Landlock support"*)
+      echo "   that is porta refusing a host it cannot restrict, not a bad build." >&2
+      echo "   run this on a host with Landlock to check the binary itself." >&2
+      # Exit 2 tells a human "wrong host, try elsewhere". In CI there is no
+      # elsewhere: the runners are the platforms this release claims, so a
+      # release that cannot be shown to enforce on one of them is not a
+      # release. ${CI:-} is set by every runner.
+      [ -n "${CI:-}" ] && exit 1
+      exit 2 ;;
+  esac
+  exit 1
+fi
+echo "   a write inside the granted mount worked"
 
 echo
 echo "$tag is installable and enforcing on $(uname -s)/$(uname -m)."

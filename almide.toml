@@ -1,6 +1,6 @@
 [package]
 name = "porta"
-version = "0.5.0"
+version = "0.5.1"
 
 [permissions]
 allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net"]

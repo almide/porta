@@ -13,13 +13,22 @@ permissions:
 
 jobs:
   build:
+    # Both architectures on both platforms. Publishing half the matrix means an
+    # Intel Mac or an ARM server — a Graviton instance, a Pi, Docker on Apple
+    # silicon — asks the installer for an archive that is not there and gets a
+    # 404, which is what the install instructions promised would work.
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: macos-aarch64
+          - os: macos-13
+            target: macos-x86_64
           - os: ubuntu-latest
             target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +46,15 @@ jobs:
       # gates a commit gates a release, on the machine that produced the file.
       - name: Verify the binary that will ship
         run: python3 scripts/integration.py target/porta
+      # 552MB unstripped on Linux, 33MB after. Debug symbols are not something
+      # to ask somebody to download to run a command. Stripped after the suite
+      # above has run, so what was tested and what ships differ only in symbols.
+      - name: Strip
+        run: |
+          before=$(wc -c < target/porta)
+          strip target/porta
+          echo "$before -> $(wc -c < target/porta) bytes"
+          ./target/porta --version
       - name: Package
         run: |
           mkdir -p "dist/porta-${{ matrix.target }}"
@@ -49,6 +67,9 @@ jobs:
           name: porta-${{ matrix.target }}
           path: dist/porta-${{ matrix.target }}.*
 
+  # Published as a prerelease first. A release that is "latest" is one the
+  # install instructions hand to strangers, and until something has installed
+  # it on every platform it claims, nobody knows whether it can be.
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -71,7 +92,41 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: true
           files: |
             dist/*.tar.gz
             dist/porta-checksums.sha256
           fail_on_unmatched_files: true
+
+  # Install what was just published, on every platform it was published for,
+  # and check it enforces. The build job tested the binary it made; this tests
+  # the archive a stranger downloads, fetched over the network and unpacked by
+  # the script the README tells them to run.
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-13, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from the published release and check it enforces
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify_release.sh "${{ inputs.tag || github.ref_name }}"
+
+  # Only now is it the release the install instructions point at.
+  promote:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ inputs.tag || github.ref_name }}" \
+            --repo "${{ github.repository }}" --prerelease=false --latest
+          echo "::notice::${{ inputs.tag || github.ref_name }} installed and enforced on every published platform"
