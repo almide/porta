@@ -13,7 +13,17 @@ const ALWAYS_WRITABLE: [&str; 2] = ["/tmp", "/dev"];
 /// libraries and the loader cache, so confining reads to the granted mounts
 /// alone would only mean nothing runs. A caller's home directory is
 /// deliberately absent: that is what this policy exists to close.
-const SYSTEM_READABLE: [&str; 7] = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/proc"];
+///
+/// `/proc` is deliberately absent too, and that is a security decision rather
+/// than a loader one. It was here on the assumption that an interpreter needs
+/// it; measured, none of `sh`, `python3`, `curl`, `perl` or `grep` does.
+/// Granting it hands a confined command the command line of every other
+/// process the same user is running — credentials included — plus the host's
+/// connection table and mount layout. Landlock cannot narrow that to the
+/// process's own entry: a ruleset is built before the fork, so the child's PID
+/// does not exist yet. A command that genuinely needs `/proc` takes it as a
+/// mount the caller grants.
+const SYSTEM_READABLE: [&str; 6] = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc"];
 
 /// TCP ports from `--allow-net` entries, or the entry that cannot be expressed.
 fn requested_tcp_ports(allowed_net: &[String]) -> Result<Vec<u16>, String> {

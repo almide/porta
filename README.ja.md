@@ -301,7 +301,7 @@ Porta は 2 つのレベルで制限を強制します。
 |---|---|---|
 | **書き込み** | `-v` マウントと `/tmp` 以外は拒否 | `-v` マウントと `/tmp`、`/dev` 以外は拒否 |
 | **読み取り、既定** | `~/.ssh` と `~/.gnupg` を拒否、それ以外は読める | 制限なし |
-| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/proc` `/tmp` `/dev` |
+| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/tmp` `/dev` |
 | **読み取り専用マウント** | `-v ./data:ro` → 読める、書けない | 同じ |
 | **ポート単位のネットワーク** | `--allow-net '*:443'` | 同じ。Landlock ABI 4 以上が必要 |
 | **ホスト単位のネットワーク** | `--proxy-allow` のみ。`--allow-net` では不可 | 同じ |

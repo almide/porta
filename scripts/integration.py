@@ -295,6 +295,27 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: strict read policy confines reads to grants and system paths, '
               'leaving an interpreter runnable')
+
+        # /proc is what the same user's other processes are visible through:
+        # their command lines carry credentials. It is not in the system set,
+        # and no interpreter here needs it, so a strict run must not reach it.
+        decoy = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)',
+                                  '--token=sk-live-MUST-NOT-LEAK'])
+        try:
+            peek = ('import glob,sys\n'
+                    'seen=[]\n'
+                    'for d in glob.glob("/proc/[0-9]*"):\n'
+                    '    try: seen.append(open(d+"/cmdline").read())\n'
+                    '    except OSError: pass\n'
+                    'print("READ", len(seen), "MUST-NOT-LEAK" in "".join(seen))')
+            result = run('run', sys.executable, '--read-policy', 'strict', '-v', str(workspace),
+                         '-v', str(pathlib.Path(sys.base_prefix).resolve()), '--', '-c', peek)
+            assert result.returncode == 0, result.stderr
+            assert 'READ 0 False' in result.stdout, result.stdout
+        finally:
+            decoy.terminate()
+            decoy.wait()
+        print('PASS: a strict run cannot enumerate other processes through /proc')
     else:
         result = run('run', '/bin/echo', '--', 'must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result

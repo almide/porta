@@ -299,7 +299,7 @@ does not show you where.
 |---|---|---|
 | **Write** | denied outside `-v` mounts, `/tmp` | denied outside `-v` mounts, `/tmp`, `/dev` |
 | **Read, default** | `~/.ssh` and `~/.gnupg` denied; everything else readable | not confined |
-| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` |
+| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` |
 | **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
 | **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
