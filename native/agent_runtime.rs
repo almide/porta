@@ -1,5 +1,6 @@
 //! Capability broker for guest-driven agents. The decision loop is a WASM program;
 //! this module owns credentials, registered tools, and non-negotiable run budgets.
+use crate::locking::locked;
 use serde::Deserialize;
 use crate::agent_journal::{self, Journal};
 use crate::agent_mcp;
@@ -266,7 +267,7 @@ impl Runtime {
         let delegates: BTreeMap<_, _> = self.config.agents.iter().map(|child| (format!("delegate_{}", child.name), child.sha256.clone())).collect();
         let remote: Vec<_> = self.config.mcp_tools.iter().map(|tool| json!({"name":tool.name,"remote_name":tool.remote_name,"endpoint":tool.endpoint,"token_env":tool.token_env,"input_schema":tool.input_schema})).collect();
         let limits = &self.config.limits;
-        let shared = self.budget.lock().unwrap();
+        let shared = locked(&self.budget);
         let mut report = self.identity();
         report["children"] = json!(children);
         report["strict_artifact_pins"] = json!(strict);
@@ -292,20 +293,20 @@ impl Runtime {
     }
     fn operation_cached(&self, kind: &str, request: &Value) -> Result<Option<(Value, u64)>, String> {
         match &self.journal {
-            Some(journal) => journal.lock().unwrap().cached(&json!({"actor":self.actor,"kind":kind,"event":self.event,"decision":self.decision,"request":request})),
+            Some(journal) => locked(&journal).cached(&json!({"actor":self.actor,"kind":kind,"event":self.event,"decision":self.decision,"request":request})),
             None => Ok(None),
         }
     }
     fn operation_begin(&self, kind: &str, request: Value) -> Result<Option<(Value, u64)>, String> {
         match &self.journal {
-            Some(journal) => journal.lock().unwrap().begin(json!({"actor":self.actor,"kind":kind,"event":self.event,"decision":self.decision,"request":request})),
+            Some(journal) => locked(&journal).begin(json!({"actor":self.actor,"kind":kind,"event":self.event,"decision":self.decision,"request":request})),
             None => Ok(None),
         }
     }
     fn operation_commit(&self, response: &Value, fuel: u64) -> Result<(), String> {
         if let Some(journal) = &self.journal {
             let elapsed = self.metrics()["elapsed_ms"].as_u64().ok_or("invalid elapsed time")?;
-            journal.lock().unwrap().commit(response, fuel, elapsed)?;
+            locked(&journal).commit(response, fuel, elapsed)?;
         }
         Ok(())
     }
@@ -327,7 +328,7 @@ impl Runtime {
         self.done = false;
     }
     fn remaining(&self) -> Result<Duration, String> {
-        let budget = self.budget.lock().unwrap();
+        let budget = locked(&self.budget);
         let global = budget.timeout.checked_sub(budget.prior_elapsed + budget.started.elapsed()).unwrap_or_default();
         let local = Duration::from_secs(self.config.limits.timeout_seconds).checked_sub(self.started.elapsed()).unwrap_or_default();
         let remaining = global.min(local);
@@ -378,7 +379,7 @@ impl Runtime {
         let body = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
         if body.len() > MAX_MESSAGE { return Err("model request exceeds 1 MiB".into()); }
         {
-            let mut budget = self.budget.lock().unwrap();
+            let mut budget = locked(&self.budget);
             if budget.model_calls >= budget.max_model_calls { return Err("team model call budget exceeded".into()); }
             budget.model_calls += 1;
         }
@@ -415,7 +416,7 @@ impl Runtime {
             for (name, guest, parameters) in checks {
                 if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded during verification".into()); }
                 {
-                    let mut budget = self.budget.lock().unwrap();
+                    let mut budget = locked(&self.budget);
                     if budget.steps >= budget.max_steps { return Err("team step budget exceeded during verification".into()); }
                     budget.steps += 1;
                     budget.verification_calls += 1;
@@ -433,11 +434,11 @@ impl Runtime {
                     (result, fuel)
                 };
                 self.fuel_consumed += fuel;
-                self.budget.lock().unwrap().fuel += fuel;
+                locked(&self.budget).fuel += fuel;
                 let verdict: Verdict = serde_json::from_value(result).map_err(|_| "invalid completion verdict (expected passed boolean and optional feedback string)")?;
                 if !verdict.passed {
                     if verdict.feedback.trim().is_empty() { return Err("failed completion check must explain what needs correction".into()); }
-                    self.budget.lock().unwrap().verification_failures += 1;
+                    locked(&self.budget).verification_failures += 1;
                     return Ok(Some(json!({"check":name,"feedback":verdict.feedback})));
                 }
             }
@@ -448,7 +449,7 @@ impl Runtime {
                     let request = json!({"name":name,"input":input_for(parameters)});
                     let record = json!({"actor":self.actor,"kind":operation,"event":self.event,"decision":self.decision,"request":request});
                     let repeat = {
-                        let journal = journal.lock().unwrap();
+                        let journal = locked(&journal);
                         journal.continuing_live() || journal.next_matches(&record)
                     };
                     if repeat { continue; }
@@ -461,7 +462,7 @@ impl Runtime {
         if self.done { return Err("agent run already completed".into()); }
         if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded".into()); }
         {
-            let mut budget = self.budget.lock().unwrap();
+            let mut budget = locked(&self.budget);
             if budget.steps >= budget.max_steps { return Err("team step budget exceeded".into()); }
             budget.steps += 1;
         }
@@ -471,7 +472,7 @@ impl Runtime {
         let (output, fuel) = self.execute(&self.agent, &line)?;
         self.steps += 1;
         self.fuel_consumed += fuel;
-        self.budget.lock().unwrap().fuel += fuel;
+        locked(&self.budget).fuel += fuel;
         self.decision = serde_json::from_str(&output).map_err(|e| format!("invalid guest action: {e}"))?;
         let action: Action = serde_json::from_str(&output).map_err(|e| format!("invalid guest action: {e}"))?;
         let kind;
@@ -513,7 +514,7 @@ impl Runtime {
                 let result = if let Some(child) = self.children.get_mut(&name) {
                     let task = arguments.get("task").and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= MAX_MESSAGE / 2).ok_or("delegation requires a nonempty task of at most 512 KiB")?;
                     if arguments.as_object().is_some_and(|a| a.len() != 1) { return Err("delegation accepts only the task field".into()); }
-                    self.budget.lock().unwrap().delegations += 1;
+                    locked(&self.budget).delegations += 1;
                     child.reset(task);
                     loop {
                         let event = child.tick().map_err(|e| format!("{name}: {e}"))?;
@@ -547,7 +548,7 @@ impl Runtime {
                         (result, fuel)
                     };
                     self.fuel_consumed += fuel;
-                    self.budget.lock().unwrap().fuel += fuel;
+                    locked(&self.budget).fuel += fuel;
                     result
                 };
                 if !self.checks.is_empty() || !self.before_checks.is_empty() {
@@ -557,7 +558,7 @@ impl Runtime {
                     }
                 }
                 self.tool_calls += 1;
-                self.budget.lock().unwrap().tool_calls += 1;
+                locked(&self.budget).tool_calls += 1;
                 self.event = json!({"kind":"tool","name":name,"result":result,"state":state});
                 kind = "tool";
             }
@@ -565,14 +566,14 @@ impl Runtime {
         Ok(json!({"done":false,"event":kind,"metrics":self.metrics()}))
     }
     fn metrics(&self) -> Value {
-        let budget = self.budget.lock().unwrap();
+        let budget = locked(&self.budget);
         json!({"steps":budget.steps,"model_calls":budget.model_calls,"tool_calls":budget.tool_calls,"delegations":budget.delegations,"verification_calls":budget.verification_calls,"verification_failures":budget.verification_failures,"fuel":budget.fuel,"elapsed_ms":(budget.prior_elapsed + budget.started.elapsed()).as_millis()})
     }
 }
 
 fn register(run: Runtime) -> String {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    RUNS.lock().unwrap().insert(id, run);
+    locked(&RUNS).insert(id, run);
     json!({"handle":id}).to_string()
 }
 fn recorded(path: &Path, task: &str, journal_path: &Path) -> Result<Runtime, String> {
@@ -592,7 +593,7 @@ fn resumed(path: &Path, journal_path: &Path, replay: bool) -> Result<Runtime, St
     if journal.fingerprint != agent_journal::digest(run.identity().to_string().as_bytes()) {
         return Err("journal fingerprint mismatch: configuration, WASM artifacts or mount bindings changed".into());
     }
-    if !replay { run.budget.lock().unwrap().prior_elapsed = Duration::from_millis(journal.elapsed_ms); }
+    if !replay { locked(&run.budget).prior_elapsed = Duration::from_millis(journal.elapsed_ms); }
     run.attach_journal(Arc::new(Mutex::new(journal)));
     Ok(run)
 }
@@ -626,13 +627,13 @@ pub fn agent_open(path: impl AsRef<str>, task: impl AsRef<str>) -> String {
     }
 }
 pub fn agent_step(handle: i64) -> String {
-    let mut runs = RUNS.lock().unwrap();
+    let mut runs = locked(&RUNS);
     match runs.get_mut(&(handle as u64)) {
         Some(run) => match run.tick() {
             Ok(value) => {
                 if value["done"] == true {
                     if let Some(journal) = &run.journal {
-                        if let Err(error) = journal.lock().unwrap().finish(value["output"].as_str().unwrap_or(""), value["metrics"]["elapsed_ms"].as_u64().unwrap_or(0)) { return fail(error); }
+                        if let Err(error) = locked(&journal).finish(value["output"].as_str().unwrap_or(""), value["metrics"]["elapsed_ms"].as_u64().unwrap_or(0)) { return fail(error); }
                     }
                 }
                 value.to_string()
@@ -642,14 +643,14 @@ pub fn agent_step(handle: i64) -> String {
         None => fail("unknown agent run"),
     }
 }
-pub fn agent_close(handle: i64) -> i64 { if RUNS.lock().unwrap().remove(&(handle as u64)).is_some() { 0 } else { -1 } }
+pub fn agent_close(handle: i64) -> i64 { if locked(&RUNS).remove(&(handle as u64)).is_some() { 0 } else { -1 } }
 
 pub fn agent_checkpoint(handle: i64) -> String {
-    let runs = RUNS.lock().unwrap();
+    let runs = locked(&RUNS);
     let Some(run) = runs.get(&(handle as u64)) else { return fail("unknown agent run") };
     let Some(journal) = &run.journal else { return fail("checkpoint requires --record") };
     let metrics = run.metrics();
-    let saved = journal.lock().unwrap().checkpoint(metrics["elapsed_ms"].as_u64().unwrap_or(0));
+    let saved = locked(&journal).checkpoint(metrics["elapsed_ms"].as_u64().unwrap_or(0));
     match saved {
         Ok(()) => json!({"paused":true,"metrics":metrics}).to_string(),
         Err(e) => fail(e),

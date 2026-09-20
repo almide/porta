@@ -35,6 +35,20 @@ const MIN_ABI_FOR_NET: i64 = 4;
 /// ABI that first understands truncation as a distinct right.
 const MIN_ABI_FOR_TRUNCATE: i64 = 3;
 
+/// The only place a landlock syscall is issued. Arguments are passed in syscall
+/// order; a caller that has a pointer casts it, so the order here cannot drift
+/// from the kernel's. Each attribute struct outlives its call and the kernel
+/// copies it before returning, so no borrow escapes.
+fn landlock_syscall(
+    operation: libc::c_long,
+    first: libc::c_long,
+    second: libc::c_long,
+    third: libc::c_long,
+    fourth: libc::c_long,
+) -> libc::c_long {
+    unsafe { libc::syscall(operation, first, second, third, fourth) }
+}
+
 #[repr(C)]
 struct RulesetAttr {
     handled_access_fs: u64,
@@ -60,31 +74,23 @@ pub struct Policy {
     pub restrict_network: bool,
 }
 
-/// A prepared ruleset. Dropping it closes the descriptor.
+/// A prepared ruleset. The descriptor is owned, so it closes on every path.
 pub struct Ruleset {
-    fd: i32,
-}
-
-impl Drop for Ruleset {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.fd) };
-    }
+    fd: std::os::fd::OwnedFd,
 }
 
 impl Ruleset {
     pub fn descriptor(&self) -> i32 {
-        self.fd
+        std::os::fd::AsRawFd::as_raw_fd(&self.fd)
     }
 
     /// Applies the ruleset to the calling process. Safe to call after fork:
     /// two syscalls, no allocation, no locks.
     pub fn restrict_current_process(fd: i32) -> std::io::Result<()> {
-        let no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-        if no_new_privs != 0 {
+        if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let restricted = unsafe { libc::syscall(SYS_RESTRICT_SELF, fd, 0) };
-        if restricted != 0 {
+        if landlock_syscall(SYS_RESTRICT_SELF, fd as libc::c_long, 0, 0, 0) != 0 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
@@ -93,14 +99,8 @@ impl Ruleset {
 
 /// Landlock ABI the running kernel reports, or an error when it has none.
 pub fn abi_version() -> Result<i64, String> {
-    let abi = unsafe {
-        libc::syscall(
-            SYS_CREATE_RULESET,
-            std::ptr::null::<RulesetAttr>(),
-            0usize,
-            CREATE_RULESET_VERSION,
-        )
-    };
+    // attr = NULL, size = 0, flags = VERSION
+    let abi = landlock_syscall(SYS_CREATE_RULESET, 0, 0, CREATE_RULESET_VERSION as libc::c_long, 0);
     if abi < 1 {
         return Err(format!(
             "this kernel has no usable Landlock support ({}); \
@@ -124,36 +124,41 @@ fn create_ruleset(handled_fs: u64, handled_net: u64) -> Result<Ruleset, String> 
         handled_access_fs: handled_fs,
         handled_access_net: handled_net,
     };
-    let fd = unsafe {
-        libc::syscall(
-            SYS_CREATE_RULESET,
-            &attr as *const RulesetAttr,
-            std::mem::size_of::<RulesetAttr>(),
-            0,
-        )
-    };
+    // attr, size, flags — in that order, as the kernel declares them.
+    let fd = landlock_syscall(
+        SYS_CREATE_RULESET,
+        &attr as *const RulesetAttr as libc::c_long,
+        std::mem::size_of::<RulesetAttr>() as libc::c_long,
+        0,
+        0,
+    );
     if fd < 0 {
         return Err(format!("Landlock ruleset refused: {}", std::io::Error::last_os_error()));
     }
-    Ok(Ruleset { fd: fd as i32 })
+    // The kernel just handed this descriptor over and nothing else holds it.
+    let owned = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd as i32) };
+    Ok(Ruleset { fd: owned })
+}
+
+fn add_rule(ruleset_fd: i32, rule_type: libc::c_long, attr: libc::c_long) -> libc::c_long {
+    landlock_syscall(SYS_ADD_RULE, ruleset_fd as libc::c_long, rule_type, attr, 0)
 }
 
 fn allow_directory(ruleset: &Ruleset, dir: &str, rights: u64) -> Result<(), String> {
-    let path = match std::ffi::CString::new(dir) {
-        Ok(path) => path,
-        Err(_) => return Err(format!("mount path contains a NUL byte: {}", dir)),
+    use std::os::unix::fs::OpenOptionsExt;
+    // A mount that cannot be opened cannot be granted. Refusing here keeps the
+    // policy honest instead of silently narrowing it. The handle owns the
+    // descriptor, so no exit path from here leaks it.
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
+        .open(dir)
+        .map_err(|error| format!("cannot open mount {}: {}", dir, error))?;
+    let attr = PathBeneathAttr {
+        allowed_access: rights,
+        parent_fd: std::os::fd::AsRawFd::as_raw_fd(&handle),
     };
-    let dir_fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
-    if dir_fd < 0 {
-        // A mount that cannot be opened cannot be granted. Refusing here keeps
-        // the policy honest instead of silently narrowing it.
-        return Err(format!("cannot open mount {}: {}", dir, std::io::Error::last_os_error()));
-    }
-    let attr = PathBeneathAttr { allowed_access: rights, parent_fd: dir_fd };
-    let added = unsafe {
-        libc::syscall(SYS_ADD_RULE, ruleset.fd, RULE_PATH_BENEATH, &attr as *const PathBeneathAttr, 0)
-    };
-    unsafe { libc::close(dir_fd) };
+    let added = add_rule(ruleset.descriptor(), RULE_PATH_BENEATH, &attr as *const PathBeneathAttr as libc::c_long);
     if added != 0 {
         return Err(format!("cannot grant writes beneath {}: {}", dir, std::io::Error::last_os_error()));
     }
@@ -162,9 +167,7 @@ fn allow_directory(ruleset: &Ruleset, dir: &str, rights: u64) -> Result<(), Stri
 
 fn allow_tcp_port(ruleset: &Ruleset, port: u16) -> Result<(), String> {
     let attr = NetPortAttr { allowed_access: ACCESS_NET_CONNECT_TCP, port: port as u64 };
-    let added = unsafe {
-        libc::syscall(SYS_ADD_RULE, ruleset.fd, RULE_NET_PORT, &attr as *const NetPortAttr, 0)
-    };
+    let added = add_rule(ruleset.descriptor(), RULE_NET_PORT, &attr as *const NetPortAttr as libc::c_long);
     if added != 0 {
         return Err(format!("cannot allow TCP port {}: {}", port, std::io::Error::last_os_error()));
     }

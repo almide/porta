@@ -1,6 +1,7 @@
 // Wasmtime bridge: Rust module callable from Almide via @extern(rs).
 // Provides a handle-based API for WASM instance lifecycle management.
 
+use crate::locking::locked;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -80,7 +81,7 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
         fuel_consumed: 0,
     };
 
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     let handle = instances.len() as i64;
     instances.push(Some(inst));
     handle
@@ -88,7 +89,7 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
 
 /// Set stdin data for an instance (must be called before wt_run).
 pub fn wt_set_stdin(handle: i64, data: impl AsRef<str>) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.stdin_data = data.as_ref().as_bytes().to_vec(); 0 }
         None => -1,
@@ -97,7 +98,7 @@ pub fn wt_set_stdin(handle: i64, data: impl AsRef<str>) -> i64 {
 
 /// Set stdin data as raw bytes for an instance.
 pub fn wt_set_stdin_bytes(handle: i64, data: Vec<u8>) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.stdin_data = data; 0 }
         None => -1,
@@ -116,7 +117,7 @@ pub fn wt_set_tool_stdin(handle: i64, tool_name: impl AsRef<str>, args_json: imp
     data.push(((len >> 24) & 0xFF) as u8);
     data.extend_from_slice(cmd_bytes);
 
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.stdin_data = data; 0 }
         None => -1,
@@ -130,7 +131,7 @@ pub fn wt_set_args(handle: i64, args_json: impl AsRef<str>) -> i64 {
         Ok(a) => a,
         Err(_) => return -1,
     };
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.wasi_args = args; 0 }
         None => -1,
@@ -139,7 +140,7 @@ pub fn wt_set_args(handle: i64, args_json: impl AsRef<str>) -> i64 {
 
 /// Add an environment variable (must be called before wt_run).
 pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.env_vars.push((key.as_ref().to_string(), value.as_ref().to_string())); 0 }
         None => -1,
@@ -148,7 +149,7 @@ pub fn wt_set_env(handle: i64, key: impl AsRef<str>, value: impl AsRef<str>) -> 
 
 /// Set maximum memory in WASM pages (64KB each). 0 = unlimited.
 pub fn wt_set_max_memory(handle: i64, pages: i64) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => {
             inst.max_memory_bytes = if pages > 0 { pages as usize * 65536 } else { 0 };
@@ -160,7 +161,7 @@ pub fn wt_set_max_memory(handle: i64, pages: i64) -> i64 {
 
 /// Set entry point function name (default: "_start"). Must be called before wt_run.
 pub fn wt_set_entry(handle: i64, name: impl AsRef<str>) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => { inst.entry_point = name.as_ref().to_string(); 0 }
         None => -1,
@@ -171,7 +172,7 @@ pub fn wt_set_entry(handle: i64, name: impl AsRef<str>) -> i64 {
 /// host_path: actual path on the host filesystem.
 /// guest_path: path the WASM agent sees (e.g., "." or "/work").
 pub fn wt_preopen_dir(handle: i64, host_path: impl AsRef<str>, guest_path: impl AsRef<str>) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(inst) => {
             inst.preopen_dirs.push((host_path.as_ref().to_string(), guest_path.as_ref().to_string()));
@@ -183,7 +184,7 @@ pub fn wt_preopen_dir(handle: i64, host_path: impl AsRef<str>, guest_path: impl 
 
 /// Run _start. Returns exit code (0 = success, -1 = error/trap).
 pub fn wt_run(handle: i64) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     let inst = match instances.get_mut(handle as usize).and_then(|s| s.as_mut()) {
         Some(i) => i,
         None => return -1,
@@ -285,7 +286,7 @@ pub fn wt_run(handle: i64) -> i64 {
 
 /// Get captured stdout after wt_run.
 pub fn wt_get_stdout(handle: i64) -> String {
-    let instances = INSTANCES.lock().unwrap();
+    let instances = locked(&INSTANCES);
     instances.get(handle as usize)
         .and_then(|s| s.as_ref())
         .map(|i| i.stdout_result.clone())
@@ -294,7 +295,7 @@ pub fn wt_get_stdout(handle: i64) -> String {
 
 /// Get captured stderr after wt_run.
 pub fn wt_get_stderr(handle: i64) -> String {
-    let instances = INSTANCES.lock().unwrap();
+    let instances = locked(&INSTANCES);
     instances.get(handle as usize)
         .and_then(|s| s.as_ref())
         .map(|i| i.stderr_result.clone())
@@ -303,7 +304,7 @@ pub fn wt_get_stderr(handle: i64) -> String {
 
 /// Get fuel consumed (steps executed) after wt_run.
 pub fn wt_get_fuel_consumed(handle: i64) -> i64 {
-    let instances = INSTANCES.lock().unwrap();
+    let instances = locked(&INSTANCES);
     instances.get(handle as usize)
         .and_then(|s| s.as_ref())
         .map(|i| i.fuel_consumed as i64)
@@ -312,7 +313,7 @@ pub fn wt_get_fuel_consumed(handle: i64) -> i64 {
 
 /// Get exit code after wt_run.
 pub fn wt_get_exit_code(handle: i64) -> i64 {
-    let instances = INSTANCES.lock().unwrap();
+    let instances = locked(&INSTANCES);
     instances.get(handle as usize)
         .and_then(|s| s.as_ref())
         .map(|i| i.exit_code)
@@ -802,7 +803,7 @@ pub fn wt_home_dir() -> String {
 
 /// Destroy an instance and free resources.
 pub fn wt_destroy(handle: i64) -> i64 {
-    let mut instances = INSTANCES.lock().unwrap();
+    let mut instances = locked(&INSTANCES);
     let idx = handle as usize;
     if idx < instances.len() {
         instances[idx] = None;
@@ -1060,7 +1061,7 @@ pub fn wt_proxy_start(
 
     let instance = ProxyInstance { port, shutdown };
     let handle = {
-        let mut proxies = PROXIES.lock().unwrap();
+        let mut proxies = locked(&PROXIES);
         proxies.push(Some(instance));
         (proxies.len() - 1) as i64
     };
@@ -1069,7 +1070,7 @@ pub fn wt_proxy_start(
 
 /// Stop the proxy associated with this handle. Returns 0 on success, -1 otherwise.
 pub fn wt_proxy_stop(handle: i64) -> i64 {
-    let mut proxies = PROXIES.lock().unwrap();
+    let mut proxies = locked(&PROXIES);
     let idx = handle as usize;
     if idx >= proxies.len() {
         return -1;
