@@ -20,7 +20,7 @@ fn recorded(path: &Path, task: &str, journal_path: &Path) -> Result<Runtime, Str
 }
 fn resumed(path: &Path, journal_path: &Path, replay: bool) -> Result<Runtime, String> {
     let journal = Journal::load(journal_path, replay)?;
-    let mut run = Runtime::load(path, &journal.task, &[], None, "root", true, false, None)?;
+    let mut run = Runtime::load(path, &journal.task, Descent::root(true))?;
     run.check_journal_path(&journal.path)?;
     if journal.fingerprint != agent_journal::digest(run.identity().to_string().as_bytes()) {
         return Err("journal fingerprint mismatch: configuration, WASM artifacts or mount bindings changed".into());
@@ -46,7 +46,7 @@ pub fn agent_journal_inspect(path: impl AsRef<str>) -> String {
 
 /// Load and compile the complete team without executing guest code or resolving credentials.
 pub fn agent_check(path: impl AsRef<str>) -> String {
-    match Runtime::load(Path::new(path.as_ref()), "configuration check", &[], None, "root", true, false, None) {
+    match Runtime::load(Path::new(path.as_ref()), "configuration check", Descent::root(true)) {
         Ok(run) => json!({"valid":true,"fingerprint":agent_journal::digest(run.identity().to_string().as_bytes()),"team":run.inspection(false)}).to_string(),
         Err(error) => fail(error),
     }

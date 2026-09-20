@@ -51,11 +51,13 @@ fn wt_destroy(handle: Int) -> Int
 @extern(rs, "wasmtime_bridge", "wt_inspect")
 fn wt_inspect(wasm_path: String) -> String
 
+// The command, its arguments and its whole policy travel as one request
+// document; see dispatch.exec_request_json for the shape.
 @extern(rs, "wasmtime_bridge", "wt_exec_replace")
-fn wt_exec_replace(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> String
+fn wt_exec_replace(request_json: String) -> String
 
 @extern(rs, "wasmtime_bridge", "wt_exec_supervised")
-fn wt_exec_supervised(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> Int
+fn wt_exec_supervised(request_json: String) -> Int
 
 @extern(rs, "wasmtime_bridge", "wt_proxy_start")
 fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String) -> String
@@ -87,10 +89,10 @@ effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result
 // --- Sandboxed exec (pure Almide) ---
 
 @extern(rs, "wasmtime_bridge", "wt_exec_sandboxed")
-fn native_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> String
+fn native_exec_sandboxed(request_json: String) -> String
 
-effect fn wt_exec_sandboxed(cmd: String, args_json: String, allowed_dirs_json: String, allowed_net_json: String, env_json: String, cwd: String) -> Result[String, String] =
-  ok(native_exec_sandboxed(cmd, args_json, allowed_dirs_json, allowed_net_json, env_json, cwd))
+effect fn wt_exec_sandboxed(request_json: String) -> Result[String, String] =
+  ok(native_exec_sandboxed(request_json))
 
 // Keep MCP and native execution on the same policy implementation.
 @extern(rs, "wasmtime_bridge", "wt_sandbox_profile")

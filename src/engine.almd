@@ -83,20 +83,17 @@ effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
 }
 
 effect fn run_native_direct(opts: cli.Options) -> Result[Unit, String] = {
-  let cmd = opts.path
-  let args_json = json.stringify(value.array(opts.wasm_args |> list.map(value.str)))
-  let dirs = opts.preopen_dirs
-  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
-  let net_json = json.stringify(value.array(opts.allow_net |> list.map(value.str)))
-  let env = cli.resolve_env(opts)!
-  let all_env = env + opts.secrets
-  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
-  let env_json = json.stringify(value.array(env_pairs))
-  let first_dir = list.get(dirs, 0) ?? "."
-  let cwd = string.replace(first_dir, ":ro", "")
+  let request: dispatch.ExecRequest = {
+    cmd: opts.path,
+    args: opts.wasm_args,
+    dirs: opts.preopen_dirs,
+    net: opts.allow_net,
+    env: cli.resolve_env(opts)! + opts.secrets,
+    cwd: dispatch.first_mount(opts.preopen_dirs),
+  }
 
   // exec() replaces this process — terminal is inherited, never returns on success
-  let error_json = wasm_rt.wt_exec_replace(cmd, args_json, dirs_json, net_json, env_json, cwd)
+  let error_json = wasm_rt.wt_exec_replace(dispatch.exec_request_json(request))
   let parsed = json.parse(error_json)!
   let error = json.get_string(parsed, "error") ?? "unknown error"
   err(error)
@@ -114,17 +111,8 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
   let h = proxy.start(proxy_cfg)!
   eprintln("[porta] proxy listening on 127.0.0.1:${int.to_string(h.port)}")
 
-  let cmd = opts.path
-  let args_json = json.stringify(value.array(opts.wasm_args |> list.map(value.str)))
-  let dirs = opts.preopen_dirs
-  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
-
-  // Net: strictly the proxy port. Anything else must be blocked at the OS level.
-  let net_json = json.stringify(value.array([value.str(proxy.sandbox_net_rule(h))]))
-
   // Env: inject HTTP(S)_PROXY so well-behaved clients route through the proxy.
   // Raw sockets bypassing HTTPS_PROXY will be blocked by the sandbox net policy.
-  let env = cli.resolve_env(opts)!
   let endpoint = proxy.endpoint(h)
   let proxy_env: List[dispatch.EnvVar] = [
     {key: "HTTP_PROXY", val: endpoint},
@@ -132,13 +120,17 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
     {key: "http_proxy", val: endpoint},
     {key: "https_proxy", val: endpoint},
   ]
-  let all_env = env + opts.secrets + proxy_env
-  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
-  let env_json = json.stringify(value.array(env_pairs))
-  let first_dir = list.get(dirs, 0) ?? "."
-  let cwd = string.replace(first_dir, ":ro", "")
+  let request: dispatch.ExecRequest = {
+    cmd: opts.path,
+    args: opts.wasm_args,
+    dirs: opts.preopen_dirs,
+    // Net: strictly the proxy port. Anything else must be blocked at the OS level.
+    net: [proxy.sandbox_net_rule(h)],
+    env: cli.resolve_env(opts)! + opts.secrets + proxy_env,
+    cwd: dispatch.first_mount(opts.preopen_dirs),
+  }
 
-  let exit_code = wasm_rt.wt_exec_supervised(cmd, args_json, dirs_json, net_json, env_json, cwd)
+  let exit_code = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))
   proxy.stop(h)!
   if exit_code == 0 then ok(())
   else err("child exited with code ${int.to_string(exit_code)}")

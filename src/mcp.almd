@@ -204,18 +204,16 @@ fn is_host_allowed(url: String, allowed: List[String]) -> Bool =
 // --- Built-in tools ---
 
 effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] = {
-  let cmd = json.get_string(args, "command") ?? ""
   let cmd_args = json.get_array(args, "args") ?? []
-  let args_strs = cmd_args |> list.filter_map((a) => match value.as_string(a) { ok(s) => some(s), err(_) => none })
-  let cwd = json.get_string(args, "cwd") ?? "."
-  let args_json = json.stringify(value.array(args_strs |> list.map(value.str)))
-  let dirs = config.preopen_dirs
-  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
-  let net_json = json.stringify(value.array(config.allowed_hosts |> list.map(value.str)))
-  let all_env = config.env_vars + config.secrets
-  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
-  let env_json = json.stringify(value.array(env_pairs))
-  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
+  let request: dispatch.ExecRequest = {
+    cmd: json.get_string(args, "command") ?? "",
+    args: cmd_args |> list.filter_map((a) => match value.as_string(a) { ok(s) => some(s), err(_) => none }),
+    dirs: config.preopen_dirs,
+    net: config.allowed_hosts,
+    env: config.env_vars + config.secrets,
+    cwd: json.get_string(args, "cwd") ?? ".",
+  }
+  let result_json = wasm_rt.wt_exec_sandboxed(dispatch.exec_request_json(request))!
   let parsed = json.parse(result_json)
   ok(match parsed {
     ok(v) => {

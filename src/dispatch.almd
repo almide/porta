@@ -11,6 +11,37 @@ import self.observability
 
 type EnvVar = { key: String, val: String }
 
+// One sandboxed execution request. The native side reads exactly these fields,
+// so the command and its whole policy travel together instead of as six
+// positional strings a caller could transpose.
+type ExecRequest = {
+  cmd: String,
+  args: List[String],
+  dirs: List[String],
+  net: List[String],
+  env: List[EnvVar],
+  cwd: String,
+}
+
+fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
+
+fn strings(items: List[String]) -> Value = value.array(items |> list.map(value.str))
+
+fn exec_request_json(req: ExecRequest) -> String =
+  json.stringify(value.object([
+    ("cmd", value.str(req.cmd)),
+    ("args", strings(req.args)),
+    ("dirs", strings(req.dirs)),
+    ("net", strings(req.net)),
+    ("env", value.array(req.env |> list.map(env_pair))),
+    ("cwd", value.str(req.cwd)),
+  ]))
+
+// The working directory a run starts in: the first granted mount, without the
+// read-only marker, or the current directory when nothing was granted.
+fn first_mount(dirs: List[String]) -> String =
+  string.replace(list.get(dirs, 0) ?? ".", ":ro", "")
+
 type InstanceState =
   | Created
   | Starting

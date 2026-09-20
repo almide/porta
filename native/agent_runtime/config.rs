@@ -41,39 +41,6 @@ pub(super) fn compile(engine: &Engine, path: &Path, expected: Option<&str>, requ
     let prepared = linker.instantiate_pre(&module).map_err(|e| format!("WASI link validation {}: {e:#}", path.display()))?;
     Ok((prepared, digest))
 }
-pub(super) fn load_checks(configs: &mut Vec<CheckConfig>, engine: &Engine, base: &Path, label: &str, required: bool) -> Result<Vec<(String, Guest, Value)>, String> {
-    if configs.len() > 16 { return Err(format!("at most 16 {label} checks are supported")); }
-    let mut checks = Vec::new();
-    let mut check_names = HashSet::new();
-    for check in configs {
-        name_check(check, &mut check_names, label)?;
-        resolve_check_mounts(&mut check.mounts, base, label)?;
-        let (prepared, digest) = compile(engine, &relative(base, &check.wasm), check.sha256.as_deref(), required)?;
-        checks.push((check.name.clone(), Guest { prepared, digest, mounts: std::mem::take(&mut check.mounts) }, check.parameters.clone()));
-    }
-    Ok(checks)
-}
-/// A check is addressed by name in verdicts and journal records, so the name has
-/// to be a unique identifier before anything else about the check is read.
-pub(super) fn name_check(check: &CheckConfig, taken: &mut HashSet<String>, label: &str) -> Result<(), String> {
-    if check.name.is_empty() || !taken.insert(check.name.clone()) || !check.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-        return Err(format!("{label} check names must be unique nonempty ASCII identifiers"));
-    }
-    if !check.parameters.is_object() { return Err(format!("{label} check parameters must be an object")); }
-    Ok(())
-}
-/// Checks read the artifacts they judge and never write them, so every mount is
-/// resolved to a real directory here and refused unless it is read-only.
-pub(super) fn resolve_check_mounts(mounts: &mut [Mount], base: &Path, label: &str) -> Result<(), String> {
-    let mut guest_paths = HashSet::new();
-    for mount in mounts {
-        if !mount.read_only { return Err(format!("{label} check mounts must be read-only")); }
-        if mount.guest.is_empty() || !guest_paths.insert(mount.guest.clone()) { return Err(format!("{label} check mount paths must be nonempty and unique")); }
-        mount.host = std::fs::canonicalize(relative(base, &mount.host)).map_err(|e| format!("resolve {label} check mount: {e}"))?;
-        if !mount.host.is_dir() { return Err(format!("{label} check mount must be a directory")); }
-    }
-    Ok(())
-}
 /// Settings that must hold before anything is compiled or resolved.
 pub(super) fn validate_settings(config: &AgentConfig, task: &str) -> Result<(), String> {
     if config.version != 1 { return Err("unsupported agent config version (expected 1)".into()); }

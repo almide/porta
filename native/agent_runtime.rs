@@ -13,10 +13,12 @@ mod config;
 mod ffi;
 mod guest;
 mod inspect;
+mod loading;
 mod model;
 mod tools;
 mod verification;
 use config::*;
+use loading::Descent;
 pub use ffi::*;
 
 const MAX_MESSAGE: usize = 1024 * 1024;
@@ -102,70 +104,6 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 
 impl Runtime {
-    fn open(path: &Path, task: &str) -> Result<Self, String> {
-        Self::load(path, task, &[], None, "root", false, false, None)
-    }
-    fn load(path: &Path, task: &str, chain: &[PathBuf], shared: Option<Arc<Mutex<Budget>>>, actor: &str, defer_credential: bool, inherited_hashes: bool, expected_config: Option<&str>) -> Result<Self, String> {
-        let path = std::fs::canonicalize(path).map_err(|e| format!("resolve agent config: {e}"))?;
-        if chain.contains(&path) { return Err("cyclic agent delegation configuration".into()); }
-        if chain.len() >= 4 { return Err("agent delegation depth exceeds 4".into()); }
-        let mut chain = chain.to_vec();
-        chain.push(path.clone());
-        let source = std::fs::read_to_string(&path).map_err(|e| format!("read agent config: {e}"))?;
-        let config_digest = verified_digest(source.as_bytes(), expected_config, inherited_hashes, &format!("agent config {}", path.display()))?;
-        let mut config: AgentConfig = toml::from_str(&source).map_err(|e| format!("invalid agent config: {e}"))?;
-        validate_settings(&config, task)?;
-        let require_hashes = inherited_hashes || config.require_artifact_hashes;
-        let limits = &config.limits;
-        let budget = shared.unwrap_or_else(|| Arc::new(Mutex::new(Budget {
-            max_steps: limits.max_steps, max_model_calls: limits.max_model_calls,
-            steps: 0, model_calls: 0, tool_calls: 0, delegations: 0, verification_calls: 0, verification_failures: 0, fuel: 0,
-            started: Instant::now(), timeout: Duration::from_secs(limits.timeout_seconds), prior_elapsed: Duration::ZERO,
-        })));
-        let token = if defer_credential { None } else { config.model.token_env.as_ref().map(|name| {
-            std::env::var(name).ok().filter(|s| !s.is_empty()).ok_or_else(|| format!("required model credential environment variable is missing: {name}"))
-        }).transpose()? };
-        let base = path.parent().unwrap_or_else(|| Path::new("."));
-        let mut names = HashSet::new();
-        let mut engine_config = Config::new();
-        engine_config.consume_fuel(true);
-        engine_config.epoch_interruption(true);
-        let engine = Engine::new(&engine_config).map_err(|e| e.to_string())?;
-        let (prepared, digest) = compile(&engine, &relative(base, &config.agent.wasm), config.agent.sha256.as_deref(), require_hashes)?;
-        let agent = Guest { prepared, digest, mounts: vec![] };
-        let mut tools = BTreeMap::new();
-        let mut schemas = BTreeMap::new();
-        for tool in &mut config.tools {
-            claim_name(&mut names, &tool.name, "tool")?;
-            if !tool.input_schema.is_object() { return Err(format!("tool {} input_schema must be an object", tool.name)); }
-            schemas.insert(tool.name.clone(), offline_validator(&tool.input_schema, &tool.name)?);
-            resolve_tool_mounts(tool, base)?;
-            let (prepared, digest) = compile(&engine, &relative(base, &tool.wasm), tool.sha256.as_deref(), require_hashes)?;
-            tools.insert(tool.name.clone(), Guest { prepared, digest, mounts: std::mem::take(&mut tool.mounts) });
-        }
-        for tool in &config.mcp_tools {
-            claim_name(&mut names, &tool.name, "MCP tool")?;
-            tool.check()?;
-            schemas.insert(tool.name.clone(), offline_validator(&tool.input_schema, &tool.name)?);
-        }
-        let checks = load_checks(&mut config.completion_checks, &engine, base, "completion", require_hashes)?;
-        let before_checks = load_checks(&mut config.before_tool_checks, &engine, base, "before-tool", require_hashes)?;
-        let mut children = BTreeMap::new();
-        for delegate in &config.agents {
-            if delegate.name.is_empty() || !delegate.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-                return Err("invalid delegated agent name".into());
-            }
-            let name = format!("delegate_{}", delegate.name);
-            if !names.insert(name.clone()) { return Err(format!("duplicate tool or agent name: {name}")); }
-            // Freeze the complete team at launch, before any guest can change files.
-            let child = Self::load(&relative(base, &delegate.config), "pending delegation", &chain, Some(budget.clone()), &format!("{actor}/{name}"), defer_credential, require_hashes, delegate.sha256.as_deref())?;
-            children.insert(name, child);
-        }
-        let mut run = Self { config, engine, agent, tools, schemas, checks, before_checks, operations:vec![], token, event:Value::Null, steps:0, model_calls:0, tool_calls:0, fuel_consumed:0, started:Instant::now(), done:false, children, budget, actor:actor.into(), config_digest, decision:Value::Null, journal:None };
-        run.reset(task);
-        Ok(run)
-    }
-
     fn attach_journal(&mut self, journal: Arc<Mutex<Journal>>) {
         self.journal = Some(journal.clone());
         for child in self.children.values_mut() { child.attach_journal(journal.clone()); }
