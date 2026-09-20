@@ -41,6 +41,9 @@ cp target/porta ~/.local/bin/
 Needs Almide 0.63.0, a Rust toolchain, Python 3 and curl. Full verification
 steps and the compiler pin are in [Build from source](#build-from-source).
 
+`porta run` takes either a native command or a `.wasm` module, so anything that
+compiles to WASI runs under it — Almide, and Python 3.14 via `python.wasm`.
+
 ## Quick Start
 
 ### 1. Restrict an agent you already use
@@ -78,7 +81,7 @@ porta init native claude   # writes porta.toml
 porta up -- --print "Fix the bug in main.rs"
 ```
 
-### 4. Build an agent that runs inside WASM
+### 4. Run an agent whose decision loop is WASM
 
 ```bash
 .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
@@ -86,15 +89,7 @@ porta up -- --print "Fix the bug in main.rs"
 porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
 ```
 
-The decision loop and its tools both run in WASM. Model credentials stay in the
-host, budgets are shared across a delegating team, and tool arguments are
-validated before anything executes. Record a run to survive a crash:
-
-```bash
-porta agent agent.toml --record run.jsonl -- "..."
-porta agent-resume agent.toml run.jsonl   # completed writes are not repeated
-porta agent-journal run.jsonl             # read-only, no code loaded
-```
+[Agents you build](#agents-you-build) is what this one is.
 
 ## What Porta enforces
 
@@ -124,39 +119,71 @@ published in the same place.
   local model. Porta has not demonstrated general quality superiority, and the
   shared-compute follow-up was rejected rather than published as a win.
 
-## Learn more
+## Agents you build
 
-| Topic | Document |
+`porta run` restricts an agent someone else wrote. `porta agent` runs one whose
+decision loop is itself WASM, which is where the rest of this README's
+guarantees come from.
+
+```toml
+# agent.toml
+[agent]
+wasm = "agent.wasm"
+instruction = "Use tools to solve the task."
+
+[model]
+endpoint = "https://api.example.com/v1/chat/completions"
+name = "your-model"
+token_env = "MODEL_TOKEN"        # read by the host, never handed to the guest
+
+[limits]
+max_model_calls = 20
+
+[[tools]]
+name = "write_file"
+wasm = "tools/write.wasm"
+sha256 = "..."                    # pinned: this exact reviewed artifact or no run
+mounts = [{ host = "workspace", guest = ".", read_only = false }]
+```
+
+The loop and every tool run in separate WASM instances. Neither inherits your
+environment or a directory. Credentials stay in the host, so an agent that is
+talked into printing its own configuration has nothing to print.
+
+Each guarantee in [What Porta enforces](#what-porta-enforces) links to how it
+works. Three things that table does not cover:
+
+| You want | Read |
 |---|---|
-| WASM agents, teams, grants, limits | [agent-runtime.md](docs/agent-runtime.md) |
-| Checkpoint, resume, replay | [agent-journals.md](docs/agent-journals.md) |
-| Remote MCP tools from an agent | [agent-mcp.md](docs/agent-mcp.md) |
-| Offline team inspection | [agent-check.md](docs/agent-check.md) |
-| Completion checks | [completion-checks.md](docs/completion-checks.md) |
-| Pre-tool checks | [before-tool-checks.md](docs/before-tool-checks.md) |
-| Artifact pins | [artifact-pins.md](docs/artifact-pins.md) |
-| Bounded computation tool | [examples/compute](examples/compute/README.md) |
-| Measurements | [docs/benchmarks](docs/benchmarks/README.md) |
+| Teams, delegation, shared budgets | [agent-runtime.md](docs/agent-runtime.md) |
+| Remote MCP tools, granted explicitly | [agent-mcp.md](docs/agent-mcp.md) |
+| Inspect a team without running it | [agent-check.md](docs/agent-check.md) |
+
+```bash
+porta agent agent.toml --record run.jsonl -- "..."
+porta agent-resume agent.toml run.jsonl   # completed writes are not repeated
+porta agent-journal run.jsonl             # read-only metadata, no code loaded
+```
 
 ## Limits
 
-Native restrictions cover **macOS** and **Linux**, and not identically. macOS
-uses `sandbox-exec`; Linux uses Landlock. Both enforce writes and TCP ports.
-Reads are open by default on both; `--read-policy strict` closes them on either,
-confining reads to the mounts you granted plus the system directories a command
-needs to start, so nothing under any home directory is readable. The command
-itself is subject to that: one installed outside those directories — a
-toolchain under `/opt`, say — needs `-v` on its own directory.
-HTTPS proxy filtering works on both. Landlock's rules reach TCP only, so on
-Linux porta also installs a seccomp filter that closes every other egress
-channel — UDP, Unix and raw sockets, and `io_uring`, which could open a socket
-without asking for one. A kernel that will not take either the filter or a
-requested Landlock rule refuses the run instead of widening it.
+What Porta does **not** do, stated here rather than discovered later:
 
-Native read access is broader than write access on both: this is not a container
-filesystem or complete secret isolation. HTTPS proxy filtering controls
-connection targets, not TLS contents. `porta run` and `porta serve` mount
-nothing unless you pass `-v`.
+- **It is not a container or a VM.** Restrictions are applied to a process on
+  your kernel. A kernel that can be exploited is a kernel both sides share.
+- **Read access is broader than write access** unless you pass
+  `--read-policy strict`, and even then the system directories a command needs
+  to start stay readable. This is not complete secret isolation.
+- **Proxy filtering controls connection targets, not TLS contents**, and it
+  does not stop a child from listening on a port.
+- **macOS and Linux only**, and not identically — see
+  [Native Restrictions](#native-restrictions) for exactly where they differ.
+  Anywhere else, native execution fails closed rather than running unrestricted.
+- **Nothing is mounted implicitly.** `porta run` and `porta serve` see no
+  directory until you pass `-v`, which is a limit in the useful direction.
+
+A rule the platform cannot express refuses the run instead of widening it.
+That is the rule the rest of this README is written against.
 
 ## porta.toml
 
@@ -294,12 +321,8 @@ filter that also refuses `io_uring`, because a ring can open a socket without
 ever asking for one.
 
 Only HTTPS CONNECT on port 443 is supported, and clients must respect
-`HTTPS_PROXY`. This filters connection targets, not TLS contents. Deny lists are
-weaker than explicit allow lists. It is not a credential broker or a
-private-address filter, and it does not stop the child from listening on a port.
-
-Native read access is broader than write access on both platforms: this is not a
-container filesystem or complete secret isolation.
+`HTTPS_PROXY`. Deny lists are weaker than explicit allow lists, and this is not
+a credential broker or a private-address filter. See [Limits](#limits).
 
 ### WASM Sandbox
 
@@ -404,14 +427,6 @@ The compiler target is **0.63.0**. As of 2026-09-19, the published artifact is
 `v0.63.0-rc1` (reports `almide 0.63.0`); the installer pins that release and checks
 its published SHA-256. Once the final tag is published, select it with
 `ALMIDE_RELEASE_TAG=v0.63.0 bash scripts/install-almide.sh`.
-
-## Language Support
-
-| Runtime | Status | Example |
-|---------|--------|---------|
-| Almide → WASM | Full support | `porta run agent.wasm` |
-| Python 3.14 | Runs in WASM | `porta run python.wasm -- script.py` |
-| Native commands | OS restrictions | `porta run claude -- --print "hi"` |
 
 ## License
 
