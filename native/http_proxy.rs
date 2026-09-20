@@ -67,20 +67,34 @@ fn policy_allows(policy: &ProxyPolicy, host: &str) -> bool {
     }
 }
 
-fn audit_log(audit_path: &Option<String>, host: &str, port: u16, decision: &str, reason: &str) {
+/// One proxy decision, exactly as it is reported and recorded.
+struct Decision {
+    host: String,
+    port: u16,
+    verdict: &'static str,
+    reason: String,
+}
+
+impl Decision {
+    fn new(host: &str, port: u16, verdict: &'static str, reason: impl Into<String>) -> Self {
+        Self { host: host.to_string(), port, verdict, reason: reason.into() }
+    }
+}
+
+fn audit_log(audit_path: &Option<String>, decision: &Decision) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    eprintln!("[porta proxy] {} {}:{} ({})", decision, host, port, reason);
+    eprintln!("[porta proxy] {} {}:{} ({})", decision.verdict, decision.host, decision.port, decision.reason);
     if let Some(p) = audit_path {
         let line = format!(
             "{{\"ts\":{},\"host\":{},\"port\":{},\"decision\":{},\"reason\":{}}}\n",
             ts,
-            serde_json::to_string(host).unwrap_or_else(|_| "\"\"".into()),
-            port,
-            serde_json::to_string(decision).unwrap_or_else(|_| "\"\"".into()),
-            serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".into()),
+            serde_json::to_string(&decision.host).unwrap_or_else(|_| "\"\"".into()),
+            decision.port,
+            serde_json::to_string(decision.verdict).unwrap_or_else(|_| "\"\"".into()),
+            serde_json::to_string(&decision.reason).unwrap_or_else(|_| "\"\"".into()),
         );
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
             let _ = f.write_all(line.as_bytes());
@@ -102,95 +116,88 @@ fn copy_bytes(mut src: TcpStream, mut dst: TcpStream) -> std::io::Result<()> {
 
 fn handle_connection(client: TcpStream, policy: Arc<ProxyPolicy>, audit_path: Arc<Option<String>>) {
     let _ = client.set_read_timeout(Some(Duration::from_secs(30)));
-    let mut client_for_write = match client.try_clone() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let Ok(mut client_for_write) = client.try_clone() else { return };
     let mut reader = BufReader::new(client);
-
-    // Read the CONNECT line.
-    let mut first_line = String::new();
-    if reader.read_line(&mut first_line).is_err() || first_line.is_empty() {
-        return;
+    let Some(request_line) = read_request(&mut reader) else { return };
+    match connect_target(&request_line, &policy) {
+        Ok((host, port)) => tunnel(client_for_write, &audit_path, &host, port),
+        Err((status, decision)) => {
+            let _ = client_for_write.write_all(status.as_bytes());
+            audit_log(&audit_path, &decision);
+        }
     }
+}
 
-    // Consume remaining headers up to the blank line.
+/// Reads the request line and drains the headers that follow it.
+fn read_request(reader: &mut BufReader<TcpStream>) -> Option<String> {
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+        return None;
+    }
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => return,
-            Ok(_) => {
-                if line == "\r\n" || line == "\n" {
-                    break;
-                }
-            }
-            Err(_) => return,
+            Ok(0) | Err(_) => return None,
+            Ok(_) if line == "\r\n" || line == "\n" => return Some(request_line),
+            Ok(_) => {}
         }
     }
+}
 
-    let parts: Vec<&str> = first_line.trim().split_whitespace().collect();
+/// Where this request may be tunnelled, or the status line and the record for
+/// why it may not: only CONNECT, only port 443, only an allowed host.
+fn connect_target(request_line: &str, policy: &ProxyPolicy) -> Result<(String, u16), (&'static str, Decision)> {
+    let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
     if parts.len() < 2 || !parts[0].eq_ignore_ascii_case("CONNECT") {
-        let _ = client_for_write.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n");
-        audit_log(&audit_path, "<invalid>", 0, "deny", "non-CONNECT method");
-        return;
+        return Err(("HTTP/1.1 400 Bad Request\r\n\r\n", Decision::new("<invalid>", 0, "deny", "non-CONNECT method")));
     }
-    let target = parts[1];
-    let (host, port) = match target.rfind(':') {
-        Some(i) => {
-            let h = &target[..i];
-            let p: u16 = target[i + 1..].parse().unwrap_or(0);
-            (h.to_string(), p)
-        }
-        None => (target.to_string(), 443),
-    };
-
+    let (host, port) = split_authority(parts[1]);
     if port != 443 {
-        let _ = client_for_write.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
-        audit_log(&audit_path, &host, port, "deny", "non-443 port");
-        return;
+        return Err(("HTTP/1.1 403 Forbidden\r\n\r\n", Decision::new(&host, port, "deny", "non-443 port")));
     }
-
-    if !policy_allows(&policy, &host) {
-        let _ = client_for_write.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
-        audit_log(&audit_path, &host, port, "deny", "policy");
-        return;
+    if !policy_allows(policy, &host) {
+        return Err(("HTTP/1.1 403 Forbidden\r\n\r\n", Decision::new(&host, port, "deny", "policy")));
     }
+    Ok((host, port))
+}
 
-    let sock_addr = match (host.as_str(), port).to_socket_addrs().and_then(|mut i| {
-        i.next()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no addr"))
-    }) {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = client_for_write.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            audit_log(&audit_path, &host, port, "error", &format!("resolve failed: {}", e));
-            return;
+/// Splits `host:port`, defaulting to HTTPS when no port is given. A port that
+/// is not a number becomes 0, which the port check then refuses.
+fn split_authority(target: &str) -> (String, u16) {
+    match target.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse().unwrap_or(0)),
+        None => (target.to_string(), 443),
+    }
+}
+
+/// Opens the tunnel and copies bytes both ways until either side closes. An
+/// unreachable upstream is answered and recorded rather than left hanging.
+fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: u16) {
+    let upstream = match dial(host, port) {
+        Ok(upstream) => upstream,
+        Err(reason) => {
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return audit_log(audit_path, &Decision::new(host, port, "error", reason));
         }
     };
-    let upstream = match TcpStream::connect_timeout(&sock_addr, Duration::from_secs(10)) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = client_for_write.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            audit_log(&audit_path, &host, port, "error", &format!("upstream connect failed: {}", e));
-            return;
-        }
-    };
+    let _ = client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+    audit_log(audit_path, &Decision::new(host, port, "allow", "policy match"));
+    let (Ok(client_side), Ok(upstream_side)) = (client.try_clone(), upstream.try_clone()) else { return };
+    let outbound = thread::spawn(move || { let _ = copy_bytes(client_side, upstream); });
+    let inbound = thread::spawn(move || { let _ = copy_bytes(upstream_side, client); });
+    let _ = outbound.join();
+    let _ = inbound.join();
+}
 
-    let _ = client_for_write.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
-    audit_log(&audit_path, &host, port, "allow", "policy match");
-
-    let client_side = match client_for_write.try_clone() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let upstream_side = match upstream.try_clone() {
-        Ok(u) => u,
-        Err(_) => return,
-    };
-    let t1 = thread::spawn(move || { let _ = copy_bytes(client_side, upstream); });
-    let t2 = thread::spawn(move || { let _ = copy_bytes(upstream_side, client_for_write); });
-    let _ = t1.join();
-    let _ = t2.join();
+/// The first address the host resolves to, connected within ten seconds.
+fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
+    let address = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve failed: {e}"))?
+        .next()
+        .ok_or_else(|| "resolve failed: no addr".to_string())?;
+    TcpStream::connect_timeout(&address, Duration::from_secs(10))
+        .map_err(|e| format!("upstream connect failed: {e}"))
 }
 
 /// Start the CONNECT proxy on 127.0.0.1:<random>.

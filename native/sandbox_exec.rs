@@ -4,6 +4,7 @@
 //! this process, or supervise a child — and each platform applies what it can
 //! express, refusing the run when it cannot express a requested rule.
 
+use crate::json_text::escape_json_text;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
 
@@ -133,15 +134,11 @@ fn json_error(reason: &str) -> String {
     format!("{{\"error\":\"{}\"}}", escape_json_text(reason))
 }
 
-fn escape_json_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
+/// Writable roots the macOS profile grants on every run. `/tmp` is reached
+/// through `/private/tmp` there, so the profile has to name both spellings.
+const PROFILE_WRITABLE: [&str; 3] = ["/tmp", "/private/tmp", "/dev"];
 
-/// Writable roots granted on every run, matching the macOS profile.
+/// The same roots as [`PROFILE_WRITABLE`], as Linux spells them.
 #[cfg(target_os = "linux")]
 const ALWAYS_WRITABLE: [&str; 2] = ["/tmp", "/dev"];
 
@@ -265,38 +262,46 @@ fn sandbox_literal(value: &str) -> String {
 /// Shared sandbox profile builder for Rust-side exec functions.
 fn build_sandbox_profile_rs(allowed_dirs: &[String], allowed_net: &[String]) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    // Writes require explicit mounts even when the list is empty.
-    {
-        profile.push_str("(deny file-write*)\n");
-        for dir in allowed_dirs.iter() {
-            let clean = dir.trim_end_matches(":ro");
-            if !dir.ends_with(":ro") {
-                profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(clean)));
-            }
-        }
-        profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-        profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    }
-    // FS read: deny cryptographic keys only
-    if let Ok(home) = std::env::var("HOME") {
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.ssh\"))\n", sandbox_literal(&home)));
-        profile.push_str(&format!("(deny file-read-data (subpath \"{}/.gnupg\"))\n", sandbox_literal(&home)));
-    }
-    // Network: open by default (like Docker). --allow-net restricts to listed ports only.
-    if !allowed_net.is_empty() {
-        profile.push_str("(deny network-outbound)\n");
-
-        for host in allowed_net {
-            if let Some((address, port)) = host.rsplit_once(':') {
-                if port == "*" || port.parse::<u16>().is_ok_and(|p| p > 0) {
-                    let address = if address == "127.0.0.1" || address == "localhost" { "localhost" } else { "*" };
-                    profile.push_str(&format!("(allow network-outbound (remote tcp \"{}:{}\"))\n", address, port));
-                }
-            }
-        }
-    }
+    profile.push_str(&write_rules(allowed_dirs));
+    profile.push_str(&key_read_rules());
+    profile.push_str(&network_rules(allowed_net));
     profile
+}
+
+/// Writes are denied first and reopened only for the granted mounts, so an
+/// empty mount list leaves nothing writable but the always-writable roots.
+fn write_rules(allowed_dirs: &[String]) -> String {
+    let mut rules = String::from("(deny file-write*)\n");
+    for dir in allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")) {
+        rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(dir)));
+    }
+    for always in PROFILE_WRITABLE {
+        rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", always));
+    }
+    rules
+}
+
+/// Reads stay open, minus the two directories whose contents are keys. Landlock
+/// cannot express this deny list, which is why the Linux path refuses instead.
+fn key_read_rules() -> String {
+    let Ok(home) = std::env::var("HOME") else { return String::new() };
+    let home = sandbox_literal(&home);
+    format!("(deny file-read-data (subpath \"{home}/.ssh\"))\n\
+             (deny file-read-data (subpath \"{home}/.gnupg\"))\n")
+}
+
+/// The network is open like Docker's until `--allow-net` names a port, which
+/// then closes everything else. Only the port is filtered, not the host.
+fn network_rules(allowed_net: &[String]) -> String {
+    if allowed_net.is_empty() { return String::new(); }
+    let mut rules = String::from("(deny network-outbound)\n");
+    for host in allowed_net {
+        let Some((address, port)) = host.rsplit_once(':') else { continue };
+        if port != "*" && !port.parse::<u16>().is_ok_and(|port| port > 0) { continue; }
+        let address = if address == "127.0.0.1" || address == "localhost" { "localhost" } else { "*" };
+        rules.push_str(&format!("(allow network-outbound (remote tcp \"{}:{}\"))\n", address, port));
+    }
+    rules
 }
 
 /// Spawn a sandboxed command, inherit stdio, wait, and return the exit code.

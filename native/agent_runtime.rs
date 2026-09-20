@@ -142,33 +142,57 @@ fn load_checks(configs: &mut Vec<CheckConfig>, engine: &Engine, base: &Path, lab
     let mut checks = Vec::new();
     let mut check_names = HashSet::new();
     for check in configs {
-        if check.name.is_empty() || !check_names.insert(check.name.clone()) || !check.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-            return Err(format!("{label} check names must be unique nonempty ASCII identifiers"));
-        }
-        if !check.parameters.is_object() { return Err(format!("{label} check parameters must be an object")); }
-        let mut guest_paths = HashSet::new();
-        for mount in &mut check.mounts {
-            if !mount.read_only { return Err(format!("{label} check mounts must be read-only")); }
-            if mount.guest.is_empty() || !guest_paths.insert(mount.guest.clone()) { return Err(format!("{label} check mount paths must be nonempty and unique")); }
-            mount.host = std::fs::canonicalize(relative(base, &mount.host)).map_err(|e| format!("resolve {label} check mount: {e}"))?;
-            if !mount.host.is_dir() { return Err(format!("{label} check mount must be a directory")); }
-        }
+        name_check(check, &mut check_names, label)?;
+        resolve_check_mounts(&mut check.mounts, base, label)?;
         let (prepared, digest) = compile(engine, &relative(base, &check.wasm), check.sha256.as_deref(), required)?;
         checks.push((check.name.clone(), Guest { prepared, digest, mounts: std::mem::take(&mut check.mounts) }, check.parameters.clone()));
     }
     Ok(checks)
 }
+/// A check is addressed by name in verdicts and journal records, so the name has
+/// to be a unique identifier before anything else about the check is read.
+fn name_check(check: &CheckConfig, taken: &mut HashSet<String>, label: &str) -> Result<(), String> {
+    if check.name.is_empty() || !taken.insert(check.name.clone()) || !check.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err(format!("{label} check names must be unique nonempty ASCII identifiers"));
+    }
+    if !check.parameters.is_object() { return Err(format!("{label} check parameters must be an object")); }
+    Ok(())
+}
+/// Checks read the artifacts they judge and never write them, so every mount is
+/// resolved to a real directory here and refused unless it is read-only.
+fn resolve_check_mounts(mounts: &mut [Mount], base: &Path, label: &str) -> Result<(), String> {
+    let mut guest_paths = HashSet::new();
+    for mount in mounts {
+        if !mount.read_only { return Err(format!("{label} check mounts must be read-only")); }
+        if mount.guest.is_empty() || !guest_paths.insert(mount.guest.clone()) { return Err(format!("{label} check mount paths must be nonempty and unique")); }
+        mount.host = std::fs::canonicalize(relative(base, &mount.host)).map_err(|e| format!("resolve {label} check mount: {e}"))?;
+        if !mount.host.is_dir() { return Err(format!("{label} check mount must be a directory")); }
+    }
+    Ok(())
+}
 /// Settings that must hold before anything is compiled or resolved.
 fn validate_settings(config: &AgentConfig, task: &str) -> Result<(), String> {
     if config.version != 1 { return Err("unsupported agent config version (expected 1)".into()); }
-    let limits = &config.limits;
-    if limits.max_steps == 0 || limits.max_model_calls == 0 || limits.fuel_per_step == 0 || limits.memory_pages == 0 || limits.memory_pages > 65536 || limits.timeout_seconds == 0 || limits.timeout_seconds > 86400 || limits.max_output_tokens == 0 {
-        return Err("agent budgets must be positive; memory <= 65536 pages and timeout <= 86400 seconds".into());
-    }
     if task.is_empty() || task.len() > MAX_MESSAGE / 2 { return Err("task must be nonempty and at most 512 KiB".into()); }
-    if config.model.temperature.is_some_and(|v| !v.is_finite() || !(0.0..=2.0).contains(&v)) { return Err("model.temperature must be finite and between 0 and 2".into()); }
-    if config.model.name.trim().is_empty() { return Err("model.name is required".into()); }
-    validate_endpoint(&config.model.endpoint)
+    validate_limits(&config.limits)?;
+    validate_model(&config.model)
+}
+
+/// Every budget is positive and bounded; an unbounded run is not a run.
+fn validate_limits(limits: &Limits) -> Result<(), String> {
+    let positive = limits.max_steps > 0 && limits.max_model_calls > 0 && limits.fuel_per_step > 0
+        && limits.memory_pages > 0 && limits.timeout_seconds > 0 && limits.max_output_tokens > 0;
+    let bounded = limits.memory_pages <= 65536 && limits.timeout_seconds <= 86400;
+    if positive && bounded { return Ok(()); }
+    Err("agent budgets must be positive; memory <= 65536 pages and timeout <= 86400 seconds".into())
+}
+
+fn validate_model(model: &Model) -> Result<(), String> {
+    if model.temperature.is_some_and(|v| !v.is_finite() || !(0.0..=2.0).contains(&v)) {
+        return Err("model.temperature must be finite and between 0 and 2".into());
+    }
+    if model.name.trim().is_empty() { return Err("model.name is required".into()); }
+    validate_endpoint(&model.endpoint)
 }
 
 /// The model endpoint may not carry credentials and is plaintext only on loopback.
@@ -410,22 +434,85 @@ impl Runtime {
         if let Some((response, _)) = self.operation_cached("model", &journal_request)? {
             return Ok(response);
         }
-        let client = reqwest::blocking::Client::builder().timeout(self.remaining()?.min(Duration::from_secs(30))).redirect(reqwest::redirect::Policy::none()).retry(reqwest::retry::never()).no_proxy().build().map_err(|_| "model HTTP client initialization failed")?;
-        let mut request = client.post(&self.config.model.endpoint).header("Content-Type", "application/json").body(body);
-        let token = self.token.clone().or_else(|| self.config.model.token_env.as_ref().and_then(|name| std::env::var(name).ok().filter(|s| !s.is_empty())));
-        if self.config.model.token_env.is_some() && token.is_none() { return Err("required model credential is missing".into()); }
-        if let Some(token) = token { request = request.bearer_auth(token); }
+        let request = self.model_request(body)?;
         self.operation_begin("model", journal_request)?;
-        let response = request.send().map_err(|_| "model request failed (connection or timeout)")?;
-        if !response.status().is_success() { return Err(format!("model returned HTTP {}", response.status().as_u16())); }
-        let mut bytes = Vec::new();
-        response.take(MAX_MESSAGE as u64 + 1).read_to_end(&mut bytes).map_err(|_| "model response read failed")?;
-        if bytes.len() > MAX_MESSAGE { return Err("model response exceeds 1 MiB".into()); }
+        let response = Self::read_model_response(request)?;
         self.remaining()?;
-        let response: Value = serde_json::from_slice(&bytes).map_err(|_| "model returned invalid JSON")?;
         self.operation_commit(&response, 0)?;
         Ok(response)
     }
+
+    /// The outbound model request: no proxy, no redirects, no retry, and the
+    /// credential the host holds rather than anything the guest supplied.
+    fn model_request(&self, body: Vec<u8>) -> Result<reqwest::blocking::RequestBuilder, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(self.remaining()?.min(Duration::from_secs(30)))
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .no_proxy().build().map_err(|_| "model HTTP client initialization failed")?;
+        let request = client.post(&self.config.model.endpoint)
+            .header("Content-Type", "application/json").body(body);
+        let token = self.token.clone().or_else(|| self.config.model.token_env.as_ref()
+            .and_then(|name| std::env::var(name).ok().filter(|s| !s.is_empty())));
+        match (self.config.model.token_env.is_some(), token) {
+            (true, None) => Err("required model credential is missing".into()),
+            (_, Some(token)) => Ok(request.bearer_auth(token)),
+            (false, None) => Ok(request),
+        }
+    }
+
+    /// Send the request and read a bounded JSON reply.
+    fn read_model_response(request: reqwest::blocking::RequestBuilder) -> Result<Value, String> {
+        let response = request.send().map_err(|_| "model request failed (connection or timeout)")?;
+        if !response.status().is_success() {
+            return Err(format!("model returned HTTP {}", response.status().as_u16()));
+        }
+        let mut bytes = Vec::new();
+        response.take(MAX_MESSAGE as u64 + 1).read_to_end(&mut bytes).map_err(|_| "model response read failed")?;
+        if bytes.len() > MAX_MESSAGE { return Err("model response exceeds 1 MiB".into()); }
+        serde_json::from_slice(&bytes).map_err(|_| "model returned invalid JSON".into())
+    }
+    /// Charge one verification step against the team budget before running it.
+    fn charge_verification_step(&self) -> Result<(), String> {
+        let mut budget = locked(&self.budget);
+        if budget.steps >= budget.max_steps { return Err("team step budget exceeded during verification".into()); }
+        budget.steps += 1;
+        budget.verification_calls += 1;
+        Ok(())
+    }
+
+    /// Run one check, replaying a recorded result when the journal holds one.
+    /// Reports the verdict, the fuel it cost, and whether it came from the journal.
+    fn run_check(&self, name: &str, guest: &Guest, request: &Value, operation: &str)
+        -> Result<(Verdict, u64, bool), String> {
+        let mut input = serde_json::to_vec(request).map_err(|_| "invalid verification input")?;
+        input.push(b'\n');
+        if input.len() > MAX_MESSAGE { return Err("verification input exceeds 1 MiB".into()); }
+        let cached = self.operation_begin(operation, json!({"name":name,"input":request}))?;
+        let (result, fuel, replayed) = match cached {
+            Some((result, fuel)) => (result, fuel, true),
+            None => {
+                let (output, fuel) = self.execute(guest, &input)?;
+                let result: Value = serde_json::from_str(&output).map_err(|_| "completion check must return JSON")?;
+                self.operation_commit(&result, fuel)?;
+                (result, fuel, false)
+            }
+        };
+        let verdict: Verdict = serde_json::from_value(result)
+            .map_err(|_| "invalid completion verdict (expected passed boolean and optional feedback string)")?;
+        Ok((verdict, fuel, replayed))
+    }
+
+    /// A replayed pass alone cannot certify current artifacts, so recorded
+    /// recheck rounds are consumed before a fresh live check is accepted.
+    fn journal_expects_recheck(&self, name: &str, input: &Value, operation: &str) -> bool {
+        let Some(journal) = &self.journal else { return false };
+        let request = json!({"name":name,"input":input});
+        let record = json!({"actor":self.actor,"kind":operation,"event":self.event,"decision":self.decision,"request":request});
+        let journal = locked(journal);
+        journal.continuing_live() || journal.next_matches(&record)
+    }
+
     fn verify_checks(&mut self, candidate: &str, proposed: Option<(&str, &Value)>) -> Result<Option<Value>, String> {
         let checks = if proposed.is_some() { &self.before_checks } else { &self.checks };
         let operation = if proposed.is_some() { "before_tool_check" } else { "verification" };
@@ -437,49 +524,146 @@ impl Runtime {
             let mut used_cached = false;
             for (name, guest, parameters) in checks {
                 if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded during verification".into()); }
-                {
-                    let mut budget = locked(&self.budget);
-                    if budget.steps >= budget.max_steps { return Err("team step budget exceeded during verification".into()); }
-                    budget.steps += 1;
-                    budget.verification_calls += 1;
-                }
+                self.charge_verification_step()?;
                 self.steps += 1;
-                let request = input_for(parameters);
-                let mut input = serde_json::to_vec(&request).map_err(|_| "invalid verification input")?;
-                input.push(b'\n');
-                if input.len() > MAX_MESSAGE { return Err("verification input exceeds 1 MiB".into()); }
-                let cached = self.operation_begin(operation, json!({"name":name,"input":request}))?;
-                let (result, fuel) = if let Some(recorded) = cached { used_cached = true; recorded } else {
-                    let (output, fuel) = self.execute(guest, &input)?;
-                    let result: Value = serde_json::from_str(&output).map_err(|_| "completion check must return JSON")?;
-                    self.operation_commit(&result, fuel)?;
-                    (result, fuel)
-                };
+                let (verdict, fuel, cached) = self.run_check(name, guest, &input_for(parameters), operation)?;
+                used_cached |= cached;
                 self.fuel_consumed += fuel;
                 locked(&self.budget).fuel += fuel;
-                let verdict: Verdict = serde_json::from_value(result).map_err(|_| "invalid completion verdict (expected passed boolean and optional feedback string)")?;
-                if !verdict.passed {
-                    if verdict.feedback.trim().is_empty() { return Err("failed completion check must explain what needs correction".into()); }
-                    locked(&self.budget).verification_failures += 1;
-                    return Ok(Some(json!({"check":name,"feedback":verdict.feedback})));
-                }
+                if let Some(failure) = self.refused_by(name, verdict)? { return Ok(Some(failure)); }
             }
-            // Consume recorded recheck rounds before making a fresh live check.
-            // A historical pass alone cannot certify artifacts after an interruption.
-            if used_cached {
-                if let (Some(journal), Some((name, _, parameters))) = (&self.journal, checks.first()) {
-                    let request = json!({"name":name,"input":input_for(parameters)});
-                    let record = json!({"actor":self.actor,"kind":operation,"event":self.event,"decision":self.decision,"request":request});
-                    let repeat = {
-                        let journal = locked(&journal);
-                        journal.continuing_live() || journal.next_matches(&record)
-                    };
-                    if repeat { continue; }
-                }
-            }
-            return Ok(None);
+            let recheck = used_cached && checks.first().is_some_and(|(name, _, parameters)| {
+                self.journal_expects_recheck(name, &input_for(parameters), operation)
+            });
+            if !recheck { return Ok(None); }
         }
     }
+    /// The failure a verdict reports, if it failed. A refusal that explains
+    /// nothing is itself an error: the guest would be stopped without being
+    /// told what to correct.
+    fn refused_by(&self, name: &str, verdict: Verdict) -> Result<Option<Value>, String> {
+        if verdict.passed { return Ok(None); }
+        if verdict.feedback.trim().is_empty() { return Err("failed completion check must explain what needs correction".into()); }
+        locked(&self.budget).verification_failures += 1;
+        Ok(Some(json!({"check":name,"feedback":verdict.feedback})))
+    }
+    /// Delegate to a child agent and return its final output. The child shares
+    /// this team's budget, so it cannot buy itself more steps.
+    fn run_delegate(&mut self, name: &str, arguments: &Value) -> Result<Value, String> {
+        let task = arguments.get("task").and_then(Value::as_str)
+            .filter(|s| !s.is_empty() && s.len() <= MAX_MESSAGE / 2)
+            .ok_or("delegation requires a nonempty task of at most 512 KiB")?
+            .to_string();
+        if arguments.as_object().is_some_and(|a| a.len() != 1) { return Err("delegation accepts only the task field".into()); }
+        locked(&self.budget).delegations += 1;
+        let child = self.children.get_mut(name).ok_or_else(|| format!("tool not granted: {name}"))?;
+        child.reset(&task);
+        loop {
+            let event = child.tick().map_err(|e| format!("{name}: {e}"))?;
+            if event.get("done").and_then(Value::as_bool) == Some(true) {
+                return Ok(json!({"ok":event["output"]}));
+            }
+        }
+    }
+
+    /// Call a granted remote MCP tool, replaying a recorded reply when the
+    /// journal holds one. A missing credential is a preflight failure, not an
+    /// uncertain effect, so it never leaves a pending intent.
+    fn call_remote_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, String> {
+        let tool = self.config.mcp_tools.iter().find(|t| t.name == name)
+            .ok_or_else(|| format!("tool not granted: {name}"))?;
+        let request = json!({"name":name,"remote_name":tool.remote_name,"endpoint":tool.endpoint,"arguments":arguments});
+        if let Some((result, _)) = self.operation_cached("mcp_tool", &request)? { return Ok(result); }
+        let token = tool.credential()?;
+        let remaining = self.remaining()?;
+        self.operation_begin("mcp_tool", request)?;
+        let result = agent_mcp::call(tool, arguments, token, remaining)?;
+        self.remaining()?;
+        self.operation_commit(&result, 0)?;
+        Ok(result)
+    }
+
+    /// Run one granted tool, delegated agent or remote MCP call, and record the
+    /// event the guest sees next. Returns the reply for a rejected call, or None
+    /// when the tool ran and the loop should continue.
+    fn handle_tool(&mut self, name: String, arguments: Value, state: Value) -> Result<Option<Value>, String> {
+        if let Some(rejection) = self.reject_tool_call(&name, &arguments, &state)? {
+            return Ok(Some(rejection));
+        }
+        let result = self.invoke_tool(&name, &arguments)?;
+        self.record_operation(&name, &arguments, &result)?;
+        self.tool_calls += 1;
+        locked(&self.budget).tool_calls += 1;
+        self.event = json!({"kind":"tool","name":name,"result":result,"state":state});
+        Ok(None)
+    }
+    /// Everything that can refuse a call before any effect reaches a tool: the
+    /// argument shape, the declared schema, the grant, and the pre-tool checks.
+    fn reject_tool_call(&mut self, name: &str, arguments: &Value, state: &Value) -> Result<Option<Value>, String> {
+        if !arguments.is_object() { return Err("tool arguments must be an object".into()); }
+        if self.schemas.get(name).is_some_and(|validator| !validator.is_valid(arguments)) {
+            // Pure validation is recomputed during replay. No intent, tool
+            // instantiation, mount access, or side effect occurs here.
+            return Ok(Some(self.refuse(name, state, json!({"code":"invalid_tool_arguments",
+                "message":"Arguments do not match the declared input_schema; correct them before retrying."}))));
+        }
+        if !self.is_granted(name) { return Err(format!("tool not granted: {name}")); }
+        match self.verify_checks("", Some((name, arguments)))? {
+            Some(failure) => Ok(Some(self.refuse(name, state, json!({"code":"tool_policy_rejected",
+                "check":failure["check"],"message":failure["feedback"]})))),
+            None => Ok(None),
+        }
+    }
+    /// Reports a refusal to the guest as a tool error and ends the step.
+    fn refuse(&mut self, name: &str, state: &Value, error: Value) -> Value {
+        self.event = json!({"kind":"tool","name":name,"state":state,"result":{"error":error}});
+        json!({"done":false,"event":"tool_rejected","metrics":self.metrics()})
+    }
+    fn is_remote(&self, name: &str) -> bool {
+        self.config.mcp_tools.iter().any(|tool| tool.name == name)
+    }
+    fn is_granted(&self, name: &str) -> bool {
+        self.tools.contains_key(name) || self.children.contains_key(name) || self.is_remote(name)
+    }
+    /// Runs a granted tool, whichever of the three kinds it is.
+    fn invoke_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, String> {
+        if self.children.contains_key(name) { return self.run_delegate(name, arguments); }
+        if self.is_remote(name) { return self.call_remote_tool(name, arguments); }
+        self.run_local_tool(name, arguments)
+    }
+    /// Calls a scoped WASM tool, replaying a recorded result when the journal
+    /// already holds one so a resumed run cannot repeat a completed effect.
+    fn run_local_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, String> {
+        let tool = self.tools.get(name).ok_or_else(|| format!("tool not granted: {name}"))?;
+        // The existing tool ABI is a little-endian u32 length plus JSON.
+        let payload = serde_json::to_vec(&json!({"tool":name,"arguments":arguments})).map_err(|e| e.to_string())?;
+        let mut input = (payload.len() as u32).to_le_bytes().to_vec();
+        input.extend_from_slice(&payload);
+        let cached = self.operation_begin("tool", json!({"name":name,"arguments":arguments}))?;
+        let (result, fuel) = match cached {
+            Some(recorded) => recorded,
+            None => {
+                let (output, fuel) = self.execute(tool, &input)?;
+                let result: Value = serde_json::from_str(&output).map_err(|_| "tool output must be JSON")?;
+                self.operation_commit(&result, fuel)?;
+                (result, fuel)
+            }
+        };
+        self.fuel_consumed += fuel;
+        locked(&self.budget).fuel += fuel;
+        Ok(result)
+    }
+    /// Checks read the tool history, so it is kept only when a check exists to
+    /// read it and bounded so it cannot outgrow one message.
+    fn record_operation(&mut self, name: &str, arguments: &Value, result: &Value) -> Result<(), String> {
+        if self.checks.is_empty() && self.before_checks.is_empty() { return Ok(()); }
+        self.operations.push(json!({"name":name,"arguments":arguments,"result":result}));
+        if serde_json::to_vec(&self.operations).map_err(|_| "invalid verification history")?.len() > MAX_MESSAGE / 2 {
+            return Err("verification tool history exceeds 512 KiB".into());
+        }
+        Ok(())
+    }
+
     fn tick(&mut self) -> Result<Value, String> {
         if self.done { return Err("agent run already completed".into()); }
         if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded".into()); }
@@ -514,74 +698,7 @@ impl Runtime {
                 kind = "model";
             }
             Action::Tool { name, arguments, state } => {
-                if !arguments.is_object() { return Err("tool arguments must be an object".into()); }
-                if let Some(validator) = self.schemas.get(&name) {
-                    if !validator.is_valid(&arguments) {
-                        // Pure validation is recomputed during replay. No intent, tool
-                        // instantiation, mount access, or side effect occurs here.
-                        self.event = json!({"kind":"tool","name":name,"state":state,
-                            "result":{"error":{"code":"invalid_tool_arguments",
-                            "message":"Arguments do not match the declared input_schema; correct them before retrying."}}});
-                        return Ok(json!({"done":false,"event":"tool_rejected","metrics":self.metrics()}));
-                    }
-                }
-                if !self.tools.contains_key(&name) && !self.children.contains_key(&name) && !self.config.mcp_tools.iter().any(|t| t.name == name) {
-                    return Err(format!("tool not granted: {name}"));
-                }
-                if let Some(failure) = self.verify_checks("", Some((&name, &arguments)))? {
-                    self.event = json!({"kind":"tool","name":name,"state":state,
-                        "result":{"error":{"code":"tool_policy_rejected","check":failure["check"],"message":failure["feedback"]}}});
-                    return Ok(json!({"done":false,"event":"tool_rejected","metrics":self.metrics()}));
-                }
-                let result = if let Some(child) = self.children.get_mut(&name) {
-                    let task = arguments.get("task").and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= MAX_MESSAGE / 2).ok_or("delegation requires a nonempty task of at most 512 KiB")?;
-                    if arguments.as_object().is_some_and(|a| a.len() != 1) { return Err("delegation accepts only the task field".into()); }
-                    locked(&self.budget).delegations += 1;
-                    child.reset(task);
-                    loop {
-                        let event = child.tick().map_err(|e| format!("{name}: {e}"))?;
-                        if event.get("done").and_then(Value::as_bool) == Some(true) {
-                            break json!({"ok":event["output"]});
-                        }
-                    }
-                } else if let Some(tool) = self.config.mcp_tools.iter().find(|t| t.name == name) {
-                    let request = json!({"name":name,"remote_name":tool.remote_name,"endpoint":tool.endpoint,"arguments":arguments});
-                    if let Some((result, _)) = self.operation_cached("mcp_tool", &request)? { result } else {
-                        // Missing credentials are preflight failures, not uncertain effects.
-                        let token = tool.credential()?;
-                        let remaining = self.remaining()?;
-                        self.operation_begin("mcp_tool", request)?;
-                        let result = agent_mcp::call(tool, &arguments, token, remaining)?;
-                        self.remaining()?;
-                        self.operation_commit(&result, 0)?;
-                        result
-                    }
-                } else {
-                    let tool = self.tools.get(&name).ok_or_else(|| format!("tool not granted: {name}"))?;
-                    // The existing tool ABI is a little-endian u32 length plus JSON.
-                    let payload = serde_json::to_vec(&json!({"tool":name,"arguments":arguments})).map_err(|e| e.to_string())?;
-                    let mut input = (payload.len() as u32).to_le_bytes().to_vec();
-                    input.extend_from_slice(&payload);
-                    let cached = self.operation_begin("tool", json!({"name":name,"arguments":arguments}))?;
-                    let (result, fuel) = if let Some(recorded) = cached { recorded } else {
-                        let (output, fuel) = self.execute(tool, &input)?;
-                        let result: Value = serde_json::from_str(&output).map_err(|_| "tool output must be JSON")?;
-                        self.operation_commit(&result, fuel)?;
-                        (result, fuel)
-                    };
-                    self.fuel_consumed += fuel;
-                    locked(&self.budget).fuel += fuel;
-                    result
-                };
-                if !self.checks.is_empty() || !self.before_checks.is_empty() {
-                    self.operations.push(json!({"name":name,"arguments":arguments,"result":result}));
-                    if serde_json::to_vec(&self.operations).map_err(|_| "invalid verification history")?.len() > MAX_MESSAGE / 2 {
-                        return Err("verification tool history exceeds 512 KiB".into());
-                    }
-                }
-                self.tool_calls += 1;
-                locked(&self.budget).tool_calls += 1;
-                self.event = json!({"kind":"tool","name":name,"result":result,"state":state});
+                if let Some(reply) = self.handle_tool(name, arguments, state)? { return Ok(reply); }
                 kind = "tool";
             }
         }
