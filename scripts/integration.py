@@ -242,7 +242,7 @@ print('netlink', opens(socket.AF_NETLINK, socket.SOCK_RAW, 0))
 print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
 '''
         result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
-                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro',
                      '--', '-c', families)
         assert result.returncode == 0, result.stderr
         opened = dict(line.split() for line in result.stdout.split('\n') if line)
@@ -251,7 +251,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         # Without proxy mode nothing claims to be the only egress, so nothing is
         # filtered: the restriction follows the claim, it is not always on.
         result = run('run', sys.executable, '-v', str(workspace),
-                     '-v', str(pathlib.Path(sys.base_prefix).resolve()), '--', '-c', families)
+                     '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro', '--', '-c', families)
         assert result.returncode == 0, result.stderr
         assert 'udp4 True' in result.stdout and 'unix True' in result.stdout, result.stdout
         print('PASS: proxy mode is the only egress — UDP, Unix, IPv6 and netlink all denied')
@@ -281,7 +281,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         # The grant is the whole installation: an interpreter outside the
         # system set cannot reach its own standard library either.
         result = run('run', str(interpreter), '--read-policy', 'strict',
-                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro',
                      '--', '-c', 'print("interpreter ran")')
         assert result.returncode == 0 and 'interpreter ran' in result.stdout, result
         if not str(interpreter).startswith('/usr'):
@@ -309,7 +309,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
                     '    except OSError: pass\n'
                     'print("READ", len(seen), "MUST-NOT-LEAK" in "".join(seen))')
             result = run('run', sys.executable, '--read-policy', 'strict', '-v', str(workspace),
-                         '-v', str(pathlib.Path(sys.base_prefix).resolve()), '--', '-c', peek)
+                         '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro', '--', '-c', peek)
             assert result.returncode == 0, result.stderr
             assert 'READ 0 False' in result.stdout, result.stdout
         finally:

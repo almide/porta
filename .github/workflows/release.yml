@@ -1,0 +1,74 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and attach binaries to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos-aarch64
+          - os: ubuntu-latest
+            target: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Almide
+        run: bash scripts/install-almide.sh
+      - name: Build
+        run: .tools/almide/almide build src/mod.almd -o target/porta
+      # A binary nobody checked is worse than no binary: the same suite that
+      # gates a commit gates a release, on the machine that produced the file.
+      - name: Verify the binary that will ship
+        run: python3 scripts/integration.py target/porta
+      - name: Package
+        run: |
+          mkdir -p "dist/porta-${{ matrix.target }}"
+          cp target/porta README.md LICENSE "dist/porta-${{ matrix.target }}/"
+          tar -czf "dist/porta-${{ matrix.target }}.tar.gz" -C dist "porta-${{ matrix.target }}"
+          shasum -a 256 "dist/porta-${{ matrix.target }}.tar.gz" \
+            | sed 's| .*/| |' > "dist/porta-${{ matrix.target }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: porta-${{ matrix.target }}
+          path: dist/porta-${{ matrix.target }}.*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # One checksum file covering every asset, so the installer needs a single
+      # fetch to verify whichever archive it chose.
+      - name: Collect checksums
+        run: |
+          cd dist
+          cat *.sha256 > porta-checksums.sha256
+          rm -f *.sha256
+          ls -l
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/porta-checksums.sha256
+          fail_on_unmatched_files: true

@@ -33,13 +33,20 @@ runtime and a set of restrictions, not an agent.
 ## Install
 
 ```bash
-bash scripts/install-almide.sh
-.tools/almide/almide build src/mod.almd -o target/porta
-cp target/porta ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-Needs Almide 0.63.0, a Rust toolchain, Python 3 and curl. Full verification
-steps and the compiler pin are in [Build from source](#build-from-source).
+A single binary for macOS (Apple silicon) and Linux (x86-64), checked against
+its published SHA-256 before it is installed. `PORTA_RELEASE_TAG` picks a
+version; the first argument picks the directory.
+
+Every released binary is the one that passed the integration suite on the
+machine that built it — the release workflow runs the suite against the file it
+is about to publish, not against a rebuild of it.
+
+On another platform, or to build the one you run yourself, see
+[Build from source](#build-from-source). That needs Almide 0.63.0, a Rust
+toolchain, Python 3 and curl.
 
 `porta run` takes either a native command or a `.wasm` module, so anything that
 compiles to WASI runs under it — Almide, and Python 3.14 via `python.wasm`.
@@ -306,8 +313,10 @@ does not show you where.
 | **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
 
 Under `strict`, every home directory is closed — and so is the command itself if
-it lives outside those directories. A toolchain under `/opt` needs `-v` on its
-own installation; porta says which grant is missing rather than failing with a
+it lives outside those directories. A toolchain under `/opt` needs a mount on
+its own installation, and it wants the read-only form: `-v /opt/toolchain:ro`
+leaves the interpreter runnable while `-v /opt/toolchain` would also let the
+agent rewrite it. porta says which grant is missing rather than failing with a
 bare `Permission denied`.
 
 Linux uses Landlock unprivileged, without namespaces and without an external

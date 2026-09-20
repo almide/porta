@@ -75,6 +75,17 @@ need — and `scripts/integration.py` asserts on Linux that a credential outside
 every grant is unreadable, that the granted mount and a system interpreter
 still are, and that an unknown policy name refuses.
 
+`/etc` is granted as a whole, and that is the set's remaining sharp edge. It
+carries what a command genuinely needs — `ld.so.cache`, `localtime`, `hosts`,
+`resolv.conf`, `nsswitch.conf`, `ssl/certs` — and also `shadow`, `sudoers` and
+any host key beside them. File permissions are what separates those for an
+ordinary user; a run as root has nothing between it and `/etc/shadow`. An
+adversarial sweep confirmed this and confirmed the rest of the surface holds:
+home directories, `/root`, `/sys`, `/var/log` and `/proc` are all closed, a
+symlink inside a granted mount pointing at a home directory or at `/` is
+refused, and so is a write through one. Narrowing `/etc` to the files a loader
+actually reads is open work; unlike `/proc` it cannot simply be dropped.
+
 A path in the system set that does not exist on a host is skipped rather than
 refused: these are the platform's directories, not a caller's grant, and
 `/lib64` is absent on arm64 Debian.

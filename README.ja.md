@@ -34,13 +34,20 @@
 ## インストール
 
 ```bash
-bash scripts/install-almide.sh
-.tools/almide/almide build src/mod.almd -o target/porta
-cp target/porta ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-Almide 0.63.0、Rust ツールチェーン、Python 3、curl が必要です。検証手順と
-コンパイラのピン留めについては[ソースからのビルド](#ソースからのビルド)を参照してください。
+macOS (Apple silicon) と Linux (x86-64) 向けの単一バイナリです。公開された
+SHA-256 と照合してからインストールします。バージョンは `PORTA_RELEASE_TAG`、
+インストール先は第1引数で指定できます。
+
+公開されるバイナリは、**それをビルドしたマシン上で integration スイートを
+通過したそのファイル**です。リリースワークフローは、これから公開するファイル
+そのものに対してスイートを回します。再ビルドしたものではありません。
+
+他のプラットフォーム、または自分でビルドする場合は
+[ソースからのビルド](#ソースからのビルド)を参照してください。Almide 0.63.0、
+Rust ツールチェーン、Python 3、curl が必要です。
 
 `porta run` はネイティブコマンドと `.wasm` モジュールのどちらも取ります。WASI に
 コンパイルできるものなら動きます — Almide や、`python.wasm` 経由の Python 3.14 など。
@@ -309,8 +316,10 @@ Porta は 2 つのレベルで制限を強制します。
 
 `strict` ではホームディレクトリは全て閉じます。**コマンド自身もその対象**で、
 これらの外に置かれたコマンドは起動できません。`/opt` 配下のツールチェーンなら
-インストールディレクトリ全体を `-v` で渡す必要があり、porta は素の
-`Permission denied` ではなく、どの grant が足りないかを名指しします。
+インストールディレクトリ全体を渡す必要がありますが、**読み取り専用の形を使って
+ください**。`-v /opt/toolchain:ro` ならインタプリタは動いたままですが、
+`-v /opt/toolchain` はエージェントにツールチェーン自体の書き換えを許します。
+porta は素の `Permission denied` ではなく、どの grant が足りないかを名指しします。
 
 Linux の Landlock は非特権で、名前空間も外部ランタイムも使いません。実行中の
 カーネルが表現できない規則を要求された場合は、緩めるのではなく実行を拒否します。
