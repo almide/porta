@@ -58,13 +58,16 @@ jobs:
           path: dist
           merge-multiple: true
       # One checksum file covering every asset, so the installer needs a single
-      # fetch to verify whichever archive it chose.
+      # fetch to verify whichever archive it chose. Collected outside dist and
+      # moved in: `cat *.sha256 > porta-checksums.sha256` in the same directory
+      # makes the output match its own glob, and cat reads what it is writing.
       - name: Collect checksums
         run: |
-          cd dist
-          cat *.sha256 > porta-checksums.sha256
-          rm -f *.sha256
-          ls -l
+          cat dist/*.sha256 > "$RUNNER_TEMP/porta-checksums.sha256"
+          rm -f dist/*.sha256
+          mv "$RUNNER_TEMP/porta-checksums.sha256" dist/
+          cat dist/porta-checksums.sha256
+          ls -l dist
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
