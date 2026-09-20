@@ -210,8 +210,10 @@ else:
         # that grant the run is refused, and says which grant would fix it
         # rather than failing with a bare exec error.
         interpreter = pathlib.Path(sys.executable).resolve()
+        # The grant is the whole installation: an interpreter outside the
+        # system set cannot reach its own standard library either.
         result = run('run', str(interpreter), '--read-policy', 'strict',
-                     '-v', str(workspace), '-v', str(interpreter.parent),
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
                      '--', '-c', 'print("interpreter ran")')
         assert result.returncode == 0 and 'interpreter ran' in result.stdout, result
         if not str(interpreter).startswith('/usr'):

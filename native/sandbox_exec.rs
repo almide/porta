@@ -83,7 +83,8 @@ impl SandboxRequest {
         }
         Some(format!(
             "--read-policy strict leaves {} unreadable, so it cannot be started; \
-             grant it with -v {} or name a command under a system directory",
+             grant it with -v {} — a runtime that loads its own libraries needs \
+             its whole install directory, not just this one",
             program.display(),
             program.parent()?.display(),
         ))

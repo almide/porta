@@ -12,7 +12,7 @@ as a definition does.
 | Module | Owns |
 |---|---|
 | `wasmtime_bridge.rs` + `wasmtime_bridge/run.rs` | WASM instance lifecycle and the FFI surface |
-| `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset |
+| `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
 | `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
