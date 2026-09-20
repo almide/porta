@@ -25,11 +25,18 @@ def equivalent(actual, expected_text):
         return False
 
 
-assert len(report['runs']) == len(expected)
-assert {run['task'] for run in report['runs']} == set(expected)
-summary = []
-for run in report['runs']:
-    assert run['expected_json'] == expected[run['task']]
+def check_intent(pending, run):
+    """Check one recorded intent, and say whether it was a model call."""
+    if pending['kind'] == 'model':
+        assert pending['request']['messages'][1] == {'role': 'user', 'content': run['prompt']}
+        return 1
+    assert pending['request']['name'] == 'compute'
+    return 0
+
+
+def replay(run):
+    """Walk one run's journal, checking its hash chain and pairing every intent
+    with its result. Returns the model-call count and the tool responses."""
     previous, pending, index, models = '', None, 0, 0
     results = []
     entries = run['journal']
@@ -42,27 +49,32 @@ for run in report['runs']:
         digest = hashlib.sha256((previous + '\n' + canonical).encode()).hexdigest()
         assert entry['previous'] == previous and entry['hash'] == digest, 'journal hash mismatch'
         previous = digest
-        if payload['kind'] == 'header':
+        kind = payload['kind']
+        if kind == 'header':
             assert position == 0
-        elif payload['kind'] == 'intent':
+        elif kind == 'intent':
             assert pending is None and payload['index'] == index
             pending = payload['request']
             assert pending['kind'] in ('model', 'tool')
-            if pending['kind'] == 'model':
-                models += 1
-                assert pending['request']['messages'][1] == {'role': 'user', 'content': run['prompt']}
-            else:
-                assert pending['request']['name'] == 'compute'
-        elif payload['kind'] == 'result':
+            models += check_intent(pending, run)
+        elif kind == 'result':
             assert pending is not None and payload['index'] == index
-            if pending['kind'] == 'tool':
-                results.append(payload['response'])
+            results += [payload['response']] if pending['kind'] == 'tool' else []
             pending, index = None, index + 1
-        elif payload['kind'] == 'complete':
+        elif kind == 'complete':
             assert position == len(entries) - 1 and pending is None
             assert payload['output'] == run['stdout'].strip()
         else:
             raise AssertionError('unexpected journal record')
+    return models, results
+
+
+assert len(report['runs']) == len(expected)
+assert {run['task'] for run in report['runs']} == set(expected)
+summary = []
+for run in report['runs']:
+    assert run['expected_json'] == expected[run['task']]
+    models, results = replay(run)
     computed = bool(results) and results[-1].get('ok') is True and equivalent(results[-1].get('json'), run['expected_json'])
     answered = equivalent(run['stdout'], run['expected_json'])
     summary.append({'task': run['task'], 'passed': run['exit_code'] == 0 and computed and answered,
