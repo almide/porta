@@ -39,6 +39,83 @@ fn open_file(path: &Path, create: bool, writable: bool) -> Result<File, String> 
     file.try_lock().map_err(|e| format!("agent journal is already in use or cannot be locked: {e}"))?;
     Ok(file)
 }
+/// The whole journal, refused when it is oversized or does not end on a record
+/// boundary: a half-written tail cannot be told apart from an uncertain one.
+fn read_whole_journal(file: &mut File) -> Result<String, String> {
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_JOURNAL { return Err("journal exceeds 64 MiB".into()); }
+    let mut source = String::new();
+    Read::by_ref(file).take(MAX_JOURNAL + 1).read_to_string(&mut source).map_err(|e| format!("read journal: {e}"))?;
+    if source.len() as u64 > MAX_JOURNAL || !source.ends_with('\n') {
+        return Err("journal is truncated or oversized; refusing to repeat uncertain operations".into());
+    }
+    Ok(source)
+}
+
+/// What the records add up to as the journal is read back.
+#[derive(Default)]
+struct Replay {
+    header: Option<Value>,
+    exchanges: Vec<Exchange>,
+    pending: Option<Value>,
+    complete: Option<String>,
+    elapsed_ms: u64,
+    last_record: String,
+}
+
+impl Replay {
+    /// Folds in one record. Nothing may follow a completion, the header comes
+    /// first, and every other kind is an intent and its settling result.
+    fn apply(&mut self, entry: Value) -> Result<(), String> {
+        self.last_record = entry["kind"].as_str().unwrap_or("").into();
+        if self.complete.is_some() { return Err("journal contains records after completion".into()); }
+        if self.header.is_none() { return self.open(entry); }
+        match entry["kind"].as_str() {
+            Some("intent") => self.intent(entry),
+            Some("result") => self.result(entry),
+            Some("checkpoint") => self.checkpoint(&entry),
+            Some("complete") => self.finish(entry),
+            _ => Err("unknown journal record kind".into()),
+        }
+    }
+    fn open(&mut self, entry: Value) -> Result<(), String> {
+        if entry["kind"] != "header" || entry["version"] != 1 { return Err("unsupported journal header".into()); }
+        self.header = Some(entry);
+        Ok(())
+    }
+    fn intent(&mut self, entry: Value) -> Result<(), String> {
+        if self.pending.is_some() || entry["index"].as_u64() != Some(self.exchanges.len() as u64) {
+            return Err("invalid journal intent ordering".into());
+        }
+        self.pending = Some(entry.get("request").cloned().ok_or("missing journal request")?);
+        Ok(())
+    }
+    fn result(&mut self, entry: Value) -> Result<(), String> {
+        let request = self.pending.take().ok_or("journal result has no intent")?;
+        if entry["index"].as_u64() != Some(self.exchanges.len() as u64) { return Err("invalid journal result ordering".into()); }
+        let fuel = entry["fuel"].as_u64().ok_or("invalid recorded fuel")?;
+        self.advance(&entry, "invalid recorded elapsed time")?;
+        let response = entry.get("response").cloned().ok_or("missing journal response")?;
+        self.exchanges.push(Exchange { request, response, fuel });
+        Ok(())
+    }
+    fn checkpoint(&mut self, entry: &Value) -> Result<(), String> {
+        if self.pending.is_some() { return Err("checkpoint has an uncertain operation".into()); }
+        self.advance(entry, "invalid checkpoint elapsed time")
+    }
+    fn finish(&mut self, entry: Value) -> Result<(), String> {
+        if self.pending.is_some() { return Err("journal completed with an uncertain operation".into()); }
+        self.complete = Some(entry["output"].as_str().ok_or("invalid recorded final output")?.to_owned());
+        self.advance(&entry, "invalid completion elapsed time")
+    }
+    /// Every settled record carries an elapsed time, which never goes backwards.
+    fn advance(&mut self, entry: &Value, missing: &str) -> Result<(), String> {
+        let elapsed = entry["elapsed_ms"].as_u64().ok_or_else(|| missing.to_string())?;
+        if elapsed < self.elapsed_ms { return Err("journal elapsed time moved backwards".into()); }
+        self.elapsed_ms = elapsed;
+        Ok(())
+    }
+}
+
 impl Journal {
     pub fn create(path: &Path, fingerprint: &str, task: &str) -> Result<Self, String> {
         let file = open_file(path, true, true)?;
@@ -57,69 +134,25 @@ impl Journal {
     }
     fn load_internal(path: &Path, replay_only: bool, inspection: bool) -> Result<Self, String> {
         let mut file = open_file(path, false, !replay_only && !inspection)?;
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
-        if metadata.len() > MAX_JOURNAL { return Err("journal exceeds 64 MiB".into()); }
-        let mut source = String::new();
-        Read::by_ref(&mut file).take(MAX_JOURNAL + 1).read_to_string(&mut source).map_err(|e| format!("read journal: {e}"))?;
-        if source.len() as u64 > MAX_JOURNAL || !source.ends_with('\n') { return Err("journal is truncated or oversized; refusing to repeat uncertain operations".into()); }
+        let source = read_whole_journal(&mut file)?;
+        let mut replay = Replay::default();
         let mut previous = String::new();
-        let mut exchanges = Vec::new();
-        let mut pending: Option<Value> = None;
-        let mut header: Option<Value> = None;
-        let mut complete = None;
-        let mut elapsed_ms = 0;
-        let mut last_record = String::new();
         for line in source.lines() {
             let envelope: Envelope = serde_json::from_str(line).map_err(|_| "invalid journal record")?;
             let expected = digest(format!("{}\n{}", previous, envelope.payload).as_bytes());
             if envelope.previous != previous || envelope.hash != expected { return Err("journal hash chain mismatch".into()); }
             previous = envelope.hash;
-            let entry = envelope.payload;
-            last_record = entry["kind"].as_str().unwrap_or("").into();
-            if complete.is_some() { return Err("journal contains records after completion".into()); }
-            if header.is_none() {
-                if entry["kind"] != "header" || entry["version"] != 1 { return Err("unsupported journal header".into()); }
-                header = Some(entry);
-                continue;
-            }
-            match entry["kind"].as_str() {
-                Some("intent") => {
-                    if pending.is_some() || entry["index"].as_u64() != Some(exchanges.len() as u64) { return Err("invalid journal intent ordering".into()); }
-                    pending = Some(entry.get("request").cloned().ok_or("missing journal request")?);
-                }
-                Some("result") => {
-                    let request = pending.take().ok_or("journal result has no intent")?;
-                    if entry["index"].as_u64() != Some(exchanges.len() as u64) { return Err("invalid journal result ordering".into()); }
-                    let fuel = entry["fuel"].as_u64().ok_or("invalid recorded fuel")?;
-                    let elapsed = entry["elapsed_ms"].as_u64().ok_or("invalid recorded elapsed time")?;
-                    if elapsed < elapsed_ms { return Err("journal elapsed time moved backwards".into()); }
-                    elapsed_ms = elapsed;
-                    exchanges.push(Exchange { request, response:entry.get("response").cloned().ok_or("missing journal response")?, fuel });
-                }
-                Some("checkpoint") => {
-                    if pending.is_some() { return Err("checkpoint has an uncertain operation".into()); }
-                    let elapsed = entry["elapsed_ms"].as_u64().ok_or("invalid checkpoint elapsed time")?;
-                    if elapsed < elapsed_ms { return Err("journal elapsed time moved backwards".into()); }
-                    elapsed_ms = elapsed;
-                }
-                Some("complete") => {
-                    if pending.is_some() { return Err("journal completed with an uncertain operation".into()); }
-                    complete = Some(entry["output"].as_str().ok_or("invalid recorded final output")?.to_owned());
-                    let elapsed = entry["elapsed_ms"].as_u64().ok_or("invalid completion elapsed time")?;
-                    if elapsed < elapsed_ms { return Err("journal elapsed time moved backwards".into()); }
-                    elapsed_ms = elapsed;
-                }
-                _ => return Err("unknown journal record kind".into()),
-            }
+            replay.apply(envelope.payload)?;
         }
-        if pending.is_some() && !inspection { return Err("journal has an intent without a result; operation outcome is uncertain and will not be repeated".into()); }
-        let header = header.ok_or("empty journal")?;
+        if replay.pending.is_some() && !inspection { return Err("journal has an intent without a result; operation outcome is uncertain and will not be repeated".into()); }
+        let header = replay.header.as_ref().ok_or("empty journal")?;
         let task = header["task"].as_str().ok_or("missing journal task")?.to_owned();
         let fingerprint = header["fingerprint"].as_str().ok_or("missing journal fingerprint")?.to_owned();
-        if replay_only && !inspection && complete.is_none() { return Err("replay requires a completed journal; use agent-resume for a checkpoint".into()); }
+        if replay_only && !inspection && replay.complete.is_none() { return Err("replay requires a completed journal; use agent-resume for a checkpoint".into()); }
         file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
         Ok(Self { file, path:std::fs::canonicalize(path).map_err(|e| e.to_string())?, task, fingerprint, replay_only,
-            elapsed_ms, previous, bytes:source.len() as u64, exchanges, cursor:0, pending, complete, last_record })
+            elapsed_ms:replay.elapsed_ms, previous, bytes:source.len() as u64, exchanges:replay.exchanges,
+            cursor:0, pending:replay.pending, complete:replay.complete, last_record:replay.last_record })
     }
     pub fn inspect(path: &Path) -> Result<Value, String> {
         let journal = Self::load_internal(path, true, true)?;

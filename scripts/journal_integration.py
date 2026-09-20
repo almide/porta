@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 
 porta, agent, tool = [str(pathlib.Path(p).resolve()) for p in sys.argv[1:4]]
@@ -22,11 +23,11 @@ entered = threading.Event()
 release = threading.Event()
 reject_network = False
 response_delay = 0
-empty_after_tool = 0
+# Empty replies the fixture model still owes after a tool result.
+state = SimpleNamespace(empty_after_tool=0)
 
 class Model(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global empty_after_tool
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append(body)
         if reject_network:
@@ -45,8 +46,8 @@ class Model(http.server.BaseHTTPRequestHandler):
                 'write_file', {'path': 'result.txt', 'content': 'original write'})
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'call-1', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
-        if results and empty_after_tool > 0:
-            empty_after_tool -= 1
+        if results and state.empty_after_tool > 0:
+            state.empty_after_tool -= 1
             message = {'role': 'assistant', 'content': None, 'tool_calls': []}
         payload = json.dumps({'choices': [{'message': message}]}).encode()
         self.send_response(200)
@@ -57,7 +58,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Model)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -190,10 +191,10 @@ mounts = [{{host="workspace",guest=".",read_only=false}}]
         # Empty provider replies after a completed write recover from history.
         # Resume must retain both the tool result and the consecutive-empty limit.
         recovery = root / 'empty-recovery.jsonl'
-        empty_after_tool = 2
+        state.empty_after_tool = 2
         before = len(requests)
         success(record(recovery, 3))
-        assert len(requests) == before + 2 and empty_after_tool == 1
+        assert len(requests) == before + 2 and state.empty_after_tool == 1
         result_file.write_text('external marker during recovery')
         recovered = success(run('agent-resume', config, recovery))
         assert len(requests) == before + 4
@@ -203,7 +204,7 @@ mounts = [{{host="workspace",guest=".",read_only=false}}]
         assert success(run('agent-replay', config, recovery, credential=False)).stdout == recovered.stdout
         assert len(requests) == before_replay
         exhausted = root / 'empty-exhausted.jsonl'
-        empty_after_tool = 10
+        state.empty_after_tool = 10
         before = len(requests)
         success(record(exhausted, 4))
         assert len(requests) == before + 3
@@ -211,7 +212,7 @@ mounts = [{{host="workspace",guest=".",read_only=false}}]
         failure(run('agent-resume', config, exhausted), 'after two recovery attempts')
         assert len(requests) == before + 4
         assert result_file.read_text() == 'marker before final empty reply'
-        empty_after_tool = 0
+        state.empty_after_tool = 0
         print('PASS: empty-response recovery survives resume without duplicated writes or reset recovery budgets; replay stays offline')
 
         # Missing credentials are a preflight failure, not an uncertain external operation.

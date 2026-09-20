@@ -58,7 +58,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
 thread = threading.Thread(target=server.serve_forever, daemon=True)

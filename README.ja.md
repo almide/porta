@@ -42,6 +42,9 @@ cp target/porta ~/.local/bin/
 Almide 0.63.0、Rust ツールチェーン、Python 3、curl が必要です。検証手順と
 コンパイラのピン留めについては[ソースからのビルド](#ソースからのビルド)を参照してください。
 
+`porta run` はネイティブコマンドと `.wasm` モジュールのどちらも取ります。WASI に
+コンパイルできるものなら動きます — Almide や、`python.wasm` 経由の Python 3.14 など。
+
 ## クイックスタート
 
 ### 1. 今使っているエージェントを制限する
@@ -79,7 +82,7 @@ porta init native claude   # porta.toml を生成
 porta up -- --print "Fix the bug in main.rs"
 ```
 
-### 4. WASM の中で動くエージェントを作る
+### 4. 判断ループが WASM のエージェントを動かす
 
 ```bash
 .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
@@ -87,15 +90,7 @@ porta up -- --print "Fix the bug in main.rs"
 porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
 ```
 
-判断ループもツールも WASM の中で動きます。モデルの資格情報はホスト側が保持し、
-予算は委譲したチーム全体で共有され、ツールの引数は実行前に検証されます。
-クラッシュに備えて記録する場合:
-
-```bash
-porta agent agent.toml --record run.jsonl -- "..."
-porta agent-resume agent.toml run.jsonl   # 完了済みの書き込みは繰り返さない
-porta agent-journal run.jsonl             # 読み取り専用、コードは読み込まない
-```
+これが何なのかは[自分で作るエージェント](#自分で作るエージェント)にあります。
 
 ## Porta が強制すること
 
@@ -124,29 +119,77 @@ CI がその監査を実行します。Porta に不利な結果も同じ場所�
   Porta は一般的な品質優位を示せていません。共有 compute ツールの追試は、
   成果として公開せず不採用としました。
 
-## さらに詳しく
+## 自分で作るエージェント
 
-| 項目 | ドキュメント |
+`porta run` は誰かが書いたエージェントを制限します。`porta agent` は、判断ループ
+自体が WASM のエージェントを動かします。この README のほかの保証は、そこから
+来ています。
+
+```toml
+# agent.toml
+version = 1
+
+[agent]
+wasm = "agent.wasm"
+instruction = "Use the available tools to answer the request."
+
+[model]
+endpoint = "https://api.example.com/v1/chat/completions"
+name = "your-model"
+token_env = "MODEL_TOKEN"          # ホストが読む。ゲストには渡さない
+
+[limits]
+max_model_calls = 16
+max_steps = 64
+timeout_seconds = 120
+
+[[tools]]
+name = "write_file"
+wasm = "tools/write.wasm"
+description = "Write text to a file in the workspace."
+sha256 = "<64 hex characters>"     # レビューしたこのバイト列でなければ実行しない
+mounts = [{ host = "workspace", guest = ".", read_only = false }]
+input_schema = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
+```
+
+ループもツールも別々の WASM インスタンスで動きます。どちらもあなたの環境変数も
+ディレクトリも受け継ぎません。資格情報はホストに残るので、自分の設定を出力しろと
+言いくるめられたエージェントには、出力するものがありません。
+
+[Porta が強制すること](#porta-が強制すること)の各項目に、その仕組みへのリンクが
+あります。あの表に無いものを3つ:
+
+| やりたいこと | 読むもの |
 |---|---|
-| WASM エージェント、チーム、権限付与、上限 | [agent-runtime.md](docs/agent-runtime.md) |
-| チェックポイント、再開、リプレイ | [agent-journals.md](docs/agent-journals.md) |
-| エージェントからのリモート MCP ツール | [agent-mcp.md](docs/agent-mcp.md) |
-| オフラインでのチーム検査 | [agent-check.md](docs/agent-check.md) |
-| 完了チェック | [completion-checks.md](docs/completion-checks.md) |
-| pre-tool チェック | [before-tool-checks.md](docs/before-tool-checks.md) |
-| アーティファクトピン | [artifact-pins.md](docs/artifact-pins.md) |
-| 制限付き計算ツール | [examples/compute](examples/compute/README.md) |
-| 計測結果 | [docs/benchmarks](docs/benchmarks/README.md) |
+| チーム、委譲、予算の共有 | [agent-runtime.md](docs/agent-runtime.md) |
+| リモート MCP ツールを明示的に許可 | [agent-mcp.md](docs/agent-mcp.md) |
+| 実行せずにチームを検査 | [agent-check.md](docs/agent-check.md) |
 
-ドキュメント本体は英語です。
+```bash
+porta agent agent.toml --record run.jsonl -- "..."
+porta agent-resume agent.toml run.jsonl   # 完了済みの書き込みは繰り返さない
+porta agent-journal run.jsonl             # 読み取り専用のメタデータ、コードは読まない
+```
 
 ## 制限事項
 
-ネイティブの制限は **macOS** が必要です。Linux ではネイティブ実行は fail closed
-となり、WASM は引き続き利用できます。ネイティブの読み取り権限は書き込み権限より
-広く、コンテナのファイルシステムや完全な秘密情報の隔離ではありません。HTTPS
-プロキシのフィルタリングは接続先を制御するもので、TLS の中身は見ません。
-`porta run` と `porta serve` は `-v` を渡さない限り何もマウントしません。
+Porta が**やらないこと**を、後から気づくのではなく先に書いておきます。
+
+- **コンテナでも VM でもありません。** 制限はあなたのカーネル上のプロセスに
+  適用されます。カーネルに穴があれば、それは両者が共有している穴です。
+- **読み取り権限は書き込み権限より広い**（`--read-policy strict` を渡さない限り）。
+  渡した場合でも、コマンドの起動に必要なシステムディレクトリは読めます。完全な
+  秘密情報の隔離ではありません。
+- **プロキシのフィルタリングは接続先を絞るもので、TLS の中身は見ません。**
+  子プロセスがポートで待ち受けることも止めません。
+- **macOS と Linux のみ**で、しかも同一ではありません。どこが違うかは
+  [ネイティブの制限](#ネイティブの制限)にあります。それ以外の環境では、
+  制限なしで動くのではなく実行に失敗します。
+- **暗黙のマウントはありません。** `porta run` と `porta serve` は `-v` を
+  渡すまで一切のディレクトリを見ません。これは役に立つ方向の制限です。
+
+プラットフォームが表現できない規則は、緩めるのではなく実行を拒否します。
+この README の残りは、その原則に沿って書かれています。
 
 ## porta.toml
 
@@ -225,7 +268,11 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `--secret <KEY=VALUE>` | シークレットを環境変数として注入 |
 | `-v <path>` | ディレクトリをマウント (書き込み可) |
 | `-v <path>:ro` | ディレクトリをマウント (読み取り専用) |
-| `--allow-net <host:port>` | 外向き通信を許可 (繰り返し可) |
+| `--allow-net <host:port>` | 外向き TCP をポート単位で許可 (繰り返し可)。ホスト名は OS 層では効きません — それは `--proxy-allow` の仕事です |
+| `--proxy-allow <hosts>` | porta の CONNECT プロキシ経由にし、これらのホストだけ許可 |
+| `--proxy-deny <hosts>` | 同様に、これらのホストを拒否 |
+| `--proxy-audit <path>` | プロキシの判断を JSONL に追記 |
+| `--read-policy <open\|strict>` | `strict` で読み取りを mount とシステムディレクトリだけに限定 (既定は `open`) |
 | `--allow-exec <cmd,...>` | 特定コマンドを許可 (カンマ区切り) |
 | `--profile <name>` | ケイパビリティプロファイル: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | WASM の最大命令数 |
@@ -240,25 +287,34 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 
 Porta は 2 つのレベルで制限を強制します。
 
-1. **OS 層** (sandbox-exec) — プロセス単位のポートベースのネットワーク制御と
-   ファイルシステム制限。子プロセスからは迂回できません。
+1. **OS 層** — macOS は `sandbox-exec`、Linux は Landlock と seccomp フィルタ。
+   子プロセスが起動する前に適用されるので、子プロセス側からは外せません。
 2. **MCP 層** — アプリケーションレベルの host+port による URL フィルタリングと、
    `porta.exec` / `porta.http` 組み込みツールへのケイパビリティ検査。
 
-### ネイティブの制限 (macOS)
+### ネイティブの制限
 
-`sandbox-exec` で以下を強制します。
+表は1つにしました。2つのプラットフォームは違いますが、ほぼ同じ表を2つ読んでも
+どこが違うのかは分かりません。
 
-| 制御 | 挙動 |
-|---------|----------|
-| **FS 書き込み** | `-v` でマウントしたディレクトリと `/tmp` 以外は拒否 |
-| **FS 読み取り** | `~/.ssh` と `~/.gnupg` は拒否 (暗号鍵)。その他の読める host ファイルは引き続きアクセス可能。`-v` が制御するのは書き込み |
-| **ネットワーク** | 既定は開放。`--allow-net "*:443"` で HTTPS のみに制限 |
-| **読み取り専用** | `-v ./data:ro` → 読み取り可、書き込み拒否 |
+| 制御 | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
+|---|---|---|
+| **書き込み** | `-v` マウントと `/tmp` 以外は拒否 | `-v` マウントと `/tmp`、`/dev` 以外は拒否 |
+| **読み取り、既定** | `~/.ssh` と `~/.gnupg` を拒否、それ以外は読める | 制限なし |
+| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/proc` `/tmp` `/dev` |
+| **読み取り専用マウント** | `-v ./data:ro` → 読める、書けない | 同じ |
+| **ポート単位のネットワーク** | `--allow-net '*:443'` | 同じ。Landlock ABI 4 以上が必要 |
+| **ホスト単位のネットワーク** | `--proxy-allow` のみ。`--allow-net` では不可 | 同じ |
+| **プロキシモード** | プロファイルが強制 | Landlock が TCP ポートを、seccomp が残りを強制 |
 
-> 注: macOS の sandbox-exec はポートベースのフィルタリングのみ対応します。
-> ホストベースのフィルタリング (`api.example.com:443`) は、組み込みツールに対して
-> MCP 層で強制されます。
+`strict` ではホームディレクトリは全て閉じます。**コマンド自身もその対象**で、
+これらの外に置かれたコマンドは起動できません。`/opt` 配下のツールチェーンなら
+インストールディレクトリ全体を `-v` で渡す必要があり、porta は素の
+`Permission denied` ではなく、どの grant が足りないかを名指しします。
+
+Linux の Landlock は非特権で、名前空間も外部ランタイムも使いません。実行中の
+カーネルが表現できない規則を要求された場合は、緩めるのではなく実行を拒否します。
+部分的な強制を黙って受け入れることはありません。
 
 ### ホスト単位の HTTPS フィルタリング
 
@@ -266,17 +322,16 @@ Porta は 2 つのレベルで制限を強制します。
 porta run claude -v . --proxy-allow "api.anthropic.com,*.anthropic.com"
 ```
 
-または `porta.toml` に `allow = ["api.anthropic.com"]` を持つ `[proxy]` を追加します。
-`run` と `up` は同じポリシーを適用します。子プロセスはローカルの CONNECT プロキシ
-にしか接続できず、直接の TCP・UDP・Unix ソケットの送信は拒否されます。対応するのは
-ポート 443 の HTTPS CONNECT のみで、クライアントは `HTTPS_PROXY` を尊重する必要が
-あります。これは接続先を絞るもので、TLS の中身は見ません。拒否リストは明示的な
-許可リストより弱い仕組みです。資格情報ブローカーでもプライベートアドレスの
-フィルタでもありません。
+または `porta.toml` に `[proxy]` と `allow = ["api.anthropic.com"]` を書きます。
+`run` と `up` は同じポリシーを適用します。子プロセスはローカルの CONNECT
+プロキシにしか到達できず、直接の TCP・UDP・Unix ソケットによる送信は拒否されます。
+Linux では seccomp フィルタがそれを行い、`io_uring` も拒否します — リングは
+`socket(2)` を一度も呼ばずにソケットを作れるからです。
 
-ネイティブの制限は現状 **macOS** が必要です。Linux ではネイティブ実行は fail closed
-となり、WASM は引き続き利用できます。ネイティブの読み取り権限は書き込み権限より
-広く、コンテナのファイルシステムや完全な秘密情報の隔離ではありません。
+対応は HTTPS CONNECT のポート 443 のみで、クライアントが `HTTPS_PROXY` を
+尊重する必要があります。拒否リストは明示的な許可リストより弱い仕組みで、
+資格情報のブローカでもプライベートアドレスのフィルタでもありません。
+[制限事項](#制限事項)も参照してください。
 
 ### WASM サンドボックス
 
@@ -337,31 +392,36 @@ porta serve agent.wasm --profile full
 
 ## アーキテクチャ
 
-```
-porta
-├── cli.almd            — オプション、引数解析、ヘルプ
-├── mod.almd            — コマンドディスパッチ (エントリポイント)
-│
-├── engine.almd         — serve, run, validate, inspect
-├── dispatch.almd       — WASM インスタンスのライフサイクルとツールディスパッチ
-├── mcp.almd            — MCP プロトコル (JSON-RPC 2.0 / stdio)
-├── jsonrpc.almd        — 改行区切り JSON-RPC
-├── sandbox.almd        — ケイパビリティベースのセキュリティ
-│
-├── ops.almd            — デーモン管理 (ps/stop/kill/logs/rm)
-├── build.almd          — マニフェスト生成
-├── project.almd        — porta.toml (up/init)
-│
-├── wasm_rt.almd        — Wasmtime ブリッジとランタイム関数
-├── config.almd         — porta.toml パーサ
-├── manifest.almd       — manifest.json パーサ
-├── observability.almd  — 実行メトリクス
-├── util.almd           — CLI ユーティリティ
-│
-└── wasm/
-    ├── binary.almd     — WASM バイナリパーサ
-    └── wasi.almd       — WASI Preview 1 ホスト関数
-```
+2つの側面があります。Almide がポリシーを決め、Rust がそれを適用してカーネルと
+話します。
+
+**`src/` — Almide.** CLI、MCP プロトコル、ケイパビリティ検査、そして実行に何を
+許すかの判断。
+
+| | |
+|---|---|
+| `mod.almd`, `cli.almd`, `help.almd` | コマンド振り分け、オプション、ヘルプ |
+| `engine.almd`, `dispatch.almd` | serve / run / validate / inspect、WASM インスタンスのライフサイクル |
+| `mcp.almd`, `mcp_builtins.almd`, `mcp_content.almd`, `jsonrpc.almd` | MCP セッション、`porta.exec` と `porta.http`、resources と prompts、フレーミング |
+| `sandbox.almd`, `wasm_imports.almd` | ケイパビリティ集合と、それが照合するインポートの形 |
+| `agent.almd`, `proxy.almd` | WASM エージェントとチーム、CONNECT プロキシの設定 |
+| `config.almd`, `manifest.almd`, `project.almd`, `build.almd` | porta.toml、manifest.json、`init` / `up` |
+| `ops.almd`, `observability.almd`, `util.almd` | デーモン、メトリクス、補助 |
+| `wasm_rt.almd` | Rust 側への `@extern` すべて |
+
+**`native/` — Rust.** Wasmtime、OS による強制、モデル資格情報を保持するブローカ。
+
+| | |
+|---|---|
+| `wasmtime_bridge.rs` | WASM インスタンスのライフサイクルと FFI 面 |
+| `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock_policy.rs`, `landlock.rs`, `seccomp.rs` | 1つのサンドボックス要求、macOS プロファイル、Linux ruleset、Landlock が届かない出口 |
+| `http_proxy.rs`, `proxy_audit.rs` | ループバック CONNECT プロキシと判断の記録 |
+| `agent_runtime.rs`, `agent_journal.rs`, `agent_mcp.rs` | ブローカ、永続的な実行記録、明示的に許可されたリモート MCP 呼び出し |
+| `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | 検査済みの HTTP リクエスト、プロセス補助、モジュール検査 |
+
+porta は自前の WASM パーサを持ちません。モジュールは、それを実行するエンジンを
+通して読みます。そのため `serve` と `validate` と `inspect` が同じモジュールに
+ついて食い違うことはありません。
 
 ## ソースからのビルド
 
@@ -378,14 +438,6 @@ cp target/porta ~/.local/bin/
 `v0.63.0-rc1` (`almide 0.63.0` と表示) で、インストーラはそのリリースをピン留めし、
 公開されている SHA-256 を検証します。最終タグが公開されたら
 `ALMIDE_RELEASE_TAG=v0.63.0 bash scripts/install-almide.sh` で選択してください。
-
-## 言語サポート
-
-| ランタイム | 状態 | 例 |
-|---------|--------|---------|
-| Almide → WASM | 完全対応 | `porta run agent.wasm` |
-| Python 3.14 | WASM 内で動作 | `porta run python.wasm -- script.py` |
-| ネイティブコマンド | OS による制限 | `porta run claude -- --print "hi"` |
 
 ## ライセンス
 

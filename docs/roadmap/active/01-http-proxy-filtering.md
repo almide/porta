@@ -65,11 +65,13 @@ allow = ["api.anthropic.com", "*.anthropic.com"]
 ## Known limitations
 
 - Egress is restricted to the loopback proxy endpoint; UDP and Unix-socket egress are denied.
-- macOS only for the supervised exec path. Linux support tracked separately.
+- macOS and Linux. macOS expresses the whole policy in the `sandbox-exec` profile; Linux needs Landlock for the TCP port and a seccomp filter for everything Landlock cannot reach, and refuses the run if the kernel will not take either. See `active/03-linux-native-enforcement.md`.
 - Tools that ignore `HTTPS_PROXY` fail (by design — raw-socket outbound is denied by the sandbox).
+- Ingress is not restricted: the child may still listen on a port.
 
 ## Files
 - `native/wasmtime_bridge.rs` — `wt_proxy_start`, `wt_proxy_stop`, `wt_exec_supervised`
+- `native/seccomp.rs` — the egress channels Landlock cannot express, on Linux
 - `src/wasm_rt.almd` — extern declarations for the above
 - `src/proxy.almd` — config type, start/stop wrappers, endpoint helpers
 - `src/engine.almd` — `run_native_proxied` branch in `run_native`
@@ -79,6 +81,6 @@ allow = ["api.anthropic.com", "*.anthropic.com"]
 
 ## Next iterations
 
-- v2: Linux support, bounded connections, and private-address policy
+- v2: bounded connections and private-address policy (Linux support landed with the seccomp filter)
 - v3: credential broker — proxy injects scoped tokens so the agent never holds secrets
 - v4: method/path-level policy (may subsume into credential scoping)

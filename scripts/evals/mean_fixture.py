@@ -15,6 +15,40 @@ def number(value):
     return value
 
 
+def is_builtin_call(node):
+    """A bare `len(x)` or `sum(x)`, which are the only calls this fixture allows."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in ('len', 'sum') and len(node.args) == 1 and not node.keywords)
+
+
+def builtin_call(node, values, budget):
+    arg = expression(node.args[0], values, budget)
+    if not isinstance(arg, list):
+        raise ValueError('len/sum requires the input list')
+    return number((len if node.func.id == 'len' else sum)(arg))
+
+
+def unary(node, values, budget):
+    value = expression(node.operand, values, budget)
+    if isinstance(node.op, ast.Not):
+        return not value
+    if isinstance(node.op, ast.USub):
+        return number(-number(value))
+    raise ValueError('unsupported unary operator in bounded function fixture')
+
+
+def comparison(node, values, budget):
+    left = expression(node.left, values, budget)
+    for op, comparator in zip(node.ops, node.comparators):
+        if type(op) not in COMPARE:
+            raise ValueError('unsupported comparison')
+        right = expression(comparator, values, budget)
+        if not COMPARE[type(op)](left, right):
+            return False
+        left = right
+    return True
+
+
 def expression(node, values, budget):
     budget[0] -= 1
     if budget[0] < 0:
@@ -23,34 +57,19 @@ def expression(node, values, budget):
         return number(node.value)
     if isinstance(node, ast.Name) and node.id == 'values':
         return values
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ('len', 'sum') and len(node.args) == 1 and not node.keywords:
-        arg = expression(node.args[0], values, budget)
-        if not isinstance(arg, list):
-            raise ValueError('len/sum requires the input list')
-        return number((len if node.func.id == 'len' else sum)(arg))
+    if is_builtin_call(node):
+        return builtin_call(node, values, budget)
     if isinstance(node, ast.BinOp) and type(node.op) in BINARY:
         left = number(expression(node.left, values, budget))
         right = number(expression(node.right, values, budget))
         return number(BINARY[type(node.op)](left, right))
     if isinstance(node, ast.UnaryOp):
-        value = expression(node.operand, values, budget)
-        if isinstance(node.op, ast.Not):
-            return not value
-        if isinstance(node.op, ast.USub):
-            return number(-number(value))
+        return unary(node, values, budget)
     if isinstance(node, ast.IfExp):
         branch = node.body if expression(node.test, values, budget) else node.orelse
         return expression(branch, values, budget)
     if isinstance(node, ast.Compare):
-        left = expression(node.left, values, budget)
-        for op, comparator in zip(node.ops, node.comparators):
-            if type(op) not in COMPARE:
-                raise ValueError('unsupported comparison')
-            right = expression(comparator, values, budget)
-            if not COMPARE[type(op)](left, right):
-                return False
-            left = right
-        return True
+        return comparison(node, values, budget)
     raise ValueError('unsupported expression in bounded function fixture')
 
 
@@ -92,7 +111,8 @@ def check_python(source):
             try:
                 returned, result = statements(fn.body, values, [256])
                 outcomes.append(returned and type(result) in NUMERIC and result == expected)
-            except Exception:
+            except (ArithmeticError, AttributeError, IndexError, KeyError,
+                    RecursionError, TypeError, ValueError):
                 outcomes.append(False)
         return {'passed': sum(outcomes), 'total': len(cases)}
     except Exception as error:

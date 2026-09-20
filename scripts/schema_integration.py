@@ -38,7 +38,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 def toml(value):

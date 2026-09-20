@@ -1,13 +1,18 @@
 import value
 // MCP Protocol State Machine
+//
+// This file is the session: what a request is routed to, and what the reply
+// does to the server. The work behind a method lives beside it —
+// `mcp_builtins` for the tools porta serves itself, `mcp_content` for
+// resources and prompts.
 
 import json
 import self.jsonrpc
 import self.manifest
 import self.dispatch
-import self.sandbox
 import self.observability
-import self.wasm_rt
+import self.mcp_builtins
+import self.mcp_content
 
 type McpState =
   | Initializing
@@ -21,12 +26,24 @@ type McpServer = {
   metrics: observability.Metrics,
 }
 
+// What every handler answers: the session as it now stands, and the reply to
+// write, if the request called for one.
+type Reply = { server: McpServer, response: Option[String] }
+
 fn new_server(m: manifest.Manifest, config: dispatch.InstanceConfig) -> McpServer =
   {state: Initializing, manifest: m, config: config, metrics: observability.empty_metrics()}
 
+// A reply that leaves the session untouched, which is every method but
+// `initialize` and a tool call.
+fn answer(server: McpServer, response: String) -> Result[Reply, String] =
+  ok({server: server, response: some(response)})
+
+fn refuse(server: McpServer, req: jsonrpc.JsonRpcRequest, code: Int, reason: String) -> Result[Reply, String] =
+  answer(server, jsonrpc.make_error_response(req.id, code, reason))
+
 // --- Handle a single request ---
 
-effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] =
+effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] =
   if string.starts_with(req.method, "notifications/") and req.method != "notifications/initialized" then
     ok({server: server, response: none})
   else match req.method {
@@ -34,15 +51,15 @@ effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Resu
     "notifications/initialized" => ok({server: {...server, state: Ready}, response: none}),
     "tools/list" => handle_tools_list(server, req),
     "tools/call" => handle_tools_call(server, req),
-    "resources/list" => handle_resources_list(server, req),
-    "resources/read" => handle_resources_read(server, req),
-    "prompts/list" => handle_prompts_list(server, req),
-    "prompts/get" => handle_prompts_get(server, req),
-    "ping" => ok({server: server, response: some(jsonrpc.make_response(req.id, value.object([])))}),
-    _ => ok({server: server, response: some(jsonrpc.make_error_response(req.id, -32601, "Method not found: ${req.method}"))}),
+    "resources/list" => answer(server, mcp_content.resources_list(server.manifest, req)),
+    "resources/read" => answer(server, mcp_content.resources_read(server.manifest, server.config, req)!),
+    "prompts/list" => answer(server, mcp_content.prompts_list(server.manifest, req)),
+    "prompts/get" => answer(server, mcp_content.prompts_get(server.manifest, server.config, req)!),
+    "ping" => answer(server, jsonrpc.make_response(req.id, value.object([]))),
+    _ => refuse(server, req, -32601, "Method not found: ${req.method}"),
   }
 
-effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
   let result = value.object([
     ("protocolVersion", value.str("2025-03-26")),
     ("serverInfo", value.object([
@@ -55,137 +72,65 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
       ("prompts", value.object([("listChanged", value.bool(false))])),
     ])),
   ])
-  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+  answer(server, jsonrpc.make_response(req.id, result))
 }
 
-effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let agent_tools = server.manifest.tools |> list.map((tool) =>
+effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
+  let module_tools = server.manifest.tools |> list.map((tool) =>
     value.object([
       ("name", value.str(tool.name)),
       ("description", value.str(tool.description)),
       ("inputSchema", tool.input_schema),
     ])
   )
-  let builtin_tools = [
-    value.object([
-      ("name", value.str("porta.exec")),
-      ("description", value.str("Execute a command with filesystem and network restrictions")),
-      ("inputSchema", value.object([
-        ("type", value.str("object")),
-        ("properties", value.object([
-          ("command", value.object([("type", value.str("string")), ("description", value.str("Command to execute"))])),
-          ("args", value.object([("type", value.str("array")), ("items", value.object([("type", value.str("string"))])), ("description", value.str("Command arguments"))])),
-          ("cwd", value.object([("type", value.str("string")), ("description", value.str("Working directory"))])),
-        ])),
-        ("required", value.array([value.str("command")])),
-      ])),
-    ]),
-    value.object([
-      ("name", value.str("porta.http")),
-      ("description", value.str("Make an HTTP request")),
-      ("inputSchema", value.object([
-        ("type", value.str("object")),
-        ("properties", value.object([
-          ("method", value.object([("type", value.str("string")), ("description", value.str("HTTP method: GET, POST, PUT, DELETE"))])),
-          ("url", value.object([("type", value.str("string")), ("description", value.str("Request URL"))])),
-          ("headers", value.object([("type", value.str("object")), ("description", value.str("Request headers"))])),
-          ("body", value.object([("type", value.str("string")), ("description", value.str("Request body"))])),
-        ])),
-        ("required", value.array([value.str("method"), value.str("url")])),
-      ])),
-    ]),
-  ]
-  let all_tools = agent_tools + builtin_tools
-  let result = value.object([("tools", value.array(all_tools))])
-  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+  let result = value.object([("tools", value.array(module_tools + mcp_builtins.declarations()))])
+  answer(server, jsonrpc.make_response(req.id, result))
 }
 
-effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
+// --- Tool calls ---
+
+effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
   let tool_name = json.get_string(req.params, "name") ?? ""
   let arguments = value.field(req.params, "arguments") ?? value.object([])
-
-  // Built-in tools with capability enforcement
-  if tool_name == "porta.exec" then {
-    if not sandbox.has_capability(server.config.capabilities, sandbox.CapExec) then {
-      let resp = jsonrpc.make_error_response(req.id, -32602, "porta.exec denied: 'exec' capability not granted")
-      ok({server: server, response: some(resp)})
-    }
-    else {
-      let cmd = json.get_string(arguments, "command") ?? ""
-      if list.len(server.config.allowed_commands) > 0 and not list.any(server.config.allowed_commands, (c) => c == cmd) then {
-        let resp = jsonrpc.make_error_response(req.id, -32602, "porta.exec denied: command '${cmd}' not in allowed list")
-        ok({server: server, response: some(resp)})
-      }
-      else {
-        let result = handle_builtin_exec(server.config, arguments)!
-        ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
-      }
-    }
+  match mcp_builtins.builtin(tool_name, server.config) {
+    some(tool) => call_builtin(server, req, tool, arguments),
+    none => call_module_tool(server, req, tool_name, arguments),
   }
-  else if tool_name == "porta.http" then {
-    if not sandbox.has_capability(server.config.capabilities, sandbox.CapNet) then {
-      let resp = jsonrpc.make_error_response(req.id, -32602, "porta.http denied: 'net' capability not granted")
-      ok({server: server, response: some(resp)})
-    }
-    else {
-      let url = json.get_string(arguments, "url") ?? ""
-      if list.len(server.config.allowed_hosts) > 0 and not is_host_allowed(url, server.config.allowed_hosts) then {
-        let resp = jsonrpc.make_error_response(req.id, -32602, "porta.http denied: host not in allowed list")
-        ok({server: server, response: some(resp)})
-      }
-      else {
-        let result = handle_builtin_http(arguments)!
-        ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
-      }
-    }
-  }
-  else {
+}
 
-  let tool = server.manifest.tools |> list.find((t) => t.name == tool_name)
-  match tool {
+// A builtin runs only once both of its guards pass; which guards those are is
+// the builtin's own declaration, not this call site's business.
+effect fn call_builtin(server: McpServer, req: jsonrpc.JsonRpcRequest, tool: mcp_builtins.Builtin, arguments: Value) -> Result[Reply, String] =
+  match mcp_builtins.refusal(tool, server.config, arguments) {
+    some(reason) => refuse(server, req, -32602, reason),
     none => {
-      let avail = server.manifest.tools |> list.map((t) => t.name) |> string.join(", ")
-      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown tool: '${tool_name}'. Available tools: ${avail}")
-      ok({server: server, response: some(resp)})
+      let result = mcp_builtins.run(tool, server.config, arguments)!
+      answer(server, jsonrpc.make_response(req.id, result))
+    },
+  }
+
+effect fn call_module_tool(server: McpServer, req: jsonrpc.JsonRpcRequest, tool_name: String, arguments: Value) -> Result[Reply, String] =
+  match server.manifest.tools |> list.find((t) => t.name == tool_name) {
+    none => {
+      let available = server.manifest.tools |> list.map((t) => t.name) |> string.join(", ")
+      refuse(server, req, -32602, "Unknown tool: '${tool_name}'. Available tools: ${available}")
     },
     some(_t) => {
-      let args_json = json.stringify(arguments)
-      let tool_result = dispatch.dispatch_tool(server.config, tool_name, args_json)!
-
-      // Diagnostic log to stderr
+      let tool_result = dispatch.dispatch_tool(server.config, tool_name, json.stringify(arguments))!
       let success = match tool_result.exit_code { some(c) => c == 0, none => true }
+      // Diagnostic log to stderr
       eprintln(observability.format_tool_log(tool_name, tool_result.metrics.steps, tool_result.metrics.memory_pages, success))
-      let updated_metrics = observability.merge_tool_call(server.metrics, tool_result.metrics.steps, tool_result.metrics.memory_pages)
-      let server = {...server, metrics: updated_metrics}
-
+      let metrics = observability.merge_tool_call(server.metrics, tool_result.metrics.steps, tool_result.metrics.memory_pages)
       let result = tool_response(tool_result.stdout, success)
-      ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
+      ok({server: {...server, metrics: metrics}, response: some(jsonrpc.make_response(req.id, result))})
     },
   }
-  } // else (not builtin)
-}
 
 // Legacy single-key Result envelopes are unwrapped. Multi-field results must
 // remain intact: {ok:true,json:"..."} carries more than its status flag.
 fn tool_response(output: String, success: Bool) -> Value = {
   let rendered = match json.parse(output) {
-    ok(v) => {
-      let keys = value.keys(v)
-      let ok_value = value.field(v, "ok")
-      let err_value = value.field(v, "err")
-      if list.len(keys) == 1 then match ok_value {
-        ok(ov) => {text: value.as_string(ov) ?? json.stringify(ov), failed: not success},
-        err(_) => match err_value {
-          ok(ev) => {text: value.as_string(ev) ?? json.stringify(ev), failed: true},
-          err(_) => {text: output, failed: not success},
-        },
-      }
-      else {
-        let status_failed = json.stringify(ok_value ?? value.null()) == "false"
-        let has_error = match err_value { ok(_) => true, err(_) => false }
-        {text: output, failed: not success or status_failed or has_error}
-      }
-    },
+    ok(v) => rendered_envelope(v, output, success),
     err(_) => {text: output, failed: not success},
   }
   value.object([
@@ -196,157 +141,19 @@ fn tool_response(output: String, success: Bool) -> Value = {
   ])
 }
 
-// --- Host validation ---
-
-fn is_host_allowed(url: String, allowed: List[String]) -> Bool =
-  wasm_rt.wt_is_host_allowed(url, json.stringify(value.array(allowed |> list.map(value.str))))
-
-// --- Built-in tools ---
-
-effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] = {
-  let cmd = json.get_string(args, "command") ?? ""
-  let cmd_args = json.get_array(args, "args") ?? []
-  let args_strs = cmd_args |> list.filter_map((a) => match value.as_string(a) { ok(s) => some(s), err(_) => none })
-  let cwd = json.get_string(args, "cwd") ?? "."
-  let args_json = json.stringify(value.array(args_strs |> list.map(value.str)))
-  let dirs = config.preopen_dirs
-  let dirs_json = json.stringify(value.array(dirs |> list.map(value.str)))
-  let net_json = json.stringify(value.array(config.allowed_hosts |> list.map(value.str)))
-  let all_env = config.env_vars + config.secrets
-  let env_pairs = all_env |> list.map((e) => value.array([value.str(e.key), value.str(e.val)]))
-  let env_json = json.stringify(value.array(env_pairs))
-  let result_json = wasm_rt.wt_exec_sandboxed(cmd, args_json, dirs_json, net_json, env_json, cwd)!
-  let parsed = json.parse(result_json)
-  ok(match parsed {
-    ok(v) => {
-      let stdout = json.get_string(v, "stdout") ?? ""
-      let stderr = json.get_string(v, "stderr") ?? ""
-      let error = json.get_string(v, "error") ?? ""
-      let output = if error != "" then error
-        else if stderr != "" then stdout + "\n--- stderr ---\n" + stderr
-        else stdout
-      value.object([
-        ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(output))])])),
-        ("isError", value.bool(error != "")),
-      ])
-    },
-    err(_) => value.object([
-      ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(result_json))])])),
-      ("isError", value.bool(true)),
-    ]),
-  })
-}
-
-effect fn handle_builtin_http(args: Value) -> Result[Value, String] = {
-  let method = json.get_string(args, "method") ?? "GET"
-  let url = json.get_string(args, "url") ?? ""
-  let headers = value.field(args, "headers") ?? value.object([])
-  let body = json.get_string(args, "body") ?? ""
-  let headers_json = json.stringify(headers)
-  let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)!
-  let parsed = json.parse(result_json)
-  ok(match parsed {
-    ok(v) => {
-      let body_text = json.get_string(v, "body") ?? ""
-      let error = json.get_string(v, "error") ?? ""
-      let output = if error != "" then error else body_text
-      value.object([
-        ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(output))])])),
-        ("isError", value.bool(error != "")),
-      ])
-    },
-    err(_) => value.object([
-      ("content", value.array([value.object([("type", value.str("text")), ("text", value.str(result_json))])])),
-      ("isError", value.bool(true)),
-    ]),
-  })
-}
-
-// --- Resources ---
-
-effect fn handle_resources_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let resources_json = server.manifest.resources |> list.map((r) =>
-    value.object([
-      ("uri", value.str(r.uri)),
-      ("name", value.str(r.name)),
-      ("description", value.str(r.description)),
-      ("mimeType", value.str(r.mime_type)),
-    ])
-  )
-  let result = value.object([("resources", value.array(resources_json))])
-  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
-}
-
-effect fn handle_resources_read(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let uri = json.get_string(req.params, "uri") ?? ""
-  let resource = server.manifest.resources |> list.find((r) => r.uri == uri)
-  match resource {
-    none => {
-      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown resource: '${uri}'")
-      ok({server: server, response: some(resp)})
-    },
-    some(r) => {
-      let args_json = json.stringify(value.object([("uri", value.str(uri))]))
-      let tool_result = dispatch.dispatch_tool(server.config, "_resource_read", args_json)!
-      let content = value.object([
-        ("contents", value.array([
-          value.object([
-            ("uri", value.str(uri)),
-            ("mimeType", value.str(r.mime_type)),
-            ("text", value.str(tool_result.stdout)),
-          ]),
-        ])),
-      ])
-      ok({server: server, response: some(jsonrpc.make_response(req.id, content))})
-    },
+fn rendered_envelope(v: Value, output: String, success: Bool) -> {text: String, failed: Bool} = {
+  let ok_value = value.field(v, "ok")
+  let err_value = value.field(v, "err")
+  if list.len(value.keys(v)) != 1 then {
+    let status_failed = json.stringify(ok_value ?? value.null()) == "false"
+    let has_error = match err_value { ok(_) => true, err(_) => false }
+    {text: output, failed: not success or status_failed or has_error}
   }
-}
-
-// --- Prompts ---
-
-effect fn handle_prompts_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let prompts_json = server.manifest.prompts |> list.map((p) => {
-    let args_json = p.arguments |> list.map((a) =>
-      value.object([
-        ("name", value.str(a.name)),
-        ("description", value.str(a.description)),
-        ("required", value.bool(a.required)),
-      ])
-    )
-    value.object([
-      ("name", value.str(p.name)),
-      ("description", value.str(p.description)),
-      ("arguments", value.array(args_json)),
-    ])
-  })
-  let result = value.object([("prompts", value.array(prompts_json))])
-  ok({server: server, response: some(jsonrpc.make_response(req.id, result))})
-}
-
-effect fn handle_prompts_get(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[{server: McpServer, response: Option[String]}, String] = {
-  let name = json.get_string(req.params, "name") ?? ""
-  let prompt = server.manifest.prompts |> list.find((p) => p.name == name)
-  match prompt {
-    none => {
-      let resp = jsonrpc.make_error_response(req.id, -32602, "Unknown prompt: '${name}'")
-      ok({server: server, response: some(resp)})
-    },
-    some(_p) => {
-      let arguments = value.field(req.params, "arguments") ?? value.object([])
-      let args_json = json.stringify(value.object([("prompt", value.str(name)), ("arguments", arguments)]))
-      let tool_result = dispatch.dispatch_tool(server.config, "_prompt_get", args_json)!
-      let content = value.object([
-        ("messages", value.array([
-          value.object([
-            ("role", value.str("user")),
-            ("content", value.object([
-              ("type", value.str("text")),
-              ("text", value.str(tool_result.stdout)),
-            ])),
-          ]),
-        ])),
-      ])
-      ok({server: server, response: some(jsonrpc.make_response(req.id, content))})
+  else match ok_value {
+    ok(ov) => {text: value.as_string(ov) ?? json.stringify(ov), failed: not success},
+    err(_) => match err_value {
+      ok(ev) => {text: value.as_string(ev) ?? json.stringify(ev), failed: true},
+      err(_) => {text: output, failed: not success},
     },
   }
 }

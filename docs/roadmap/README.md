@@ -4,12 +4,13 @@
 
 ## Active
 
-2 items
+3 items
 
 | Item | Description |
 |------|-------------|
 | [HTTP Proxy Filtering](active/01-http-proxy-filtering.md) | Host-level HTTP filtering via local CONNECT proxy |
 | [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
+| [Linux Native Enforcement](active/03-linux-native-enforcement.md) | Enforce native command restrictions on Linux, not just macOS |
 
 ## On Hold
 
@@ -28,13 +29,14 @@
 
 ## Done
 
-19 items
+20 items
 
 <details>
-<summary>Show all 19 completed items</summary>
+<summary>Show all 20 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-09-20 | [Code Quality Grade](done/04-code-quality-grade.md) | Raise the codopsy project grade from B to A |
 | 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
 | 2026-04-08 | [Sandbox Honesty](done/sandbox-honesty.md) | Align native sandbox messaging with actual enforcement level |
 | 2026-04-08 | [Run Mode Manifest Capabilities](done/run-manifest-caps.md) | Make run mode respect manifest capabilities like serve does |

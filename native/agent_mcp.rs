@@ -18,15 +18,22 @@ pub struct Tool {
     #[serde(default)] pub token_env: Option<String>,
 }
 
+/// A remote endpoint carries no credential of its own — the host supplies that
+/// — and is plaintext only when it is loopback.
+fn check_endpoint(endpoint: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(endpoint).map_err(|_| "invalid MCP endpoint")?;
+    let local = url.host_str().is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
+    if !(url.scheme() == "https" || url.scheme() == "http" && local)
+        || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some() {
+        return Err("MCP endpoint requires HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
+    }
+    Ok(())
+}
+
 impl Tool {
     pub fn check(&self) -> Result<(), String> {
-        let url = reqwest::Url::parse(&self.endpoint).map_err(|_| "invalid MCP endpoint")?;
-        let local = url.host_str().is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
-        if !(url.scheme() == "https" || url.scheme() == "http" && local)
-            || !url.username().is_empty() || url.password().is_some()
-            || url.query().is_some() || url.fragment().is_some() {
-            return Err("MCP endpoint requires HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
-        }
+        check_endpoint(&self.endpoint)?;
         if self.remote_name.is_empty() || self.remote_name.len() > 128 || !self.input_schema.is_object() {
             return Err("MCP remote_name and object input_schema are required".into());
         }
@@ -126,14 +133,25 @@ fn sse_line(reader: &mut impl BufRead, total: &mut u64, skip_lf: &mut bool) -> R
 fn read_response(response: Response, id: u64) -> Result<Value, String> {
     let mime = response.headers().get("Content-Type").and_then(|h| h.to_str().ok())
         .unwrap_or("").split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-    if mime == "application/json" {
-        let mut bytes = Vec::new();
-        response.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|_| "MCP response read failed (connection or timeout)")?;
-        if bytes.len() as u64 > MAX_BYTES { return Err("MCP response exceeds 1 MiB".into()); }
-        let message = serde_json::from_slice(&bytes).map_err(|_| "MCP returned invalid JSON")?;
-        return envelope(message, id)?.ok_or_else(|| "MCP response did not contain a result".into());
+    match mime.as_str() {
+        "application/json" => read_json_result(response, id),
+        "text/event-stream" => read_streamed_result(response, id),
+        _ => Err("unsupported MCP response content type".into()),
     }
-    if mime != "text/event-stream" { return Err("unsupported MCP response content type".into()); }
+}
+
+/// A whole JSON reply, bounded so an endless body cannot exhaust this process.
+fn read_json_result(response: Response, id: u64) -> Result<Value, String> {
+    let mut bytes = Vec::new();
+    response.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|_| "MCP response read failed (connection or timeout)")?;
+    if bytes.len() as u64 > MAX_BYTES { return Err("MCP response exceeds 1 MiB".into()); }
+    let message = serde_json::from_slice(&bytes).map_err(|_| "MCP returned invalid JSON")?;
+    envelope(message, id)?.ok_or_else(|| "MCP response did not contain a result".into())
+}
+
+/// The first result an SSE reply carries. A stream that ends without one leaves
+/// the outcome uncertain, which is reported rather than retried.
+fn read_streamed_result(response: Response, id: u64) -> Result<Value, String> {
     let mut reader = BufReader::new(response.take(MAX_BYTES + 1));
     let mut total = 0;
     let mut events = 0;
@@ -144,21 +162,33 @@ fn read_response(response: Response, id: u64) -> Result<Value, String> {
         let line = sse_line(&mut reader, &mut total, &mut skip_lf)?
             .ok_or("MCP stream ended without a result; operation will not be retried")?;
         let line = if first_line { first_line = false; line.strip_prefix('\u{feff}').unwrap_or(&line) } else { &line };
-        if line.is_empty() {
-            events += 1;
-            if events > 128 { return Err("MCP stream exceeds 128 events".into()); }
-            if !data.trim().is_empty() {
-                let message = serde_json::from_str(&data).map_err(|_| "MCP stream contains invalid JSON")?;
-                if let Some(result) = envelope(message, id)? { return Ok(result); }
-            }
-            data.clear();
-        } else if let Some(value) = line.strip_prefix("data:") {
-            if !data.is_empty() { data.push('\n'); }
-            data.push_str(value.strip_prefix(' ').unwrap_or(value));
-        } else if line == "data" {
-            data.push('\n');
+        if !line.is_empty() {
+            append_field(&mut data, line);
+            continue;
         }
+        events += 1;
+        if events > 128 { return Err("MCP stream exceeds 128 events".into()); }
+        if let Some(result) = event_result(&data, id)? { return Ok(result); }
+        data.clear();
     }
+}
+
+/// Folds one field line into the event being assembled. Fields the protocol
+/// defines but this client does not use are ignored.
+fn append_field(data: &mut String, line: &str) {
+    if let Some(value) = line.strip_prefix("data:") {
+        if !data.is_empty() { data.push('\n'); }
+        data.push_str(value.strip_prefix(' ').unwrap_or(value));
+    } else if line == "data" {
+        data.push('\n');
+    }
+}
+
+/// The result an assembled event carries, if it carries one at all.
+fn event_result(data: &str, id: u64) -> Result<Option<Value>, String> {
+    if data.trim().is_empty() { return Ok(None); }
+    let message = serde_json::from_str(data).map_err(|_| "MCP stream contains invalid JSON")?;
+    envelope(message, id)
 }
 
 pub fn call(tool: &Tool, arguments: &Value, token: Option<String>, timeout: Duration) -> Result<Value, String> {

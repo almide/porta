@@ -8,19 +8,20 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 from wasm_fixtures import no_environment_guest
 
 porta, agent, tool, probe = map(lambda p: str(pathlib.Path(p).resolve()), sys.argv[1:5])
 requests = []
 mode = 'add'
-empty_remaining = 0
 refusal = False
+# Replies the fixture model still owes; the handler counts them down.
+state = SimpleNamespace(empty_remaining=0)
 secret = 'porta-fixture-secret-never-in-wasm'
 
 class Model(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global empty_remaining
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append((body, self.headers.get('Authorization')))
         messages = body['messages']
@@ -40,8 +41,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         else:
             # Completion is derived from the WASM tool's actual result.
             message = {'role': 'assistant', 'content': results[-1]['content']}
-        if empty_remaining > 0:
-            empty_remaining -= 1
+        if state.empty_remaining > 0:
+            state.empty_remaining -= 1
             message = {'role': 'assistant', 'content': '  \n', 'tool_calls': []}
         if refusal:
             if refusal == 'with_tools':
@@ -54,7 +55,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Model)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -106,24 +107,25 @@ description = "Fixture WASM tool"
         assert requests[0][0]['tools'][0]['function']['name'] == 'add'
         print('PASS: real WASM model -> tool -> model -> completion; host-only credential')
 
-        for empty_remaining in (1, 2):
+        for empties in (1, 2):
+            state.empty_remaining = empties
             before = len(requests)
-            expected = empty_remaining + 2
+            expected = empties + 2
             result = run(config())
             assert result.returncode == 0 and json.loads(result.stdout) == {'ok': '42'}, result
             assert len(requests) - before == expected
             assert all(message.get('content', '').strip() for body, _ in requests[before:] for message in body['messages'] if message.get('role') == 'user')
-        empty_remaining = 10
+        state.empty_remaining = 10
         before = len(requests)
         result = run(config())
         assert result.returncode != 0 and 'after two recovery attempts' in result.stderr, result
         assert len(requests) - before == 3
-        empty_remaining = 1
+        state.empty_remaining = 1
         before = len(requests)
         result = run(config(limits='max_model_calls = 1'))
         assert result.returncode != 0 and 'model call budget exceeded' in result.stderr, result
         assert len(requests) - before == 1
-        empty_remaining = 0
+        state.empty_remaining = 0
         refusal = True
         before = len(requests)
         result = run(config())

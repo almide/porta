@@ -79,46 +79,46 @@ test "wt_inspect: invalid path" {
 // --- build_sandbox_profile ---
 
 test "build_sandbox_profile: no dirs and no net means minimal sandbox" {
-  let profile = wasm_rt.build_sandbox_profile([], [])
+  let profile = wasm_rt.build_sandbox_profile([], [], "open")
   assert(string.contains(profile, "(deny file-write*)"))
   assert(not string.contains(profile, "(deny network-outbound)"))
   assert(string.contains(profile, ".ssh"))
 }
 
 test "build_sandbox_profile: dirs specified enables write restrictions" {
-  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  let profile = wasm_rt.build_sandbox_profile(["."], [], "open")
   assert(string.contains(profile, "(deny file-write*)"))
 }
 
 test "build_sandbox_profile: allow_net restricts to listed ports" {
-  let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"])
+  let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"], "open")
   assert(string.contains(profile, "(deny network-outbound)"))
   assert(not string.contains(profile, "(allow network-outbound (local udp))"))
 }
 
 test "build_sandbox_profile: allowed_net adds port-based TCP rules" {
   // sandbox-exec only supports * or localhost as host — port filtering only
-  let profile = wasm_rt.build_sandbox_profile(["."], ["api.example.com:443"])
+  let profile = wasm_rt.build_sandbox_profile(["."], ["api.example.com:443"], "open")
   assert(string.contains(profile, "(allow network-outbound (remote tcp \"*:443\"))"))
 }
 
 test "build_sandbox_profile: wildcard port" {
-  let profile = wasm_rt.build_sandbox_profile(["."], ["*:*"])
+  let profile = wasm_rt.build_sandbox_profile(["."], ["*:*"], "open")
   assert(string.contains(profile, "(allow network-outbound (remote tcp \"*:*\"))"))
 }
 
 test "build_sandbox_profile: :ro mount has no file-write rule" {
-  let profile = wasm_rt.build_sandbox_profile(["/workspace:ro"], [])
+  let profile = wasm_rt.build_sandbox_profile(["/workspace:ro"], [], "open")
   assert(not string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
 }
 
 test "build_sandbox_profile: writable mount has file-write rule" {
-  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [])
+  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [], "open")
   assert(string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
 }
 
 test "build_sandbox_profile: cryptographic keys denied" {
-  let profile = wasm_rt.build_sandbox_profile(["."], [])
+  let profile = wasm_rt.build_sandbox_profile(["."], [], "open")
   assert(string.contains(profile, ".ssh"))
   assert(string.contains(profile, ".gnupg"))
   assert(not string.contains(profile, ".aws"))
@@ -140,7 +140,7 @@ test "wt_home_dir: returns non-empty" {
 }
 
 test "proxy profile restricts egress to loopback without UDP or unix sockets" {
-  let profile = wasm_rt.build_sandbox_profile([], ["127.0.0.1:42123"])
+  let profile = wasm_rt.build_sandbox_profile([], ["127.0.0.1:42123"], "open")
   assert(string.contains(profile, "remote tcp \"localhost:42123\""))
   assert(not string.contains(profile, "*:42123"))
   assert(not string.contains(profile, "local udp"))
@@ -148,16 +148,51 @@ test "proxy profile restricts egress to loopback without UDP or unix sockets" {
 }
 
 test "malformed network rules never grant unrestricted TCP" {
-  let profile = wasm_rt.build_sandbox_profile([], ["example.com", "*:oops", "*:0"])
+  let profile = wasm_rt.build_sandbox_profile([], ["example.com", "*:oops", "*:0"], "open")
   assert(string.contains(profile, "(deny network-outbound)"))
   assert(not string.contains(profile, "(allow network-outbound"))
 }
 
 test "sandbox escapes injected profile expressions in mount paths" {
-  let profile = wasm_rt.build_sandbox_profile(["/workspace/\") (allow network*) ;"], ["*:443"])
+  let profile = wasm_rt.build_sandbox_profile(["/workspace/\") (allow network*) ;"], ["*:443"], "open")
   assert(string.contains(profile, "\\\""))
   assert(not string.contains(profile, "subpath \"/private/var\""))
   assert(not string.contains(profile, "subpath \"/var\""))
+}
+
+// --- strict read policy ---
+
+test "strict reads deny everything but the mounts and the platform's own dirs" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [], "strict")
+  assert(string.contains(profile, "(deny file-read*)"))
+  assert(string.contains(profile, "(allow file-read* (subpath \"/workspace\"))"))
+  // The loader reads the root directory entry before anything else.
+  assert(string.contains(profile, "(allow file-read* (literal \"/\"))"))
+  assert(string.contains(profile, "(allow file-read* (subpath \"/usr\"))"))
+  // A home directory is exactly what this policy exists to close, so the open
+  // policy's two key deny rules must not be the only thing standing between a
+  // command and the rest of the disk.
+  assert(not string.contains(profile, "(deny file-read-data"))
+}
+
+test "strict reads grant a read-only mount without granting writes to it" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace:ro"], [], "strict")
+  assert(string.contains(profile, "(allow file-read* (subpath \"/workspace\"))"))
+  assert(not string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
+}
+
+test "strict reads escape injected profile expressions in mount paths" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace/\") (allow network*) ;"], [], "strict")
+  assert(string.contains(profile, "\\\""))
+}
+
+// Only "strict" confines reads here; the request parser is what refuses a
+// policy it does not recognise, so this layer must not silently confine or
+// silently open on a name it has never seen.
+test "the profile builder confines reads only for the strict policy" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [], "lenient")
+  assert(not string.contains(profile, "(deny file-read*)"))
+  assert(string.contains(profile, "(deny file-write*)"))
 }
 
 test "TOML parser preserves nested tables and rejects malformed config" {

@@ -42,6 +42,17 @@ jobs:
         run: |
           bash scripts/install-wasmtime.sh
           echo "$PWD/.tools/wasmtime" >> "$GITHUB_PATH"
+      - name: Code quality grade
+        # The score depends on the analyzer's own thresholds and on how much of
+        # this repository's Almide its grammar can parse, so the version is
+        # pinned and the analysis runs on one platform. The floor is the grade-A
+        # boundary: this gate exists to catch the repository dropping below it,
+        # and moving the floor is a deliberate edit, not a passing fix.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bash scripts/install-codopsy.sh
+          .tools/codopsy/codopsy analyze . -o "$RUNNER_TEMP/codopsy.json"
+          python3 scripts/check_grade.py "$RUNNER_TEMP/codopsy.json" --min-score 90
       - name: Evaluation grader tests
         run: |
           python3 -m unittest discover -s scripts/evals -p 'test_*.py'
@@ -53,6 +64,7 @@ jobs:
           python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-loop-control.json.gz
           python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-shared-compute.json.gz
           python3 scripts/audit_containment.py docs/benchmarks/2026-09-20-containment.json.gz
+          python3 scripts/audit_containment.py docs/benchmarks/2026-09-20-containment-fixed.json.gz
           python3 scripts/audit_compute_smoke.py docs/benchmarks/2026-09-20-compute-smoke.json.gz
       - name: Audit saved startup and memory measurements
         run: |

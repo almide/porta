@@ -34,6 +34,31 @@ assert report['runs'], 'no measured runs'
 expected = {(runtime, task, repeat) for runtime in ('porta_wasm', 'docker_agent_native') for task in tasks for repeat in range(args.expected_repeats)}
 actual = [(run['runtime'], run['task'], run['repeat']) for run in report['runs']]
 assert len(actual) == len(expected) and set(actual) == expected, 'incomplete or duplicated evaluation matrix' 
+def assert_test_precedes_edit(events):
+    """The policy requires run_tests before any write_file in the same run."""
+    prior_test = False
+    for event in events:
+        if event['name'] == 'run_tests':
+            prior_test = True
+        if event['name'] == 'write_file':
+            assert prior_test, 'Porta executed an edit before the required test'
+
+
+def assert_compute_payload(event, counts):
+    """The decoded result and the MCP reply must say the same thing."""
+    result, wire = event['compute_result'], event['compute_mcp_result']
+    assert type(result['ok']) is bool
+    assert len(wire['content']) == 1 and wire['content'][0]['type'] == 'text'
+    assert json.loads(wire['content'][0]['text']) == result, 'compute payload lost or altered'
+    assert wire['isError'] is (not result['ok']), 'compute status mismatch'
+    if result['ok']:
+        assert isinstance(result['json'], str)
+        json.loads(result['json'])
+        return
+    assert result['error']['code'] == 'compute_failed'
+    counts['script_errors'] += 1
+
+
 for run in report['runs']:
     task = tasks[run['task']]
     if report.get('before_tool_policies'):
@@ -44,12 +69,7 @@ for run in report['runs']:
         if expected_policy:
             assert len(guards) == 1 and guards[0]['parameters'] == expected_policy, 'configured policy mismatch'
             if run['runtime'] == 'porta_wasm':
-                prior_test = False
-                for event in run['tool_calls']:
-                    if event['name'] == 'run_tests':
-                        prior_test = True
-                    if event['name'] == 'write_file':
-                        assert prior_test, 'Porta executed an edit before the required test'
+                assert_test_precedes_edit(run['tool_calls'])
         else:
             assert not guards, 'unexpected task policy'
     checks = grade(task, run['artifacts'], run['tool_calls'])
@@ -77,17 +97,7 @@ for run in report['runs']:
                 assert 'compute_result' not in event and 'compute_mcp_result' not in event
                 counts['transport_or_runtime_errors'] += 1
             else:
-                result, wire = event['compute_result'], event['compute_mcp_result']
-                assert type(result['ok']) is bool
-                assert len(wire['content']) == 1 and wire['content'][0]['type'] == 'text'
-                assert json.loads(wire['content'][0]['text']) == result, 'compute payload lost or altered'
-                assert wire['isError'] is (not result['ok']), 'compute status mismatch'
-                if result['ok']:
-                    assert isinstance(result['json'], str)
-                    json.loads(result['json'])
-                else:
-                    assert result['error']['code'] == 'compute_failed'
-                    counts['script_errors'] += 1
+                assert_compute_payload(event, counts)
         if event['name'] == 'verify_task':
             snapshot_checks = grade(task, event['verification_snapshot'], run['tool_calls'][:index + 1])
             expected_verdict = {'passed': all(snapshot_checks.values()), 'checks': snapshot_checks}

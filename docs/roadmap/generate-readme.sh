@@ -6,7 +6,7 @@
 # Run: bash docs/roadmap/generate-readme.sh > docs/roadmap/README.md
 
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 extract_title() {
   head -10 "$1" 2>/dev/null | grep '^# ' | head -1 | sed 's/^# //'

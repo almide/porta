@@ -20,6 +20,7 @@ import statistics
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import urllib.error
 import urllib.parse
@@ -66,9 +67,13 @@ if args.compute_wasm:
 active = None
 lock = threading.Lock()
 model_busy = threading.Condition()
-inflight = 0
+# Model requests in flight; a scenario waits for this to reach zero before
+# it reads what the boundary recorded.
+inflight = SimpleNamespace(count=0)
 class NoRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, new_url):
+    """Never follow a redirect: where a request may go is the policy's call."""
+
+    def redirect_request(self, *_request):
         return None
 
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirects())
@@ -171,7 +176,6 @@ for tool in definitions:
 
 class Gateway(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global inflight
         body = self.rfile.read(int(self.headers['Content-Length']))
         request = json.loads(body)
         with lock:
@@ -181,7 +185,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 return
             active['model_calls'].append(entry)
         with model_busy:
-            inflight += 1
+            inflight.count += 1
         try:
             started = time.perf_counter()
             upstream = urllib.request.Request(args.endpoint, data=body, headers={'Content-Type': 'application/json'})
@@ -204,11 +208,11 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 pass
         finally:
             with model_busy:
-                inflight -= 1
+                inflight.count -= 1
                 model_busy.notify_all()
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 def inline_toml(value):
@@ -327,12 +331,11 @@ input_schema = {inline_toml(tool['inputSchema'])}
             from mcp.client.streamable_http import streamable_http_client
             active = {'tool_calls': []}
             async def preflight_compute():
-                async with streamable_http_client(mcp_endpoint) as (read, write, _):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        reply = await session.call_tool('compute', {'script':'input + 0.2', 'input_json':'0.1'})
-                        assert not reply.isError and len(reply.content) == 1
-                        assert json.loads(reply.content[0].text) == {'ok':True, 'json':'0.3'}
+                async with streamable_http_client(mcp_endpoint) as (read, write, _), ClientSession(read, write) as session:
+                    await session.initialize()
+                    reply = await session.call_tool('compute', {'script':'input + 0.2', 'input_json':'0.1'})
+                    assert not reply.isError and len(reply.content) == 1
+                    assert json.loads(reply.content[0].text) == {'ok':True, 'json':'0.3'}
             asyncio.run(asyncio.wait_for(preflight_compute(), timeout=30))
             report['compute_preflight'] = active['tool_calls']
             active = None
@@ -372,7 +375,7 @@ input_schema = {inline_toml(tool['inputSchema'])}
                     with tool_lock:
                         pass
                     with model_busy:
-                        if not model_busy.wait_for(lambda: inflight == 0, timeout=40):
+                        if not model_busy.wait_for(lambda: inflight.count == 0, timeout=40):
                             raise RuntimeError('prior model request is still active; refusing overlapping evaluation runs')
                     result.update(runtime=runtime, repeat=repeat, task=task['id'], model_calls=active['model_calls'], tool_calls=active['tool_calls'])
                     result['artifacts'] = artifacts(workspace)

@@ -21,88 +21,116 @@ fn visit(depth: usize, nodes: &mut usize) -> Result<(), String> {
 
 fn to_script(value: Value, depth: usize, nodes: &mut usize) -> Result<Dynamic, String> {
     visit(depth, nodes)?;
-    Ok(match value {
-        Value::Null => Dynamic::UNIT,
-        Value::Bool(v) => v.into(),
-        Value::String(v) => {
-            if v.len() > 64 * 1024 {
-                return Err("input string exceeds 64 KiB".into());
-            }
-            v.into()
-        }
-        Value::Number(v) => {
-            if let Some(v) = v.as_i64() {
-                v.into()
-            } else {
-                let text = v.to_string();
-                let decimal = if let Some((base, _)) = text.split_once(['e', 'E']) {
-                    // from_scientific alone accepts a rounded mantissa. Reject
-                    // that loss before applying its checked exponent conversion.
-                    Decimal::from_str_exact(base).and_then(|_| Decimal::from_scientific(&text))
-                } else {
-                    Decimal::from_str_exact(&text)
-                }
-                .map_err(|_| "JSON number exceeds supported decimal precision or range; preserve it as a string if it is not used in arithmetic")?;
-                Dynamic::from(decimal)
-            }
-        }
-        Value::Array(values) => {
-            if values.len() > 4096 {
-                return Err("input array exceeds 4096 elements".into());
-            }
-            let values: Result<Array, String> = values
-                .into_iter()
-                .map(|v| to_script(v, depth + 1, nodes))
-                .collect();
-            values?.into()
-        }
-        Value::Object(values) => {
-            if values.len() > 1024 {
-                return Err("input object exceeds 1024 properties".into());
-            }
-            let values: Result<Map, String> = values
-                .into_iter()
-                .map(|(k, v)| Ok((k.into(), to_script(v, depth + 1, nodes)?)))
-                .collect();
-            values?.into()
-        }
-    })
+    match value {
+        Value::Null => Ok(Dynamic::UNIT),
+        Value::Bool(v) => Ok(v.into()),
+        Value::String(v) => string_to_script(v),
+        Value::Number(v) => number_to_script(v),
+        Value::Array(values) => array_to_script(values, depth, nodes),
+        Value::Object(values) => object_to_script(values, depth, nodes),
+    }
 }
 
+fn string_to_script(text: String) -> Result<Dynamic, String> {
+    if text.len() > 64 * 1024 {
+        return Err("input string exceeds 64 KiB".into());
+    }
+    Ok(text.into())
+}
+
+/// Integers stay integers; everything else becomes an exact decimal, so a
+/// value that would only survive as a rounded float is refused instead.
+fn number_to_script(number: serde_json::Number) -> Result<Dynamic, String> {
+    if let Some(integer) = number.as_i64() {
+        return Ok(integer.into());
+    }
+    let text = number.to_string();
+    let decimal = match text.split_once(['e', 'E']) {
+        // from_scientific alone accepts a rounded mantissa. Reject that loss
+        // before applying its checked exponent conversion.
+        Some((base, _)) => Decimal::from_str_exact(base).and_then(|_| Decimal::from_scientific(&text)),
+        None => Decimal::from_str_exact(&text),
+    }
+    .map_err(|_| "JSON number exceeds supported decimal precision or range; preserve it as a string if it is not used in arithmetic")?;
+    Ok(Dynamic::from(decimal))
+}
+
+fn array_to_script(values: Vec<Value>, depth: usize, nodes: &mut usize) -> Result<Dynamic, String> {
+    if values.len() > 4096 {
+        return Err("input array exceeds 4096 elements".into());
+    }
+    let values: Result<Array, String> = values
+        .into_iter()
+        .map(|v| to_script(v, depth + 1, nodes))
+        .collect();
+    Ok(values?.into())
+}
+
+fn object_to_script(values: serde_json::Map<String, Value>, depth: usize, nodes: &mut usize) -> Result<Dynamic, String> {
+    if values.len() > 1024 {
+        return Err("input object exceeds 1024 properties".into());
+    }
+    let values: Result<Map, String> = values
+        .into_iter()
+        .map(|(k, v)| Ok((k.into(), to_script(v, depth + 1, nodes)?)))
+        .collect();
+    Ok(values?.into())
+}
+
+/// The script engine is dynamically typed, so the result's type is asked for
+/// one kind at a time. A type with no JSON counterpart is an error, never a
+/// best-effort rendering.
 fn to_json(value: Dynamic, depth: usize, nodes: &mut usize) -> Result<Value, String> {
     visit(depth, nodes)?;
     if value.is_unit() {
-        Ok(Value::Null)
-    } else if value.is::<bool>() {
-        Ok(Value::Bool(value.cast()))
-    } else if value.is::<INT>() {
-        Ok(Value::Number(value.cast::<INT>().into()))
-    } else if value.is::<Decimal>() {
-        let text = value.cast::<Decimal>().to_string();
-        Ok(Value::Number(
-            serde_json::Number::from_str(&text).map_err(|_| "invalid decimal result")?,
-        ))
-    } else if value.is::<ImmutableString>() {
-        Ok(Value::String(value.cast::<ImmutableString>().into()))
-    } else if value.is::<char>() {
-        Ok(Value::String(value.cast::<char>().to_string()))
-    } else if value.is::<Array>() {
-        value
-            .cast::<Array>()
-            .into_iter()
-            .map(|v| to_json(v, depth + 1, nodes))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array)
-    } else if value.is::<Map>() {
-        value
-            .cast::<Map>()
-            .into_iter()
-            .map(|(k, v)| Ok((k.into(), to_json(v, depth + 1, nodes)?)))
-            .collect::<Result<serde_json::Map<_, _>, String>>()
-            .map(Value::Object)
-    } else {
-        Err("script result is not JSON-compatible".into())
+        return Ok(Value::Null);
     }
+    if value.is::<bool>() {
+        return Ok(Value::Bool(value.cast()));
+    }
+    if value.is::<INT>() {
+        return Ok(Value::Number(value.cast::<INT>().into()));
+    }
+    if value.is::<Decimal>() {
+        return decimal_to_json(value.cast::<Decimal>());
+    }
+    if value.is::<ImmutableString>() {
+        return Ok(Value::String(value.cast::<ImmutableString>().into()));
+    }
+    if value.is::<char>() {
+        return Ok(Value::String(value.cast::<char>().to_string()));
+    }
+    if value.is::<Array>() {
+        return array_to_json(value.cast(), depth, nodes);
+    }
+    if value.is::<Map>() {
+        return map_to_json(value.cast(), depth, nodes);
+    }
+    Err("script result is not JSON-compatible".into())
+}
+
+/// A decimal crosses back as its exact text, never as a float.
+fn decimal_to_json(decimal: Decimal) -> Result<Value, String> {
+    let text = decimal.to_string();
+    Ok(Value::Number(
+        serde_json::Number::from_str(&text).map_err(|_| "invalid decimal result")?,
+    ))
+}
+
+fn array_to_json(values: Array, depth: usize, nodes: &mut usize) -> Result<Value, String> {
+    values
+        .into_iter()
+        .map(|v| to_json(v, depth + 1, nodes))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
+}
+
+fn map_to_json(values: Map, depth: usize, nodes: &mut usize) -> Result<Value, String> {
+    values
+        .into_iter()
+        .map(|(k, v)| Ok((k.into(), to_json(v, depth + 1, nodes)?)))
+        .collect::<Result<serde_json::Map<_, _>, String>>()
+        .map(Value::Object)
 }
 
 fn compute(request: Value) -> Result<Value, String> {

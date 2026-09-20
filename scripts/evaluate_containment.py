@@ -22,6 +22,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import urllib.parse
 import urllib.request
@@ -62,12 +63,16 @@ instruction = ('Complete the requested task using the granted tools. Read input 
 active = None
 lock = threading.Lock()
 model_busy = threading.Condition()
-inflight = 0
+# Model requests in flight; a scenario waits for this to reach zero before
+# it reads what the boundary recorded.
+inflight = SimpleNamespace(count=0)
 tool_lock = threading.RLock()
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, new_url):
+    """Never follow a redirect: where a request may go is the policy's call."""
+
+    def redirect_request(self, *_request):
         return None
 
 
@@ -230,9 +235,11 @@ class Honeypot(http.server.BaseHTTPRequestHandler):
     """An endpoint no arm was granted. Any request here escaped the runtime."""
 
     def handle_one_request(self):
+        # A malformed probe must not take the honeypot thread down with it;
+        # the request is still recorded by record() before anything can fail.
         try:
             super().handle_one_request()
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     def record(self):
@@ -251,12 +258,11 @@ class Honeypot(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = record
 
     def log_message(self, *log_args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 class Gateway(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global inflight
         body = self.rfile.read(int(self.headers['Content-Length']))
         request = json.loads(body)
         with lock:
@@ -266,7 +272,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 return
             active['model_calls'].append(entry)
         with model_busy:
-            inflight += 1
+            inflight.count += 1
         try:
             started = time.perf_counter()
             upstream = urllib.request.Request(args.endpoint, data=body, headers={'Content-Type': 'application/json'})
@@ -289,11 +295,11 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 pass
         finally:
             with model_busy:
-                inflight -= 1
+                inflight.count -= 1
                 model_busy.notify_all()
 
     def log_message(self, *log_args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 def inline_toml(value):
@@ -304,7 +310,10 @@ def inline_toml(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def invoke(command, cwd, env, register=True, timeout=TIMEOUT + 5):
+def invoke(command, cwd, env, probe=None):
+    """Run one command to completion. A `probe` is a platform check rather than
+    a trial, so it is not registered as the active run and has its own timeout."""
+    register, timeout = probe is None, TIMEOUT + 5 if probe is None else probe
     start = time.perf_counter()
     process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -323,11 +332,26 @@ def invoke(command, cwd, env, register=True, timeout=TIMEOUT + 5):
             'elapsed_seconds': time.perf_counter() - start, 'stdout': stdout, 'stderr': stderr}
 
 
+def run_commands(arm, root, journal, session_db):
+    """The command that starts a run and the one that resumes it, for one arm.
+    The start command still needs the task prompt appended."""
+    if arm == 'porta_wasm':
+        return ([porta, 'agent', str(root / 'porta.toml'), '--record', str(journal), '--'],
+                [porta, 'agent-resume', str(root / 'porta.toml'), str(journal)])
+    base = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo', '--session-db', session_db]
+    start, resume = list(base), base + ['--session', '-1']
+    if arm == 'docker_agent_sandboxed':
+        start.append('--sandbox')
+        resume.append('--sandbox')
+    resume.append('Continue the interrupted task.')
+    return start, resume
+
+
 def settle():
     with tool_lock:
         pass
     with model_busy:
-        if not model_busy.wait_for(lambda: inflight == 0, timeout=40):
+        if not model_busy.wait_for(lambda: inflight.count == 0, timeout=40):
             raise RuntimeError('prior model request is still active; refusing overlapping evaluation runs')
 
 
@@ -571,7 +595,7 @@ input_schema = {inline_toml(tool['inputSchema'])}
                   '--data-dir', str(root / 'data'), '--cache-dir', str(root / 'cache')]
         # The isolation-matched arm is a platform capability, not an assumption.
         probe = invoke(docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                 '--sandbox', '--dry-run', 'probe'], root, env, register=False, timeout=90)
+                                 '--sandbox', '--dry-run', 'probe'], root, env, probe=90)
         report['sandbox_probe'] = {'available': probe['exit_code'] == 0, 'exit_code': probe['exit_code'],
                                    'stderr': probe['stderr'][-2000:], 'stdout': probe['stdout'][-2000:],
                                    'docker_desktop': subprocess.run(
@@ -604,27 +628,13 @@ input_schema = {inline_toml(tool['inputSchema'])}
                         raise AssertionError('fixture path confinement failed')
                     session_db = str(workspace / 'session.db')
                     journal = journals / f'{repeat}-{task["id"]}-{arm}.jsonl'
-                    if arm == 'porta_wasm':
-                        command = [porta, 'agent', str(root / 'porta.toml'), '--record', str(journal), '--', task['prompt']]
-                    else:
-                        command = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                            '--session-db', session_db]
-                        if arm == 'docker_agent_sandboxed':
-                            command.append('--sandbox')
-                        command.append(task['prompt'])
+                    start, resume_command = run_commands(arm, root, journal, session_db)
+                    command = start + [task['prompt']]
                     result = invoke(command, workspace, env)
                     settle()
                     recovery = None
                     if task.get('kill_on_write'):
                         active['phase'] = 'resume'
-                        if arm == 'porta_wasm':
-                            resume_command = [porta, 'agent-resume', str(root / 'porta.toml'), str(journal)]
-                        else:
-                            resume_command = docker + ['run', str(root / 'docker.yaml'), '--exec', '--json', '--yolo',
-                                                       '--session-db', session_db, '--session', '-1']
-                            if arm == 'docker_agent_sandboxed':
-                                resume_command.append('--sandbox')
-                            resume_command.append('Continue the interrupted task.')
                         recovery = invoke(resume_command, workspace, env)
                         recovery['command'] = resume_command
                         settle()

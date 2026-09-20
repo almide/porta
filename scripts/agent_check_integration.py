@@ -16,7 +16,8 @@ traffic=[]
 class Reject(http.server.BaseHTTPRequestHandler):
     def do_POST(self):traffic.append(self.path);self.send_error(500)
     def do_GET(self):traffic.append(self.path);self.send_error(500)
-    def log_message(self,*args):pass
+    def log_message(self, *args):
+        """Silence the request log; these tests assert on their own output."""
 def import_probe(name, valid_signature=False):
     # Import one function; a distinct () -> () function exports _start.
     signature = bytes.fromhex('60047f7f7f7f017f') if valid_signature else bytes.fromhex('600000')

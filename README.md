@@ -41,6 +41,9 @@ cp target/porta ~/.local/bin/
 Needs Almide 0.63.0, a Rust toolchain, Python 3 and curl. Full verification
 steps and the compiler pin are in [Build from source](#build-from-source).
 
+`porta run` takes either a native command or a `.wasm` module, so anything that
+compiles to WASI runs under it — Almide, and Python 3.14 via `python.wasm`.
+
 ## Quick Start
 
 ### 1. Restrict an agent you already use
@@ -78,7 +81,7 @@ porta init native claude   # writes porta.toml
 porta up -- --print "Fix the bug in main.rs"
 ```
 
-### 4. Build an agent that runs inside WASM
+### 4. Run an agent whose decision loop is WASM
 
 ```bash
 .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
@@ -86,15 +89,7 @@ porta up -- --print "Fix the bug in main.rs"
 porta agent examples/chat-agent/agent.toml -- "Add 20 and 22 using the tool."
 ```
 
-The decision loop and its tools both run in WASM. Model credentials stay in the
-host, budgets are shared across a delegating team, and tool arguments are
-validated before anything executes. Record a run to survive a crash:
-
-```bash
-porta agent agent.toml --record run.jsonl -- "..."
-porta agent-resume agent.toml run.jsonl   # completed writes are not repeated
-porta agent-journal run.jsonl             # read-only, no code loaded
-```
+[Agents you build](#agents-you-build) is what this one is.
 
 ## What Porta enforces
 
@@ -124,27 +119,77 @@ published in the same place.
   local model. Porta has not demonstrated general quality superiority, and the
   shared-compute follow-up was rejected rather than published as a win.
 
-## Learn more
+## Agents you build
 
-| Topic | Document |
+`porta run` restricts an agent someone else wrote. `porta agent` runs one whose
+decision loop is itself WASM, which is where the rest of this README's
+guarantees come from.
+
+```toml
+# agent.toml
+version = 1
+
+[agent]
+wasm = "agent.wasm"
+instruction = "Use the available tools to answer the request."
+
+[model]
+endpoint = "https://api.example.com/v1/chat/completions"
+name = "your-model"
+token_env = "MODEL_TOKEN"          # read by the host, never handed to the guest
+
+[limits]
+max_model_calls = 16
+max_steps = 64
+timeout_seconds = 120
+
+[[tools]]
+name = "write_file"
+wasm = "tools/write.wasm"
+description = "Write text to a file in the workspace."
+sha256 = "<64 hex characters>"     # this exact reviewed artifact, or no run at all
+mounts = [{ host = "workspace", guest = ".", read_only = false }]
+input_schema = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
+```
+
+The loop and every tool run in separate WASM instances. Neither inherits your
+environment or a directory. Credentials stay in the host, so an agent that is
+talked into printing its own configuration has nothing to print.
+
+Each guarantee in [What Porta enforces](#what-porta-enforces) links to how it
+works. Three things that table does not cover:
+
+| You want | Read |
 |---|---|
-| WASM agents, teams, grants, limits | [agent-runtime.md](docs/agent-runtime.md) |
-| Checkpoint, resume, replay | [agent-journals.md](docs/agent-journals.md) |
-| Remote MCP tools from an agent | [agent-mcp.md](docs/agent-mcp.md) |
-| Offline team inspection | [agent-check.md](docs/agent-check.md) |
-| Completion checks | [completion-checks.md](docs/completion-checks.md) |
-| Pre-tool checks | [before-tool-checks.md](docs/before-tool-checks.md) |
-| Artifact pins | [artifact-pins.md](docs/artifact-pins.md) |
-| Bounded computation tool | [examples/compute](examples/compute/README.md) |
-| Measurements | [docs/benchmarks](docs/benchmarks/README.md) |
+| Teams, delegation, shared budgets | [agent-runtime.md](docs/agent-runtime.md) |
+| Remote MCP tools, granted explicitly | [agent-mcp.md](docs/agent-mcp.md) |
+| Inspect a team without running it | [agent-check.md](docs/agent-check.md) |
+
+```bash
+porta agent agent.toml --record run.jsonl -- "..."
+porta agent-resume agent.toml run.jsonl   # completed writes are not repeated
+porta agent-journal run.jsonl             # read-only metadata, no code loaded
+```
 
 ## Limits
 
-Native restrictions require **macOS**; on Linux native execution fails closed
-and WASM remains available. Native read access is broader than write access:
-this is not a container filesystem or complete secret isolation. HTTPS proxy
-filtering controls connection targets, not TLS contents. `porta run` and
-`porta serve` mount nothing unless you pass `-v`.
+What Porta does **not** do, stated here rather than discovered later:
+
+- **It is not a container or a VM.** Restrictions are applied to a process on
+  your kernel. A kernel that can be exploited is a kernel both sides share.
+- **Read access is broader than write access** unless you pass
+  `--read-policy strict`, and even then the system directories a command needs
+  to start stay readable. This is not complete secret isolation.
+- **Proxy filtering controls connection targets, not TLS contents**, and it
+  does not stop a child from listening on a port.
+- **macOS and Linux only**, and not identically — see
+  [Native Restrictions](#native-restrictions) for exactly where they differ.
+  Anywhere else, native execution fails closed rather than running unrestricted.
+- **Nothing is mounted implicitly.** `porta run` and `porta serve` see no
+  directory until you pass `-v`, which is a limit in the useful direction.
+
+A rule the platform cannot express refuses the run instead of widening it.
+That is the rule the rest of this README is written against.
 
 ## porta.toml
 
@@ -223,7 +268,11 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--secret <KEY=VALUE>` | Inject secret as env var |
 | `-v <path>` | Mount directory (writable) |
 | `-v <path>:ro` | Mount directory (read-only) |
-| `--allow-net <host:port>` | Allow outbound network (repeatable) |
+| `--allow-net <host:port>` | Allow outbound TCP by port (repeatable). The host part is not enforced at the OS layer — use `--proxy-allow` for that |
+| `--proxy-allow <hosts>` | Route egress through porta's CONNECT proxy and allow only these hosts |
+| `--proxy-deny <hosts>` | Same, denying these hosts |
+| `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
+| `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -238,21 +287,32 @@ porta up -- --print "hi"   # Pass arguments to the command
 
 Porta enforces restrictions at two levels:
 
-1. **OS layer** (sandbox-exec) — Process-level port-based network control and filesystem restrictions. Cannot be bypassed by the child process.
+1. **OS layer** — `sandbox-exec` on macOS, Landlock plus a seccomp filter on Linux. Filesystem and network restrictions the child process cannot lift, because they are applied to it before it starts.
 2. **MCP layer** — Application-level host+port URL filtering and capability checks on `porta.exec` and `porta.http` builtin tools.
 
-### Native Restrictions (macOS)
+### Native Restrictions
 
-Uses `sandbox-exec` to enforce:
+One table, because the two platforms differ and reading two near-identical ones
+does not show you where.
 
-| Control | Behavior |
-|---------|----------|
-| **FS write** | Denied everywhere except `-v` mounted dirs and `/tmp` |
-| **FS read** | `~/.ssh` and `~/.gnupg` denied (cryptographic keys). Other readable host files remain accessible; `-v` controls writes |
-| **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
-| **Read-only** | `-v ./data:ro` → read OK, write denied |
+| Control | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
+|---|---|---|
+| **Write** | denied outside `-v` mounts, `/tmp` | denied outside `-v` mounts, `/tmp`, `/dev` |
+| **Read, default** | `~/.ssh` and `~/.gnupg` denied; everything else readable | not confined |
+| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` |
+| **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
+| **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
+| **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
+| **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
 
-> Note: macOS sandbox-exec supports port-based filtering only. Host-based filtering (`api.example.com:443`) is enforced at the MCP layer for builtin tools.
+Under `strict`, every home directory is closed — and so is the command itself if
+it lives outside those directories. A toolchain under `/opt` needs `-v` on its
+own installation; porta says which grant is missing rather than failing with a
+bare `Permission denied`.
+
+Linux uses Landlock unprivileged, without namespaces and without an external
+runtime. A rule the running kernel cannot express refuses the run rather than
+widening it: partial enforcement is never silently accepted.
 
 ### Host-filtered HTTPS
 
@@ -260,16 +320,15 @@ Uses `sandbox-exec` to enforce:
 porta run claude -v . --proxy-allow "api.anthropic.com,*.anthropic.com"
 ```
 
-Or add `[proxy]` with `allow = ["api.anthropic.com"]` to `porta.toml`.
-Both `run` and `up` apply the same policy. The child can connect only to the
-local CONNECT proxy; direct TCP, UDP, and Unix-socket egress are denied.
-Only HTTPS CONNECT on port 443 is supported. Clients must respect `HTTPS_PROXY`.
-This filters connection targets, not TLS contents. Deny lists are weaker than
-explicit allow lists. It is not a credential broker or a private-address filter.
+Or add `[proxy]` with `allow = ["api.anthropic.com"]` to `porta.toml`. Both
+`run` and `up` apply the same policy. The child can reach only the local CONNECT
+proxy; direct TCP, UDP and Unix-socket egress are denied, on Linux by a seccomp
+filter that also refuses `io_uring`, because a ring can open a socket without
+ever asking for one.
 
-Native restrictions currently require **macOS**. On Linux native execution
-fails closed; WASM remains available. Native read access is broader than write
-access: this is not a container filesystem or complete secret isolation.
+Only HTTPS CONNECT on port 443 is supported, and clients must respect
+`HTTPS_PROXY`. Deny lists are weaker than explicit allow lists, and this is not
+a credential broker or a private-address filter. See [Limits](#limits).
 
 ### WASM Sandbox
 
@@ -329,31 +388,35 @@ porta serve agent.wasm --profile full
 
 ## Architecture
 
-```
-porta
-├── cli.almd            — Options, arg parsing, help
-├── mod.almd            — Command dispatch (entry point)
-│
-├── engine.almd         — serve, run, validate, inspect
-├── dispatch.almd       — WASM instance lifecycle & tool dispatch
-├── mcp.almd            — MCP protocol (JSON-RPC 2.0 / stdio)
-├── jsonrpc.almd        — Newline-delimited JSON-RPC
-├── sandbox.almd        — Capability-based security
-│
-├── ops.almd            — Daemon management (ps/stop/kill/logs/rm)
-├── build.almd          — Manifest generation
-├── project.almd        — porta.toml (up/init)
-│
-├── wasm_rt.almd        — Wasmtime bridge + runtime functions
-├── config.almd         — porta.toml parser
-├── manifest.almd       — manifest.json parser
-├── observability.almd  — Execution metrics
-├── util.almd           — CLI utilities
-│
-└── wasm/
-    ├── binary.almd     — WASM binary parser
-    └── wasi.almd       — WASI Preview 1 host functions
-```
+Two sides. Almide decides policy; Rust applies it and talks to the kernel.
+
+**`src/` — Almide.** The CLI, the MCP protocol, capability checks, and what a
+run is allowed to do.
+
+| | |
+|---|---|
+| `mod.almd`, `cli.almd`, `help.almd` | command dispatch, options, help |
+| `engine.almd`, `dispatch.almd` | serve / run / validate / inspect, and the WASM instance lifecycle |
+| `mcp.almd`, `mcp_builtins.almd`, `mcp_content.almd`, `jsonrpc.almd` | the MCP session, `porta.exec` and `porta.http`, resources and prompts, framing |
+| `sandbox.almd`, `wasm_imports.almd` | capability sets, and the import shape they are checked against |
+| `agent.almd`, `proxy.almd` | WASM agents and teams, the CONNECT proxy's configuration |
+| `config.almd`, `manifest.almd`, `project.almd`, `build.almd` | porta.toml, manifest.json, `init` / `up` |
+| `ops.almd`, `observability.almd`, `util.almd` | daemons, metrics, helpers |
+| `wasm_rt.almd` | every `@extern` into the Rust side |
+
+**`native/` — Rust.** Wasmtime, the OS enforcement, and the broker that holds
+model credentials.
+
+| | |
+|---|---|
+| `wasmtime_bridge.rs` | WASM instance lifecycle and the FFI surface |
+| `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock_policy.rs`, `landlock.rs`, `seccomp.rs` | one sandboxed request, the macOS profile, the Linux ruleset and the egress channels Landlock cannot reach |
+| `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
+| `agent_runtime.rs`, `agent_journal.rs`, `agent_mcp.rs` | the broker, durable run records, granted remote MCP calls |
+| `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | one checked HTTP request, process helpers, module inspection |
+
+porta has no WASM parser of its own: a module is read through the engine that
+will run it, so `serve`, `validate` and `inspect` cannot disagree about one.
 
 ## Build from source
 
@@ -370,14 +433,6 @@ The compiler target is **0.63.0**. As of 2026-09-19, the published artifact is
 `v0.63.0-rc1` (reports `almide 0.63.0`); the installer pins that release and checks
 its published SHA-256. Once the final tag is published, select it with
 `ALMIDE_RELEASE_TAG=v0.63.0 bash scripts/install-almide.sh`.
-
-## Language Support
-
-| Runtime | Status | Example |
-|---------|--------|---------|
-| Almide → WASM | Full support | `porta run agent.wasm` |
-| Python 3.14 | Runs in WASM | `porta run python.wasm -- script.py` |
-| Native commands | OS restrictions | `porta run claude -- --print "hi"` |
 
 ## License
 

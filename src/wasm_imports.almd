@@ -1,0 +1,18 @@
+// What a module asks of its host.
+//
+// porta reads a module through the engine that will run it — `wt_inspect`,
+// which is wasmtime — and never through a second parser of its own. Two
+// independent readings of one format drift apart, which is the reason
+// `done/wasmtime-migration.md` gives for replacing the hand-rolled
+// interpreter; a parser kept for one caller would have reintroduced exactly
+// that, with `serve` and `validate` free to disagree about a module.
+//
+// What remains is the shape the capability check matches against.
+
+type ImportDesc =
+  | ImportFunc(Int)
+  | ImportTable(Int)
+  | ImportMemory(Int)
+  | ImportGlobal(Int)
+
+type Import = { mod_name: String, name: String, desc: ImportDesc }

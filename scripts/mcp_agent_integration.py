@@ -4,7 +4,6 @@ import http.server
 import json
 import os
 import pathlib
-import signal
 import subprocess
 import sys
 import tempfile
@@ -24,11 +23,100 @@ leaks = []
 entered = threading.Event()
 release = threading.Event()
 
+STREAMED = ('sse', 'sse-cr', 'server-request', 'disconnect', 'events')
+
+
+def pause_for_mode():
+    """Modes that hold the call open or make it slow enough to time out."""
+    if mode == 'block':
+        entered.set()
+        release.wait(10)
+    if mode == 'slow':
+        time.sleep(2)
+
+
+def render_result():
+    """Content shapes the broker must not unwrap into bare model text."""
+    text = 'line one\n日本語 "quoted" \\path'
+    result = {'content': [{'type': 'text', 'text': text}], 'isError': False}
+    if mode == 'render_wrapper':
+        result['structuredContent'] = {'result': text}
+    elif mode == 'render_json':
+        result['structuredContent'] = {'answer': 42}
+        result['content'][0]['text'] = '{ "answer": 42 }'
+    elif mode == 'render_conflict':
+        result['structuredContent'] = {'different': True}
+    elif mode == 'render_error':
+        result['isError'] = True
+    elif mode == 'render_multi':
+        result['content'].append({'type': 'text', 'text': 'second'})
+    elif mode == 'render_image':
+        result['content'] = [{'type': 'image', 'mimeType': 'image/png', 'data': 'AA=='}]
+    elif mode == 'render_missing_text':
+        result['content'] = [{'type': 'text'}]
+    elif mode == 'render_annotations':
+        result['content'][0]['annotations'] = {'audience': ['assistant']}
+    return result
+
+
+def verified_result():
+    """Verdicts a completion check returns, wrapped the ways MCP allows."""
+    verdict = {'passed': mode != 'verified_fail'}
+    result = {'content': [{'type': 'text', 'text': json.dumps(verdict)}],
+              'structuredContent': verdict.copy(), 'isError': mode == 'verified_error'}
+    if mode in ('verified_wrapped', 'verified_wrapped_conflict'):
+        result['structuredContent'] = {'result': json.dumps({'passed': mode == 'verified_wrapped'})}
+    if mode == 'verified_conflict':
+        result['structuredContent'] = {'passed': False}
+    if mode == 'verified_malformed':
+        result['content'][0]['text'] = 'not JSON'
+    return result
+
+
+def tool_result(text):
+    if mode.startswith('render_'):
+        return render_result()
+    if mode.startswith('verified_'):
+        return verified_result()
+    return {'content': [{'type': 'text', 'text': text}],
+            'structuredContent': {'echo': text}, 'isError': mode == 'tool-error'}
+
+
+def corrupted(response, request_id):
+    """Envelope faults the broker must reject rather than pass on."""
+    if mode == 'rpc-error':
+        return {'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32603, 'message': secret}}
+    if mode == 'id':
+        response['id'] = 999
+    if mode == 'result':
+        response['result'] = {'content': 'invalid'}
+    if mode == 'large':
+        response['result']['content'][0]['text'] = 'x' * (1024 * 1024)
+    return response
+
+
+def streamed(response):
+    """The SSE framings this transport has to survive."""
+    notification = {'jsonrpc': '2.0', 'method': 'notifications/progress', 'params': {'progress': 1}}
+    if mode == 'server-request':
+        notification = {'jsonrpc': '2.0', 'id': 'server', 'method': 'sampling/createMessage', 'params': {}}
+    frames = ': heartbeat\r\nid: ignored\r\ndata:\r\n\r\n'
+    frames += 'data: ' + json.dumps(notification) + '\r\n\r\n'
+    if mode == 'events':
+        frames += ': heartbeat\n\n' * 130
+    if mode != 'disconnect':
+        # Legal multiline JSON SSE data, UTF-8 and CRLF framing.
+        frames += 'data: ' + json.dumps(response, ensure_ascii=False, indent=2).replace('\n', '\ndata: ') + '\n\n'
+    if mode == 'sse-cr':
+        frames = '\ufeff' + frames.replace('\r\n', '\n').replace('\n', '\r')
+    return frames
+
+
 class Server(http.server.BaseHTTPRequestHandler):
-    def answer(self, data, status=200, mime='application/json', headers=None):
+    def answer(self, data, status=200, headers=None):
         payload = data if isinstance(data, bytes) else json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
-        self.send_header('Content-Type', mime)
+        self.send_header('Content-Type', (headers or {}).pop('Content-Type', 'application/json'))
         self.send_header('Content-Length', str(len(payload)))
         for key, value in (headers or {}).items():
             self.send_header(key, value)
@@ -46,16 +134,7 @@ class Server(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         if self.path == '/model':
-            traffic.append(('model', body))
-            assert secret not in json.dumps(body)
-            results = [m for m in body['messages'] if m['role'] == 'tool']
-            if results:
-                message = {'role': 'assistant', 'content': results[-1]['content']}
-            else:
-                message = {'role': 'assistant', 'content': None, 'tool_calls': [{
-                    'id': 'call-1', 'type': 'function',
-                    'function': {'name': selected, 'arguments': json.dumps(arguments)}}]}
-            self.answer({'choices': [{'message': message}]})
+            self.model_turn(body)
             return
         traffic.append((body.get('method'), body))
         assert self.path == '/mcp'
@@ -64,86 +143,50 @@ class Server(http.server.BaseHTTPRequestHandler):
         if mode == 'redirect':
             self.answer(b'', 307, headers={'Location': '/stolen'})
             return
-        method = body.get('method')
-        if method == 'initialize':
-            assert body['params']['capabilities'] == {}
-            result = {'protocolVersion': 'unknown' if mode == 'version' else '2025-11-25',
-                      'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
-            self.answer({'jsonrpc': '2.0', 'id': body['id'], 'result': result},
-                        headers={'MCP-Session-Id': 'fixture-session'})
+        if body.get('method') == 'initialize':
+            self.opening_handshake(body)
             return
         assert self.headers.get('MCP-Session-Id') == 'fixture-session'
         assert self.headers.get('MCP-Protocol-Version') == '2025-11-25'
-        if method == 'notifications/initialized':
+        if body.get('method') == 'notifications/initialized':
             self.answer(b'', 202)
             return
-        assert method == 'tools/call' and body['params']['name'] == 'echo'
+        self.tool_call(body)
+
+    def model_turn(self, body):
+        """One provider turn: call the selected tool, then answer with its result."""
+        traffic.append(('model', body))
+        assert secret not in json.dumps(body)
+        results = [m for m in body['messages'] if m['role'] == 'tool']
+        if results:
+            message = {'role': 'assistant', 'content': results[-1]['content']}
+        else:
+            message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'call-1', 'type': 'function',
+                'function': {'name': selected, 'arguments': json.dumps(arguments)}}]}
+        self.answer({'choices': [{'message': message}]})
+
+    def opening_handshake(self, body):
+        assert body['params']['capabilities'] == {}
+        result = {'protocolVersion': 'unknown' if mode == 'version' else '2025-11-25',
+                  'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
+        self.answer({'jsonrpc': '2.0', 'id': body['id'], 'result': result},
+                    headers={'MCP-Session-Id': 'fixture-session'})
+
+    def tool_call(self, body):
+        assert body.get('method') == 'tools/call' and body['params']['name'] == 'echo'
         effects.append(body['params'])
-        if mode == 'block':
-            entered.set()
-            release.wait(10)
-        if mode == 'slow':
-            time.sleep(2)
-        result = {'content': [{'type': 'text', 'text': body['params']['arguments']['text']}],
-                  'structuredContent': {'echo': body['params']['arguments']['text']}, 'isError': mode == 'tool-error'}
-        if mode.startswith('render_'):
-            text = 'line one\n日本語 "quoted" \\path'
-            result = {'content': [{'type': 'text', 'text': text}], 'isError': False}
-            if mode == 'render_wrapper':
-                result['structuredContent'] = {'result': text}
-            elif mode == 'render_json':
-                result['structuredContent'] = {'answer': 42}
-                result['content'][0]['text'] = '{ "answer": 42 }'
-            elif mode == 'render_conflict':
-                result['structuredContent'] = {'different': True}
-            elif mode == 'render_error':
-                result['isError'] = True
-            elif mode == 'render_multi':
-                result['content'].append({'type': 'text', 'text': 'second'})
-            elif mode == 'render_image':
-                result['content'] = [{'type': 'image', 'mimeType': 'image/png', 'data': 'AA=='}]
-            elif mode == 'render_missing_text':
-                result['content'] = [{'type': 'text'}]
-            elif mode == 'render_annotations':
-                result['content'][0]['annotations'] = {'audience': ['assistant']}
-        if mode.startswith('verified_'):
-            verdict = {'passed': mode != 'verified_fail'}
-            result = {'content': [{'type': 'text', 'text': json.dumps(verdict)}],
-                      'structuredContent': verdict.copy(), 'isError': mode == 'verified_error'}
-            if mode in ('verified_wrapped', 'verified_wrapped_conflict'):
-                result['structuredContent'] = {'result': json.dumps({'passed': mode == 'verified_wrapped'})}
-            if mode == 'verified_conflict':
-                result['structuredContent'] = {'passed': False}
-            if mode == 'verified_malformed':
-                result['content'][0]['text'] = 'not JSON'
-        response = {'jsonrpc': '2.0', 'id': body['id'], 'result': result}
-        if mode == 'id':
-            response['id'] = 999
-        if mode == 'result':
-            response['result'] = {'content': 'invalid'}
-        if mode == 'rpc-error':
-            response = {'jsonrpc': '2.0', 'id': body['id'], 'error': {'code': -32603, 'message': secret}}
-        if mode == 'large':
-            response['result']['content'][0]['text'] = 'x' * (1024 * 1024)
-        if mode in ('sse', 'sse-cr', 'server-request', 'disconnect', 'events'):
-            notification = {'jsonrpc': '2.0', 'method': 'notifications/progress', 'params': {'progress': 1}}
-            if mode == 'server-request':
-                notification = {'jsonrpc': '2.0', 'id': 'server', 'method': 'sampling/createMessage', 'params': {}}
-            frames = ': heartbeat\r\nid: ignored\r\ndata:\r\n\r\n'
-            frames += 'data: ' + json.dumps(notification) + '\r\n\r\n'
-            if mode == 'events':
-                frames += ': heartbeat\n\n' * 130
-            if mode != 'disconnect':
-                # Legal multiline JSON SSE data, UTF-8 and CRLF framing.
-                frames += 'data: ' + json.dumps(response, ensure_ascii=False, indent=2).replace('\n', '\ndata: ') + '\n\n'
-            if mode == 'sse-cr':
-                frames = '\ufeff' + frames.replace('\r\n', '\n').replace('\n', '\r')
-            self.answer(frames.encode(), mime='text/event-stream; charset=utf-8')
+        pause_for_mode()
+        result = tool_result(body['params']['arguments']['text'])
+        response = corrupted({'jsonrpc': '2.0', 'id': body['id'], 'result': result}, body['id'])
+        if mode in STREAMED:
+            self.answer(streamed(response).encode(),
+                        headers={'Content-Type': 'text/event-stream; charset=utf-8'})
         else:
             self.answer(response)
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Server)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
