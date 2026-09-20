@@ -46,6 +46,14 @@ porta (Almide)
 
 3. **Remove interpreter** — Delete `interp.almd`, `memory.almd`, instruction parsing from `binary.almd`
 
+   Finished later than the rest. `interp.almd` and `memory.almd` went with this
+   item; `wasi.almd` was overlooked and sat unreferenced, and `binary.almd`
+   survived because `serve` still read a module's exports with it while
+   `validate` read the same module through wasmtime — the exact drift this
+   migration exists to prevent. `serve` now reads exports the same way, and
+   what is left of `binary.almd` is the import shape the capability check
+   matches against, in `src/wasm_imports.almd`.
+
 4. **Validate** — Run all existing tests + Almide's full WASM test suite through porta
 
 ## Future: Self-hosted WASM Runtime

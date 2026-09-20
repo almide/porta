@@ -4,6 +4,10 @@ Porta is an Almide 0.63.0 WASM agent and team runtime, with MCP interoperability
 Almide owns CLI, manifests, capability checks and MCP. `examples/chat-agent` is
 the actual reasoning/control loop compiled to WASM.
 
+A module is read through the engine that will run it — `wasm_rt.wt_inspect`,
+which is wasmtime. porta has no WASM parser of its own; `src/wasm_imports.almd`
+holds only the import shape the capability check matches against.
+
 `native/` is the host side. The Almide `@extern(rs, "<module>", …)` declarations
 resolve against `wasmtime_bridge` and `agent_runtime`, so those two files are
 the FFI surface and re-export the rest; a `pub use` satisfies the binding just

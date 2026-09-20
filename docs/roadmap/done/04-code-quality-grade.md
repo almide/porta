@@ -2,9 +2,10 @@
 <!-- done: 2026-09-20 -->
 # Code Quality Grade
 
-`codopsy analyze .` scores the repository **90 (A)** with the pinned v2.2.0
-release, and **93 (A)** with a newer local build. It scored 75 (B) when this
-item was opened. Grade A starts at 90.
+`codopsy analyze .` scores the repository **92 (A)** with the pinned v2.2.0
+release. It scored 75 (B) when this item was opened. Grade A starts at 90, and
+the CI floor stays there: the gate exists to catch a fall out of A, not to
+ratchet a number.
 
 The two numbers differ because the newer build fails to parse seven `.almd`
 files outright and drops them from the report, while the pinned release parses
@@ -27,10 +28,10 @@ Measured with the pinned v2.2.0 release:
 
 | | Start | Now |
 |---|---:|---:|
-| Weighted mean | 86.1 | 97.0 |
-| Issues | 176 | 69 |
-| Penalty | 10.6 | 6.7 |
-| **Overall** | **75 (B)** | **90 (A)** |
+| Weighted mean | 86.1 | 98.1 |
+| Issues | 176 | 56 |
+| Penalty | 10.6 | 6.0 |
+| **Overall** | **75 (B)** | **92 (A)** |
 
 ## What moved it
 
@@ -45,6 +46,9 @@ Measured with the pinned v2.2.0 release:
 | Naming the stages in the journal replay and CONNECT handler | both → 100 |
 | Per-event functions in the guest loop | `chat-agent` 53 → 99 |
 | Option table and separate help module | `cli.almd` 61 → 97 |
+| Each builtin's guards beside the builtin | `mcp.almd` 61 → 93 |
+| Deleting the second WASM parser and the dead WASI interpreter | 776 lines |
+| One job per function in three audit and eval helpers | all three → 100 |
 | Disabling `no-assert`, `no-print`, `no-printf`, `no-println` | 515 issues |
 
 The rule exclusions are in `.codopsyrc.json`, with the reason beside them:
@@ -55,33 +59,43 @@ auditor, where `assert` is the verification and `print` is the result; every
 the proxy's audit line, which has to be on stderr because stdout carries
 newline-delimited MCP JSON. No complexity threshold was relaxed.
 
-Every step kept `almide test --ci` (106 tests), the macOS integration suites
-(70 assertions) and the Linux container run passing before it was committed.
+Every step kept `almide test --ci` (110 tests), the macOS integration suites,
+the official MCP SDK suite and the Linux container run passing before it was
+committed. The two largest steps were removals, not rewrites: reading a module
+through the engine that will run it left nothing calling the hand-rolled
+parser, and the WASI implementation beside it had been unreferenced since the
+wasmtime migration.
 
 ## What is left, and why
 
-69 issues remain. 29 of them are one per `.almd` file: codopsy's Almide
+56 issues remain. 29 of them are one per `.almd` file: codopsy's Almide
 grammar cannot parse every construct and reports the coverage gap as a
 `syntax-error`. That is a property of the analyzer, not of this repository,
 and it puts a floor of about 4.3 on the penalty. Worse, where coverage is poor
 the reported function boundaries are wrong: `src/agent.almd` is 56% unparsed
-and `src/engine.almd` 40%, so everything after the first unparsed region is
-counted inside one function. Splitting those files does not move the number,
-which is why the remaining `.almd` complexity warnings stay.
+and `src/engine.almd` 46%, so everything after the first unparsed region is
+counted inside one function. That is why `engine.almd` is reported as holding
+a function of cyclomatic complexity 23 when its largest is a short `validate`.
+Splitting those files does not move the number, which is why the remaining
+`.almd` complexity warnings stay.
 
 Of the rest:
 
 - **5 `no-unsafe`** — the Landlock syscall wrapper, `prctl`, `from_raw_fd`,
   `pre_exec`, and one in the bridge. Each is the minimum unsafe needed to
   reach the kernel, and each sits behind a checked boundary.
-- **`max-complexity` on flat dispatch** — `wasi_call` (15 branches, cognitive
-  1), `parse_capability`, `print_help`, the CLI command match in `mod.almd`.
-  A flat match over names is already the clearest expression of what those do;
-  grouping their arms to move a counter would make them worse.
-- **`max-lines` on three evaluation harnesses** — `evaluate_containment.py`,
-  `evaluate_agents.py` and `mcp_agent_integration.py` are each one linear
-  scenario driver around one fixture service. Splitting a harness to move a
-  line count makes it harder to audit, which is the one thing it exists for.
+- **`max-complexity` on flat dispatch** — `parse_capability`, `print_help`,
+  `apply_option`, the CLI command match in `mod.almd`. A flat match over names
+  is already the clearest expression of what those do; grouping their arms to
+  move a counter would make them worse.
+- **`max-lines` on four evaluation harnesses** — `evaluate_containment.py`,
+  `evaluate_agents.py`, `journal_integration.py` and `mcp_agent_integration.py`
+  are each one linear scenario driver around one fixture service. Splitting a
+  harness to move a line count makes it harder to audit, which is the one thing
+  it exists for. Two of them are not run by CI at all, because they need a live
+  model, so a refactor of those could not even be checked.
+- **One `max-params`** — a test fixture whose five arguments all have defaults.
+  Every way of reaching four makes the fixture harder to read.
 
 ## Rule
 
