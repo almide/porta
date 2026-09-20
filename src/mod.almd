@@ -8,6 +8,7 @@ import self.ops
 import self.build
 import self.project
 import self.agent
+import self.util
 
 fn has_help_flag(args: List[String]) -> Bool =
   args |> list.any((a) => a == "--help" or a == "-h")
@@ -36,7 +37,7 @@ effect fn main() -> Result[Unit, String] = {
 
   match cmd {
     "--version" => {
-      println("porta 0.4.0")
+      println("porta ${util.version()}")
       ok(())
     },
     "--help" => {
@@ -111,7 +112,7 @@ effect fn main() -> Result[Unit, String] = {
       some(id) => ops.remove_instance(id),
     },
     "version" => {
-      println("porta 0.4.0")
+      println("porta ${util.version()}")
       ok(())
     },
     _ => {

@@ -41,6 +41,22 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
     assert replies[-1]['id'] == '日本語-1999'
     print('PASS: WASM, untrusted cache, MCP stdio, Unicode, notifications, 2000 requests')
 
+    # One version, said the same way everywhere. It used to be written in five
+    # places, so `porta --version` and the manifest porta generates could
+    # disagree about what produced a file. almide.toml still carries it because
+    # the build needs it before any module exists, so the two are checked here.
+    declared = next(line.split('"')[1] for line in
+                    pathlib.Path('almide.toml').read_text().splitlines()
+                    if line.startswith('version'))
+    reported = run('--version').stdout.split()[-1]
+    assert reported == declared, f'porta reports {reported}, almide.toml says {declared}'
+    built = root / 'versioned.wasm'
+    built.write_bytes(wasm.read_bytes())
+    assert run('build', str(built)).returncode == 0
+    generated = json.loads((root / 'versioned.manifest.json').read_text())['version']
+    assert generated == declared, f'generated manifest says {generated}, not {declared}'
+    print(f'PASS: one version ({declared}) in the binary, the manifest and almide.toml')
+
     # Resources and prompts: what the manifest declares is what the server
     # lists, reading one dispatches a reserved tool into the module, and a name
     # the manifest does not carry is refused rather than dispatched.
