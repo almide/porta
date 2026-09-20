@@ -46,6 +46,9 @@ static int try_write(const char *path) {
 }
 
 int main(void) {
+    long abi = syscall(NR_create, NULL, 0, 1U /* LANDLOCK_CREATE_RULESET_VERSION */);
+    if (abi < 0) printf("landlock_abi=unavailable (%s)\n", strerror(errno));
+    else printf("landlock_abi=%ld\n", abi);
     mkdir("/tmp/allowed", 0700); mkdir("/tmp/denied", 0700);
     printf("BEFORE  connect:80=%s  connect:443=%s  write /tmp/allowed=%s  write /tmp/denied=%s\n",
            nm(try_connect(80)), nm(try_connect(443)),
