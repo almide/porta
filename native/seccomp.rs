@@ -165,12 +165,15 @@ static PROGRAM: [Instruction; FILTER_LEN + TAIL_LEN] = [
 /// and a proxy-mode run whose filter never loaded would be a policy that looks
 /// applied and is not.
 pub fn available() -> bool {
-    // SECCOMP_SET_MODE_FILTER with a null program: the kernel validates the
-    // mode and reports EFAULT, where an unsupported mode reports EINVAL.
-    let result = unsafe {
-        libc::syscall(libc::SYS_seccomp, 1 /* SET_MODE_FILTER */, 0, std::ptr::null::<Program>())
+    // The probe is the call the filter will actually be installed with, not the
+    // `seccomp()` syscall: a host can allow one and refuse the other, and a
+    // probe that disagrees with the application would refuse runs that would
+    // have worked. A null program reaches the same validation and reports
+    // EFAULT, where an unsupported mode reports EINVAL — and installs nothing.
+    let probed = unsafe {
+        libc::prctl(libc::PR_SET_SECCOMP, 2 /* SECCOMP_MODE_FILTER */, std::ptr::null::<Program>())
     };
-    result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EFAULT)
+    probed == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EFAULT)
 }
 
 /// Applies the filter to the calling process. Safe to call after fork: one
