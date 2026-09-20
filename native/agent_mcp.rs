@@ -18,15 +18,22 @@ pub struct Tool {
     #[serde(default)] pub token_env: Option<String>,
 }
 
+/// A remote endpoint carries no credential of its own — the host supplies that
+/// — and is plaintext only when it is loopback.
+fn check_endpoint(endpoint: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(endpoint).map_err(|_| "invalid MCP endpoint")?;
+    let local = url.host_str().is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
+    if !(url.scheme() == "https" || url.scheme() == "http" && local)
+        || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some() {
+        return Err("MCP endpoint requires HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
+    }
+    Ok(())
+}
+
 impl Tool {
     pub fn check(&self) -> Result<(), String> {
-        let url = reqwest::Url::parse(&self.endpoint).map_err(|_| "invalid MCP endpoint")?;
-        let local = url.host_str().is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
-        if !(url.scheme() == "https" || url.scheme() == "http" && local)
-            || !url.username().is_empty() || url.password().is_some()
-            || url.query().is_some() || url.fragment().is_some() {
-            return Err("MCP endpoint requires HTTPS (HTTP only on loopback), without credentials, query or fragment".into());
-        }
+        check_endpoint(&self.endpoint)?;
         if self.remote_name.is_empty() || self.remote_name.len() > 128 || !self.input_schema.is_object() {
             return Err("MCP remote_name and object input_schema are required".into());
         }

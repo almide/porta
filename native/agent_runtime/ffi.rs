@@ -60,20 +60,26 @@ pub fn agent_open(path: impl AsRef<str>, task: impl AsRef<str>) -> String {
 }
 pub fn agent_step(handle: i64) -> String {
     let mut runs = locked(&RUNS);
-    match runs.get_mut(&(handle as u64)) {
-        Some(run) => match run.tick() {
-            Ok(value) => {
-                if value["done"].as_bool().unwrap_or(false) {
-                    if let Some(journal) = &run.journal {
-                        if let Err(error) = locked(&journal).finish(value["output"].as_str().unwrap_or(""), value["metrics"]["elapsed_ms"].as_u64().unwrap_or(0)) { return fail(error); }
-                    }
-                }
-                value.to_string()
-            }
-            Err(e) => fail(e),
-        },
-        None => fail("unknown agent run"),
+    let Some(run) = runs.get_mut(&(handle as u64)) else { return fail("unknown agent run") };
+    let value = match run.tick() {
+        Ok(value) => value,
+        Err(error) => return fail(error),
+    };
+    match close_journal(run, &value) {
+        Ok(()) => value.to_string(),
+        Err(error) => fail(error),
     }
+}
+
+/// A finished run closes its journal with the output and elapsed time it just
+/// reported, so a later replay ends exactly where this run did.
+fn close_journal(run: &Runtime, value: &Value) -> Result<(), String> {
+    if !value["done"].as_bool().unwrap_or(false) { return Ok(()); }
+    let Some(journal) = &run.journal else { return Ok(()) };
+    locked(journal).finish(
+        value["output"].as_str().unwrap_or(""),
+        value["metrics"]["elapsed_ms"].as_u64().unwrap_or(0),
+    )
 }
 pub fn agent_close(handle: i64) -> i64 { if locked(&RUNS).remove(&(handle as u64)).is_some() { 0 } else { -1 } }
 

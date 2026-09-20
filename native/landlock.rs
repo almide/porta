@@ -35,18 +35,12 @@ const MIN_ABI_FOR_NET: i64 = 4;
 /// ABI that first understands truncation as a distinct right.
 const MIN_ABI_FOR_TRUNCATE: i64 = 3;
 
-/// The only place a landlock syscall is issued. Arguments are passed in syscall
-/// order; a caller that has a pointer casts it, so the order here cannot drift
-/// from the kernel's. Each attribute struct outlives its call and the kernel
-/// copies it before returning, so no borrow escapes.
-fn landlock_syscall(
-    operation: libc::c_long,
-    first: libc::c_long,
-    second: libc::c_long,
-    third: libc::c_long,
-    fourth: libc::c_long,
-) -> libc::c_long {
-    unsafe { libc::syscall(operation, first, second, third, fourth) }
+/// The only place a landlock syscall is issued. The arguments travel as one
+/// array in syscall order, and a caller that has a pointer casts it, so the
+/// order here cannot drift from the kernel's. Each attribute struct outlives
+/// its call and the kernel copies it before returning, so no borrow escapes.
+fn landlock_syscall(operation: libc::c_long, args: [libc::c_long; 4]) -> libc::c_long {
+    unsafe { libc::syscall(operation, args[0], args[1], args[2], args[3]) }
 }
 
 #[repr(C)]
@@ -90,7 +84,7 @@ impl Ruleset {
         if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        if landlock_syscall(SYS_RESTRICT_SELF, fd as libc::c_long, 0, 0, 0) != 0 {
+        if landlock_syscall(SYS_RESTRICT_SELF, [fd as libc::c_long, 0, 0, 0]) != 0 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
@@ -100,7 +94,7 @@ impl Ruleset {
 /// Landlock ABI the running kernel reports, or an error when it has none.
 pub fn abi_version() -> Result<i64, String> {
     // attr = NULL, size = 0, flags = VERSION
-    let abi = landlock_syscall(SYS_CREATE_RULESET, 0, 0, CREATE_RULESET_VERSION as libc::c_long, 0);
+    let abi = landlock_syscall(SYS_CREATE_RULESET, [0, 0, CREATE_RULESET_VERSION as libc::c_long, 0]);
     if abi < 1 {
         return Err(format!(
             "this kernel has no usable Landlock support ({}); \
@@ -125,13 +119,12 @@ fn create_ruleset(handled_fs: u64, handled_net: u64) -> Result<Ruleset, String> 
         handled_access_net: handled_net,
     };
     // attr, size, flags — in that order, as the kernel declares them.
-    let fd = landlock_syscall(
-        SYS_CREATE_RULESET,
+    let fd = landlock_syscall(SYS_CREATE_RULESET, [
         &attr as *const RulesetAttr as libc::c_long,
         std::mem::size_of::<RulesetAttr>() as libc::c_long,
         0,
         0,
-    );
+    ]);
     if fd < 0 {
         return Err(format!("Landlock ruleset refused: {}", std::io::Error::last_os_error()));
     }
@@ -141,7 +134,7 @@ fn create_ruleset(handled_fs: u64, handled_net: u64) -> Result<Ruleset, String> 
 }
 
 fn add_rule(ruleset_fd: i32, rule_type: libc::c_long, attr: libc::c_long) -> libc::c_long {
-    landlock_syscall(SYS_ADD_RULE, ruleset_fd as libc::c_long, rule_type, attr, 0)
+    landlock_syscall(SYS_ADD_RULE, [ruleset_fd as libc::c_long, rule_type, attr, 0])
 }
 
 fn allow_directory(ruleset: &Ruleset, dir: &str, rights: u64) -> Result<(), String> {

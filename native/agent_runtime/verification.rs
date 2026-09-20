@@ -4,8 +4,11 @@
 use super::*;
 
 impl Runtime {
-    /// Charge one verification step against the team budget before running it.
+    /// Charges one verification step against this run's budget and the team's
+    /// before running it. Verification is not free: a guest that keeps claiming
+    /// completion spends the same steps as any other work.
     pub(super) fn charge_verification_step(&self) -> Result<(), String> {
+        if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded during verification".into()); }
         let mut budget = locked(&self.budget);
         if budget.steps >= budget.max_steps { return Err("team step budget exceeded during verification".into()); }
         budget.steps += 1;
@@ -15,8 +18,9 @@ impl Runtime {
 
     /// Run one check, replaying a recorded result when the journal holds one.
     /// Reports the verdict, the fuel it cost, and whether it came from the journal.
-    pub(super) fn run_check(&self, name: &str, guest: &Guest, request: &Value, operation: &str)
+    pub(super) fn run_check(&self, check: &(String, Guest, Value), request: &Value, operation: &str)
         -> Result<(Verdict, u64, bool), String> {
+        let (name, guest, _) = check;
         let mut input = serde_json::to_vec(request).map_err(|_| "invalid verification input")?;
         input.push(b'\n');
         if input.len() > MAX_MESSAGE { return Err("verification input exceeds 1 MiB".into()); }
@@ -54,11 +58,11 @@ impl Runtime {
         };
         loop {
             let mut used_cached = false;
-            for (name, guest, parameters) in checks {
-                if self.steps >= self.config.limits.max_steps { return Err("agent step budget exceeded during verification".into()); }
+            for check in checks {
+                let (name, _, parameters) = check;
                 self.charge_verification_step()?;
                 self.steps += 1;
-                let (verdict, fuel, cached) = self.run_check(name, guest, &input_for(parameters), operation)?;
+                let (verdict, fuel, cached) = self.run_check(check, &input_for(parameters), operation)?;
                 used_cached |= cached;
                 self.fuel_consumed += fuel;
                 locked(&self.budget).fuel += fuel;

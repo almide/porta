@@ -1,24 +1,21 @@
 //! The loopback CONNECT proxy and the host allow-list it enforces.
 //!
+//! A listener on 127.0.0.1:<random> reads HTTP CONNECT requests and tunnels
+//! bytes for the hosts the policy allows. A non-CONNECT method, a port other
+//! than 443 and a host outside the policy are each refused, and every decision
+//! is recorded through [`crate::proxy_audit`].
+//!
 //! Split out of wasmtime_bridge so the FFI surface there stays a surface: this
-//! module owns the listener, the policy matching and the audit trail.
+//! module owns the listener and the policy matching.
 
 use crate::locking::locked;
+use crate::proxy_audit::{audit_log, Decision};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-// ============================================================================
-// CONNECT-based HTTPS proxy with hostname allow/deny policy.
-//
-// Runs a TCP listener on 127.0.0.1:<random>, reads HTTP CONNECT requests,
-// and tunnels bytes for hosts matching the policy. Non-HTTPS (port != 443)
-// and non-CONNECT methods are rejected. Decisions are written to stderr and
-// optionally appended as JSONL to an audit file.
-// ============================================================================
+use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ProxyMode {
@@ -67,40 +64,6 @@ fn policy_allows(policy: &ProxyPolicy, host: &str) -> bool {
     }
 }
 
-/// One proxy decision, exactly as it is reported and recorded.
-struct Decision {
-    host: String,
-    port: u16,
-    verdict: &'static str,
-    reason: String,
-}
-
-impl Decision {
-    fn new(host: &str, port: u16, verdict: &'static str, reason: impl Into<String>) -> Self {
-        Self { host: host.to_string(), port, verdict, reason: reason.into() }
-    }
-}
-
-fn audit_log(audit_path: &Option<String>, decision: &Decision) {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    eprintln!("[porta proxy] {} {}:{} ({})", decision.verdict, decision.host, decision.port, decision.reason);
-    if let Some(p) = audit_path {
-        let line = format!(
-            "{{\"ts\":{},\"host\":{},\"port\":{},\"decision\":{},\"reason\":{}}}\n",
-            ts,
-            serde_json::to_string(&decision.host).unwrap_or_else(|_| "\"\"".into()),
-            decision.port,
-            serde_json::to_string(decision.verdict).unwrap_or_else(|_| "\"\"".into()),
-            serde_json::to_string(&decision.reason).unwrap_or_else(|_| "\"\"".into()),
-        );
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
-            let _ = f.write_all(line.as_bytes());
-        }
-    }
-}
 
 fn copy_bytes(mut src: TcpStream, mut dst: TcpStream) -> std::io::Result<()> {
     let mut buf = [0u8; 8192];
@@ -209,52 +172,60 @@ pub fn wt_proxy_start(
     deny_json: impl AsRef<str>,
     audit_path: impl AsRef<str>,
 ) -> String {
-    let allow: Vec<String> = serde_json::from_str(allow_json.as_ref()).unwrap_or_default();
-    let deny: Vec<String> = serde_json::from_str(deny_json.as_ref()).unwrap_or_default();
-
-    let policy = if !allow.is_empty() && !deny.is_empty() {
-        return "{\"error\":\"allow and deny are mutually exclusive\"}".to_string();
-    } else if !allow.is_empty() {
-        ProxyPolicy { mode: ProxyMode::Allow, patterns: allow }
-    } else if !deny.is_empty() {
-        ProxyPolicy { mode: ProxyMode::Deny, patterns: deny }
-    } else {
-        return "{\"error\":\"neither allow nor deny list provided\"}".to_string();
+    let policy = match requested_policy(allow_json.as_ref(), deny_json.as_ref()) {
+        Ok(policy) => policy,
+        Err(reason) => return format!("{{\"error\":\"{}\"}}", reason),
     };
-
-    let listener = match TcpListener::bind("127.0.0.1:0") {
-        Ok(l) => l,
-        Err(e) => return format!("{{\"error\":\"bind failed: {}\"}}", e),
+    let listener = match loopback_listener() {
+        Ok(listener) => listener,
+        Err(reason) => return format!("{{\"error\":\"{}\"}}", reason),
     };
     let port = match listener.local_addr() {
-        Ok(a) => a.port(),
+        Ok(address) => address.port(),
         Err(e) => return format!("{{\"error\":\"local_addr failed: {}\"}}", e),
     };
-    if listener.set_nonblocking(true).is_err() {
-        return "{\"error\":\"set_nonblocking failed\"}".to_string();
-    }
-
     let shutdown = Arc::new(AtomicBool::new(false));
-    let audit = if audit_path.as_ref().is_empty() {
-        None
-    } else {
-        Some(audit_path.as_ref().to_string())
-    };
-    let policy_arc = Arc::new(policy);
-    let audit_arc = Arc::new(audit);
-    let shutdown_clone = shutdown.clone();
+    let audit = Some(audit_path.as_ref().to_string()).filter(|path| !path.is_empty());
+    serve(listener, Arc::new(policy), Arc::new(audit), shutdown.clone());
 
+    let handle = {
+        let mut proxies = locked(&PROXIES);
+        proxies.push(Some(ProxyInstance { port, shutdown }));
+        (proxies.len() - 1) as i64
+    };
+    format!("{{\"handle\":{},\"port\":{}}}", handle, port)
+}
+
+/// The policy these two lists ask for. Exactly one of them must be given:
+/// an allow-list and a deny-list together have no single meaning.
+fn requested_policy(allow_json: &str, deny_json: &str) -> Result<ProxyPolicy, &'static str> {
+    let allow: Vec<String> = serde_json::from_str(allow_json).unwrap_or_default();
+    let deny: Vec<String> = serde_json::from_str(deny_json).unwrap_or_default();
+    match (allow.is_empty(), deny.is_empty()) {
+        (false, false) => Err("allow and deny are mutually exclusive"),
+        (false, true) => Ok(ProxyPolicy { mode: ProxyMode::Allow, patterns: allow }),
+        (true, false) => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: deny }),
+        (true, true) => Err("neither allow nor deny list provided"),
+    }
+}
+
+/// A listener on a loopback port the kernel picks. Non-blocking, so the accept
+/// loop can notice a shutdown instead of parking on accept forever.
+fn loopback_listener() -> Result<TcpListener, String> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind failed: {}", e))?;
+    listener.set_nonblocking(true).map_err(|_| "set_nonblocking failed".to_string())?;
+    Ok(listener)
+}
+
+/// Accepts connections until the handle is stopped, giving each its own thread.
+fn serve(listener: TcpListener, policy: Arc<ProxyPolicy>, audit: Arc<Option<String>>, shutdown: Arc<AtomicBool>) {
     thread::spawn(move || {
-        loop {
-            if shutdown_clone.load(Ordering::Relaxed) {
-                break;
-            }
+        while !shutdown.load(Ordering::Relaxed) {
             match listener.accept() {
-                Ok((conn, _addr)) => {
-                    let _ = conn.set_nonblocking(false);
-                    let p = policy_arc.clone();
-                    let a = audit_arc.clone();
-                    thread::spawn(move || handle_connection(conn, p, a));
+                Ok((connection, _address)) => {
+                    let _ = connection.set_nonblocking(false);
+                    let (policy, audit) = (policy.clone(), audit.clone());
+                    thread::spawn(move || handle_connection(connection, policy, audit));
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(50));
@@ -263,14 +234,6 @@ pub fn wt_proxy_start(
             }
         }
     });
-
-    let instance = ProxyInstance { port, shutdown };
-    let handle = {
-        let mut proxies = locked(&PROXIES);
-        proxies.push(Some(instance));
-        (proxies.len() - 1) as i64
-    };
-    format!("{{\"handle\":{},\"port\":{}}}", handle, port)
 }
 
 /// Stop the proxy associated with this handle. Returns 0 on success, -1 otherwise.
