@@ -127,23 +127,29 @@ CI がその監査を実行します。Porta に不利な結果も同じ場所�
 
 ```toml
 # agent.toml
+version = 1
+
 [agent]
 wasm = "agent.wasm"
-instruction = "Use tools to solve the task."
+instruction = "Use the available tools to answer the request."
 
 [model]
 endpoint = "https://api.example.com/v1/chat/completions"
 name = "your-model"
-token_env = "MODEL_TOKEN"        # ホストが読む。ゲストには渡さない
+token_env = "MODEL_TOKEN"          # ホストが読む。ゲストには渡さない
 
 [limits]
-max_model_calls = 20
+max_model_calls = 16
+max_steps = 64
+timeout_seconds = 120
 
 [[tools]]
 name = "write_file"
 wasm = "tools/write.wasm"
-sha256 = "..."                    # ピン留め: レビューしたこのバイト列でなければ実行しない
+description = "Write text to a file in the workspace."
+sha256 = "<64 hex characters>"     # レビューしたこのバイト列でなければ実行しない
 mounts = [{ host = "workspace", guest = ".", read_only = false }]
+input_schema = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
 ```
 
 ループもツールも別々の WASM インスタンスで動きます。どちらもあなたの環境変数も

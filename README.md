@@ -127,23 +127,29 @@ guarantees come from.
 
 ```toml
 # agent.toml
+version = 1
+
 [agent]
 wasm = "agent.wasm"
-instruction = "Use tools to solve the task."
+instruction = "Use the available tools to answer the request."
 
 [model]
 endpoint = "https://api.example.com/v1/chat/completions"
 name = "your-model"
-token_env = "MODEL_TOKEN"        # read by the host, never handed to the guest
+token_env = "MODEL_TOKEN"          # read by the host, never handed to the guest
 
 [limits]
-max_model_calls = 20
+max_model_calls = 16
+max_steps = 64
+timeout_seconds = 120
 
 [[tools]]
 name = "write_file"
 wasm = "tools/write.wasm"
-sha256 = "..."                    # pinned: this exact reviewed artifact or no run
+description = "Write text to a file in the workspace."
+sha256 = "<64 hex characters>"     # this exact reviewed artifact, or no run at all
 mounts = [{ host = "workspace", guest = ".", read_only = false }]
+input_schema = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
 ```
 
 The loop and every tool run in separate WASM instances. Neither inherits your
