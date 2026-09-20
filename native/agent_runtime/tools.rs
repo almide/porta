@@ -3,6 +3,38 @@
 
 use super::*;
 
+/// How many violations a rejection reports, and how long each may be. The list
+/// travels back through the model's context, so it is bounded: the first few
+/// mistakes are what a caller needs to fix, and the rest are noise.
+const MAX_REPORTED_VIOLATIONS: usize = 5;
+const MAX_VIOLATION_LENGTH: usize = 200;
+
+/// What is wrong with these arguments, in terms of the schema the caller was
+/// given. A rejection that only says "invalid" leaves a model guessing, and a
+/// guessing model tends to resend exactly what was refused; the broker already
+/// knows which properties failed, so it says which.
+///
+/// An empty list means the arguments are valid. Nothing here reaches the
+/// network or the filesystem: the schema was compiled offline at load.
+fn schema_violations(validator: &jsonschema::Validator, arguments: &Value) -> Vec<String> {
+    validator
+        .iter_errors(arguments)
+        .take(MAX_REPORTED_VIOLATIONS)
+        .map(|error| {
+            let path = error.instance_path().to_string();
+            let at = if path.is_empty() { "arguments".to_string() } else { path };
+            clipped(format!("{at}: {error}"), MAX_VIOLATION_LENGTH)
+        })
+        .collect()
+}
+
+/// Truncates on a character boundary, so a multi-byte name cannot split.
+fn clipped(text: String, limit: usize) -> String {
+    if text.len() <= limit { return text; }
+    let end = (0..=limit).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0);
+    format!("{}…", &text[..end])
+}
+
 impl Runtime {
     /// Delegate to a child agent and return its final output. The child shares
     /// this team's budget, so it cannot buy itself more steps.
@@ -58,11 +90,16 @@ impl Runtime {
     /// argument shape, the declared schema, the grant, and the pre-tool checks.
     pub(super) fn reject_tool_call(&mut self, name: &str, arguments: &Value, state: &Value) -> Result<Option<Value>, String> {
         if !arguments.is_object() { return Err("tool arguments must be an object".into()); }
-        if self.schemas.get(name).is_some_and(|validator| !validator.is_valid(arguments)) {
+        let violations = match self.schemas.get(name) {
+            Some(validator) => schema_violations(validator, arguments),
+            None => Vec::new(),
+        };
+        if !violations.is_empty() {
             // Pure validation is recomputed during replay. No intent, tool
             // instantiation, mount access, or side effect occurs here.
             return Ok(Some(self.refuse(name, state, json!({"code":"invalid_tool_arguments",
-                "message":"Arguments do not match the declared input_schema; correct them before retrying."}))));
+                "message":"Arguments do not match the declared input_schema; correct them and retry.",
+                "violations":violations}))));
         }
         if !self.is_granted(name) { return Err(format!("tool not granted: {name}")); }
         match self.verify_checks("", Some((name, arguments)))? {

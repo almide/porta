@@ -95,9 +95,16 @@ network filesystem). `max_output_tokens` is a provider request parameter, not a
 billing guarantee. Tool arguments must be objects. The broker compiles every tool's
 `input_schema` at launch and validates arguments before instantiating the tool or
 writing a journal intent. Invalid arguments return a tool result with
-`error.code = "invalid_tool_arguments"`, allowing the guest/model to correct them.
-Rejected attempts consume steps and any subsequent model calls consume the shared
-model budget; rejected attempts do not increment executed `tool_calls`.
+`error.code = "invalid_tool_arguments"` and a bounded `violations` list naming
+what failed and where, for example
+`"arguments: Additional properties are not allowed ('audit' was unexpected)"`.
+The detail is deliberate: a rejection that only says "invalid" leaves a model
+guessing, and a guessing model tends to resend exactly what was refused, so the
+call is contained but the task fails too. Nothing in the list is new to the
+caller — the schema was already sent to it as part of the tool definition, and
+the values are its own. Rejected attempts consume steps and any subsequent model
+calls consume the shared model budget; rejected attempts do not increment
+executed `tool_calls`.
 
 Validation uses [jsonschema 0.56.0](https://docs.rs/jsonschema/0.56.0/jsonschema/)
 with offline resolution and default network/file retrieval features disabled.

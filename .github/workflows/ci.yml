@@ -64,6 +64,7 @@ jobs:
           python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-loop-control.json.gz
           python3 scripts/audit_eval.py docs/benchmarks/2026-09-20-shared-compute.json.gz
           python3 scripts/audit_containment.py docs/benchmarks/2026-09-20-containment.json.gz
+          python3 scripts/audit_containment.py docs/benchmarks/2026-09-20-containment-fixed.json.gz
           python3 scripts/audit_compute_smoke.py docs/benchmarks/2026-09-20-compute-smoke.json.gz
       - name: Audit saved startup and memory measurements
         run: |
