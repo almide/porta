@@ -13,18 +13,18 @@ permissions:
 
 jobs:
   build:
-    # Both architectures on both platforms. Publishing half the matrix means an
-    # Intel Mac or an ARM server — a Graviton instance, a Pi, Docker on Apple
-    # silicon — asks the installer for an archive that is not there and gets a
-    # 404, which is what the install instructions promised would work.
+    # Apple silicon and both Linux architectures. Intel macOS is not here: the
+    # `macos-13` runner sat queued for three hours without ever starting, and
+    # the only way to publish for it anyway would be to cross-compile on Apple
+    # silicon — where the integration suite below cannot run the binary it
+    # produced. Shipping something no machine has executed is the one thing
+    # this workflow exists to prevent, so an Intel Mac builds from source.
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: macos-aarch64
-          - os: macos-13
-            target: macos-x86_64
           - os: ubuntu-latest
             target: linux-x86_64
           - os: ubuntu-24.04-arm
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, macos-13, ubuntu-latest, ubuntu-24.04-arm]
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
