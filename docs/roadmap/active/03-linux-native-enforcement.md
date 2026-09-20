@@ -34,14 +34,39 @@ does, or refuse the specific rule it cannot enforce:
 | Network | open by default; `--allow-net '*:443'` restricts by port |
 | Proxy mode | only the loopback CONNECT proxy; no UDP, no Unix sockets |
 
+## Feasibility probe
+
+Measured on kernel 6.12.76-linuxkit, aarch64, inside Docker Desktop's VM, with
+Docker's default seccomp profile already applied. `landlock_create_ruleset` with
+`LANDLOCK_CREATE_RULESET_VERSION` reported **ABI 6**. A single process then
+handled `WRITE_FILE | MAKE_REG` and `CONNECT_TCP`, allowed one directory and
+port 443, and called `prctl(PR_SET_NO_NEW_PRIVS)` plus `landlock_restrict_self`:
+
+| Operation | Before | After |
+|---|---|---|
+| `connect 127.0.0.1:80` | ECONNREFUSED | **EACCES** |
+| `connect 127.0.0.1:443` | ECONNREFUSED | ECONNREFUSED (policy passed) |
+| write in the allowed directory | ok | ok |
+| write outside it | ok | **EACCES** |
+
+No privileges, no namespaces, no external binary. This is one kernel, not the
+matrix: the target hosts, including the GitHub `ubuntu-latest` runner, still
+have to be probed, and network rules need a sufficient ABI. Porta must read the
+ABI at runtime and refuse rules the kernel cannot express.
+
+### One semantic gap found
+
+Landlock is allow-list only. The macOS profile denies reads of `~/.ssh` and
+`~/.gnupg` while leaving every other read permitted, which Landlock cannot
+express: either read access is not handled at all, and those paths stay
+readable, or it is handled and every path the command legitimately reads has to
+be enumerated. This is a decision to make explicitly, not a detail to discover
+during implementation.
+
 ## Candidate mechanisms
 
-No decision yet. Each has to be checked against the parity table rather than
-assumed to cover it.
-
-- **Landlock** — unprivileged, filesystem restrictions; network control arrived
-  in later ABI versions, so what is available depends on the kernel. The exact
-  ABI and kernel matrix has to be established as part of this work, not assumed.
+Landlock now looks sufficient for writes and TCP ports. The rest remain open for
+what it cannot cover.
 - **seccomp** — syscall filtering. No host or port semantics on its own.
 - **User and network namespaces with bind mounts** — closest to the mount model,
   but changes the process tree and requires unprivileged user namespaces, which
