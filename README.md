@@ -235,7 +235,11 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--secret <KEY=VALUE>` | Inject secret as env var |
 | `-v <path>` | Mount directory (writable) |
 | `-v <path>:ro` | Mount directory (read-only) |
-| `--allow-net <host:port>` | Allow outbound network (repeatable) |
+| `--allow-net <host:port>` | Allow outbound TCP by port (repeatable). The host part is not enforced at the OS layer — use `--proxy-allow` for that |
+| `--proxy-allow <hosts>` | Route egress through porta's CONNECT proxy and allow only these hosts |
+| `--proxy-deny <hosts>` | Same, denying these hosts |
+| `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
+| `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -250,21 +254,32 @@ porta up -- --print "hi"   # Pass arguments to the command
 
 Porta enforces restrictions at two levels:
 
-1. **OS layer** (sandbox-exec) — Process-level port-based network control and filesystem restrictions. Cannot be bypassed by the child process.
+1. **OS layer** — `sandbox-exec` on macOS, Landlock plus a seccomp filter on Linux. Filesystem and network restrictions the child process cannot lift, because they are applied to it before it starts.
 2. **MCP layer** — Application-level host+port URL filtering and capability checks on `porta.exec` and `porta.http` builtin tools.
 
-### Native Restrictions (macOS)
+### Native Restrictions
 
-Uses `sandbox-exec` to enforce:
+One table, because the two platforms differ and reading two near-identical ones
+does not show you where.
 
-| Control | Behavior |
-|---------|----------|
-| **FS write** | Denied everywhere except `-v` mounted dirs and `/tmp` |
-| **FS read** | By default `~/.ssh` and `~/.gnupg` are denied and other readable host files remain accessible. `--read-policy strict` confines reads to your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` — every home directory is closed |
-| **Network** | Open by default. `--allow-net "*:443"` restricts to HTTPS only |
-| **Read-only** | `-v ./data:ro` → read OK, write denied |
+| Control | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
+|---|---|---|
+| **Write** | denied outside `-v` mounts, `/tmp` | denied outside `-v` mounts, `/tmp`, `/dev` |
+| **Read, default** | `~/.ssh` and `~/.gnupg` denied; everything else readable | not confined |
+| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` |
+| **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
+| **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
+| **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
+| **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
 
-> Note: macOS sandbox-exec supports port-based filtering only. Host-based filtering (`api.example.com:443`) is enforced at the MCP layer for builtin tools.
+Under `strict`, every home directory is closed — and so is the command itself if
+it lives outside those directories. A toolchain under `/opt` needs `-v` on its
+own installation; porta says which grant is missing rather than failing with a
+bare `Permission denied`.
+
+Linux uses Landlock unprivileged, without namespaces and without an external
+runtime. A rule the running kernel cannot express refuses the run rather than
+widening it: partial enforcement is never silently accepted.
 
 ### Host-filtered HTTPS
 
@@ -272,26 +287,16 @@ Uses `sandbox-exec` to enforce:
 porta run claude -v . --proxy-allow "api.anthropic.com,*.anthropic.com"
 ```
 
-Or add `[proxy]` with `allow = ["api.anthropic.com"]` to `porta.toml`.
-Both `run` and `up` apply the same policy. The child can connect only to the
-local CONNECT proxy; direct TCP, UDP, and Unix-socket egress are denied.
-Only HTTPS CONNECT on port 443 is supported. Clients must respect `HTTPS_PROXY`.
-This filters connection targets, not TLS contents. Deny lists are weaker than
-explicit allow lists. It is not a credential broker or a private-address filter.
+Or add `[proxy]` with `allow = ["api.anthropic.com"]` to `porta.toml`. Both
+`run` and `up` apply the same policy. The child can reach only the local CONNECT
+proxy; direct TCP, UDP and Unix-socket egress are denied, on Linux by a seccomp
+filter that also refuses `io_uring`, because a ring can open a socket without
+ever asking for one.
 
-### Native Restrictions (Linux)
-
-Uses Landlock, unprivileged and without namespaces or an external runtime:
-
-| Control | Behavior |
-|---------|----------|
-| **FS write** | Denied everywhere except `-v` mounted dirs, `/tmp` and `/dev` |
-| **FS read** | Open by default. `--read-policy strict` confines reads to your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` — every home directory is closed |
-| **Network** | Open by default. `--allow-net '*:443'` restricts TCP connect by port, needing Landlock ABI 4 |
-| **Proxy mode** | Enforced. Landlock pins egress to the proxy's TCP port; a seccomp filter denies UDP, Unix and raw sockets and `io_uring`, so the proxy is the only way out |
-
-A requested rule this kernel cannot express refuses the run rather than widening
-it: partial enforcement is never silently accepted.
+Only HTTPS CONNECT on port 443 is supported, and clients must respect
+`HTTPS_PROXY`. This filters connection targets, not TLS contents. Deny lists are
+weaker than explicit allow lists. It is not a credential broker or a
+private-address filter, and it does not stop the child from listening on a port.
 
 Native read access is broader than write access on both platforms: this is not a
 container filesystem or complete secret isolation.
@@ -354,31 +359,35 @@ porta serve agent.wasm --profile full
 
 ## Architecture
 
-```
-porta
-├── cli.almd            — Options, arg parsing, help
-├── mod.almd            — Command dispatch (entry point)
-│
-├── engine.almd         — serve, run, validate, inspect
-├── dispatch.almd       — WASM instance lifecycle & tool dispatch
-├── mcp.almd            — MCP protocol (JSON-RPC 2.0 / stdio)
-├── jsonrpc.almd        — Newline-delimited JSON-RPC
-├── sandbox.almd        — Capability-based security
-│
-├── ops.almd            — Daemon management (ps/stop/kill/logs/rm)
-├── build.almd          — Manifest generation
-├── project.almd        — porta.toml (up/init)
-│
-├── wasm_rt.almd        — Wasmtime bridge + runtime functions
-├── config.almd         — porta.toml parser
-├── manifest.almd       — manifest.json parser
-├── observability.almd  — Execution metrics
-├── util.almd           — CLI utilities
-│
-└── wasm/
-    ├── binary.almd     — WASM binary parser
-    └── wasi.almd       — WASI Preview 1 host functions
-```
+Two sides. Almide decides policy; Rust applies it and talks to the kernel.
+
+**`src/` — Almide.** The CLI, the MCP protocol, capability checks, and what a
+run is allowed to do.
+
+| | |
+|---|---|
+| `mod.almd`, `cli.almd`, `help.almd` | command dispatch, options, help |
+| `engine.almd`, `dispatch.almd` | serve / run / validate / inspect, and the WASM instance lifecycle |
+| `mcp.almd`, `mcp_builtins.almd`, `mcp_content.almd`, `jsonrpc.almd` | the MCP session, `porta.exec` and `porta.http`, resources and prompts, framing |
+| `sandbox.almd`, `wasm_imports.almd` | capability sets, and the import shape they are checked against |
+| `agent.almd`, `proxy.almd` | WASM agents and teams, the CONNECT proxy's configuration |
+| `config.almd`, `manifest.almd`, `project.almd`, `build.almd` | porta.toml, manifest.json, `init` / `up` |
+| `ops.almd`, `observability.almd`, `util.almd` | daemons, metrics, helpers |
+| `wasm_rt.almd` | every `@extern` into the Rust side |
+
+**`native/` — Rust.** Wasmtime, the OS enforcement, and the broker that holds
+model credentials.
+
+| | |
+|---|---|
+| `wasmtime_bridge.rs` | WASM instance lifecycle and the FFI surface |
+| `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock_policy.rs`, `landlock.rs`, `seccomp.rs` | one sandboxed request, the macOS profile, the Linux ruleset and the egress channels Landlock cannot reach |
+| `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
+| `agent_runtime.rs`, `agent_journal.rs`, `agent_mcp.rs` | the broker, durable run records, granted remote MCP calls |
+| `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | one checked HTTP request, process helpers, module inspection |
+
+porta has no WASM parser of its own: a module is read through the engine that
+will run it, so `serve`, `validate` and `inspect` cannot disagree about one.
 
 ## Build from source
 
