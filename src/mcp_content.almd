@@ -1,0 +1,87 @@
+import value
+// MCP resources and prompts.
+//
+// Both are served the same way: the manifest says what exists, and reading one
+// dispatches a reserved tool into the module. Neither touches the session, so
+// these handlers take only the manifest and the instance configuration and
+// answer with a response — which is also why they are not in the state machine.
+
+import json
+import self.jsonrpc
+import self.manifest
+import self.dispatch
+
+fn resources_list(m: manifest.Manifest, req: jsonrpc.JsonRpcRequest) -> String = {
+  let resources = m.resources |> list.map((r) =>
+    value.object([
+      ("uri", value.str(r.uri)),
+      ("name", value.str(r.name)),
+      ("description", value.str(r.description)),
+      ("mimeType", value.str(r.mime_type)),
+    ])
+  )
+  jsonrpc.make_response(req.id, value.object([("resources", value.array(resources))]))
+}
+
+effect fn resources_read(m: manifest.Manifest, config: dispatch.InstanceConfig, req: jsonrpc.JsonRpcRequest) -> Result[String, String] = {
+  let uri = json.get_string(req.params, "uri") ?? ""
+  match m.resources |> list.find((r) => r.uri == uri) {
+    none => ok(jsonrpc.make_error_response(req.id, -32602, "Unknown resource: '${uri}'")),
+    some(r) => {
+      let args_json = json.stringify(value.object([("uri", value.str(uri))]))
+      let tool_result = dispatch.dispatch_tool(config, "_resource_read", args_json)!
+      let content = value.object([
+        ("contents", value.array([
+          value.object([
+            ("uri", value.str(uri)),
+            ("mimeType", value.str(r.mime_type)),
+            ("text", value.str(tool_result.stdout)),
+          ]),
+        ])),
+      ])
+      ok(jsonrpc.make_response(req.id, content))
+    },
+  }
+}
+
+fn prompts_list(m: manifest.Manifest, req: jsonrpc.JsonRpcRequest) -> String = {
+  let prompts = m.prompts |> list.map((p) => {
+    let args = p.arguments |> list.map((a) =>
+      value.object([
+        ("name", value.str(a.name)),
+        ("description", value.str(a.description)),
+        ("required", value.bool(a.required)),
+      ])
+    )
+    value.object([
+      ("name", value.str(p.name)),
+      ("description", value.str(p.description)),
+      ("arguments", value.array(args)),
+    ])
+  })
+  jsonrpc.make_response(req.id, value.object([("prompts", value.array(prompts))]))
+}
+
+effect fn prompts_get(m: manifest.Manifest, config: dispatch.InstanceConfig, req: jsonrpc.JsonRpcRequest) -> Result[String, String] = {
+  let name = json.get_string(req.params, "name") ?? ""
+  match m.prompts |> list.find((p) => p.name == name) {
+    none => ok(jsonrpc.make_error_response(req.id, -32602, "Unknown prompt: '${name}'")),
+    some(_p) => {
+      let arguments = value.field(req.params, "arguments") ?? value.object([])
+      let args_json = json.stringify(value.object([("prompt", value.str(name)), ("arguments", arguments)]))
+      let tool_result = dispatch.dispatch_tool(config, "_prompt_get", args_json)!
+      let content = value.object([
+        ("messages", value.array([
+          value.object([
+            ("role", value.str("user")),
+            ("content", value.object([
+              ("type", value.str("text")),
+              ("text", value.str(tool_result.stdout)),
+            ])),
+          ]),
+        ])),
+      ])
+      ok(jsonrpc.make_response(req.id, content))
+    },
+  }
+}

@@ -1,0 +1,163 @@
+import value
+// Built-in host tools: porta.exec and porta.http.
+//
+// These are the two tools porta answers itself rather than from the module, so
+// each one's guards are declared together in one place: the capability it
+// needs and the allow-list its target must pass. A builtin cannot be added
+// with one of those and not the other, and neither is decided at the call site.
+
+import json
+import self.dispatch
+import self.sandbox
+import self.wasm_rt
+
+// One builtin's guards. `match_host` says how the allow-list is read:
+// porta.http compares the host inside a URL, porta.exec the command itself.
+type Builtin = {
+  name: String,
+  capability: sandbox.Capability,
+  argument: String,
+  allowed: List[String],
+  match_host: Bool,
+}
+
+// The builtin a tool name selects, if it names one.
+fn builtin(name: String, config: dispatch.InstanceConfig) -> Option[Builtin] =
+  match name {
+    "porta.exec" => some({
+      name: name, capability: sandbox.CapExec, argument: "command",
+      allowed: config.allowed_commands, match_host: false,
+    }),
+    "porta.http" => some({
+      name: name, capability: sandbox.CapNet, argument: "url",
+      allowed: config.allowed_hosts, match_host: true,
+    }),
+    _ => none,
+  }
+
+fn property(kind: String, description: String) -> Value =
+  value.object([("type", value.str(kind)), ("description", value.str(description))])
+
+fn declaration(name: String, description: String, properties: List[(String, Value)], required: List[String]) -> Value =
+  value.object([
+    ("name", value.str(name)),
+    ("description", value.str(description)),
+    ("inputSchema", value.object([
+      ("type", value.str("object")),
+      ("properties", value.object(properties)),
+      ("required", value.array(required |> list.map(value.str))),
+    ])),
+  ])
+
+// What `tools/list` says about the builtins. They are declared beside the
+// guards that admit them, so a tool porta advertises is one porta can check.
+fn declarations() -> List[Value] = [
+  declaration(
+    "porta.exec",
+    "Execute a command with filesystem and network restrictions",
+    [
+      ("command", property("string", "Command to execute")),
+      ("args", value.object([
+        ("type", value.str("array")),
+        ("items", value.object([("type", value.str("string"))])),
+        ("description", value.str("Command arguments")),
+      ])),
+      ("cwd", property("string", "Working directory")),
+    ],
+    ["command"]),
+  declaration(
+    "porta.http",
+    "Make an HTTP request",
+    [
+      ("method", property("string", "HTTP method: GET, POST, PUT, DELETE")),
+      ("url", property("string", "Request URL")),
+      ("headers", property("object", "Request headers")),
+      ("body", property("string", "Request body")),
+    ],
+    ["method", "url"]),
+]
+
+fn is_host_allowed(url: String, allowed: List[String]) -> Bool =
+  wasm_rt.wt_is_host_allowed(url, json.stringify(value.array(allowed |> list.map(value.str))))
+
+// An empty allow-list does not filter; a non-empty one admits only what it names.
+fn permitted(tool: Builtin, target: String) -> Bool =
+  if list.len(tool.allowed) == 0 then true
+  else if tool.match_host then is_host_allowed(target, tool.allowed)
+  else list.any(tool.allowed, (entry) => entry == target)
+
+// Why this builtin may not run, if it may not. Both guards are decided here,
+// before any effect.
+fn refusal(tool: Builtin, config: dispatch.InstanceConfig, args: Value) -> Option[String] = {
+  let target = json.get_string(args, tool.argument) ?? ""
+  if not sandbox.has_capability(config.capabilities, tool.capability) then
+    some("${tool.name} denied: '${sandbox.cap_name(tool.capability)}' capability not granted")
+  else if not permitted(tool, target) then
+    some("${tool.name} denied: ${tool.argument} '${target}' not in allowed list")
+  else none
+}
+
+// The one content shape both builtins answer with.
+fn content(text: String, failed: Bool) -> Value =
+  value.object([
+    ("content", value.array([value.object([
+      ("type", value.str("text")), ("text", value.str(text)),
+    ])])),
+    ("isError", value.bool(failed)),
+  ])
+
+// What a finished exec reports: its error, or its output with any stderr
+// appended so a caller sees both.
+fn exec_output(reply: Value) -> String = {
+  let stdout = json.get_string(reply, "stdout") ?? ""
+  let stderr = json.get_string(reply, "stderr") ?? ""
+  let error = json.get_string(reply, "error") ?? ""
+  if error != "" then error
+  else if stderr != "" then stdout + "\n--- stderr ---\n" + stderr
+  else stdout
+}
+
+// A reply the host did not render as JSON is reported verbatim and as a
+// failure: it is the only evidence of what the host actually said.
+fn unparsed(result_json: String) -> Value = content(result_json, true)
+
+effect fn run_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] = {
+  let cmd_args = json.get_array(args, "args") ?? []
+  let request: dispatch.ExecRequest = {
+    cmd: json.get_string(args, "command") ?? "",
+    args: cmd_args |> list.filter_map((a) => match value.as_string(a) { ok(s) => some(s), err(_) => none }),
+    dirs: config.preopen_dirs,
+    net: config.allowed_hosts,
+    env: config.env_vars + config.secrets,
+    cwd: json.get_string(args, "cwd") ?? ".",
+    // MCP exec keeps today's behaviour until an instance can declare one.
+    read_policy: "open",
+  }
+  let result_json = wasm_rt.wt_exec_sandboxed(dispatch.exec_request_json(request))!
+  ok(match json.parse(result_json) {
+    ok(reply) => content(exec_output(reply), (json.get_string(reply, "error") ?? "") != ""),
+    err(_) => unparsed(result_json),
+  })
+}
+
+effect fn run_http(args: Value) -> Result[Value, String] = {
+  let method = json.get_string(args, "method") ?? "GET"
+  let url = json.get_string(args, "url") ?? ""
+  let headers_json = json.stringify(value.field(args, "headers") ?? value.object([]))
+  let body = json.get_string(args, "body") ?? ""
+  let result_json = wasm_rt.wt_http_request(method, url, headers_json, body)!
+  ok(match json.parse(result_json) {
+    ok(reply) => {
+      let error = json.get_string(reply, "error") ?? ""
+      content(if error != "" then error else json.get_string(reply, "body") ?? "", error != "")
+    },
+    err(_) => unparsed(result_json),
+  })
+}
+
+// Run a builtin whose guards have already passed.
+effect fn run(tool: Builtin, config: dispatch.InstanceConfig, args: Value) -> Result[Value, String] =
+  match tool.name {
+    "porta.http" => run_http(args),
+    _ => run_exec(config, args),
+  }
