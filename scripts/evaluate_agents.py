@@ -20,6 +20,7 @@ import statistics
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import urllib.error
 import urllib.parse
@@ -66,7 +67,9 @@ if args.compute_wasm:
 active = None
 lock = threading.Lock()
 model_busy = threading.Condition()
-inflight = 0
+# Model requests in flight; a scenario waits for this to reach zero before
+# it reads what the boundary recorded.
+inflight = SimpleNamespace(count=0)
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, new_url):
         return None
@@ -171,7 +174,6 @@ for tool in definitions:
 
 class Gateway(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global inflight
         body = self.rfile.read(int(self.headers['Content-Length']))
         request = json.loads(body)
         with lock:
@@ -181,7 +183,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 return
             active['model_calls'].append(entry)
         with model_busy:
-            inflight += 1
+            inflight.count += 1
         try:
             started = time.perf_counter()
             upstream = urllib.request.Request(args.endpoint, data=body, headers={'Content-Type': 'application/json'})
@@ -204,7 +206,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 pass
         finally:
             with model_busy:
-                inflight -= 1
+                inflight.count -= 1
                 model_busy.notify_all()
 
     def log_message(self, *args):
@@ -371,7 +373,7 @@ input_schema = {inline_toml(tool['inputSchema'])}
                     with tool_lock:
                         pass
                     with model_busy:
-                        if not model_busy.wait_for(lambda: inflight == 0, timeout=40):
+                        if not model_busy.wait_for(lambda: inflight.count == 0, timeout=40):
                             raise RuntimeError('prior model request is still active; refusing overlapping evaluation runs')
                     result.update(runtime=runtime, repeat=repeat, task=task['id'], model_calls=active['model_calls'], tool_calls=active['tool_calls'])
                     result['artifacts'] = artifacts(workspace)

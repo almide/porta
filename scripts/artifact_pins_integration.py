@@ -9,18 +9,19 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 from wasm_fixtures import fixed_stdout_guest
 
 porta, agent, tool = [str(pathlib.Path(p).resolve()) for p in sys.argv[1:4]]
 requests=[]
-mutate=None
+# A change to make on the host during the next model call, once.
+state=SimpleNamespace(mutate=None)
 class Model(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        global mutate
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])));requests.append(body)
         results=[m for m in body['messages'] if m['role']=='tool']
-        if mutate:
-            action=mutate;mutate=None;action()
+        if state.mutate:
+            action=state.mutate;state.mutate=None;action()
         if body['model'] in ('root','tool') and not results:
             name,args=('delegate_worker',{'task':'finish'}) if body['model']=='root' else ('add',{'a':20,'b':22})
             message={'role':'assistant','tool_calls':[{'id':'call-1','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
@@ -99,7 +100,7 @@ name="{model}"
         print('PASS: optional pins are still enforced; malformed pins fail closed; unpinned compatibility remains explicit')
         # Change a tool after launch: the pinned, compiled bytes remain in memory.
         config.write_text(config_text('tool'))
-        mutate=lambda:(root/'tools.wasm').write_bytes(fixed_stdout_guest({'ok':'tampered'}))
+        state.mutate=lambda:(root/'tools.wasm').write_bytes(fixed_stdout_guest({'ok':'tampered'}))
         result=success(run('agent',config,'--','add'))
         assert json.loads(result.stdout)=={'ok':'42'},result
         count=len(requests);failure(run('agent',config,'--','add'),'sha256 mismatch');assert len(requests)==count
