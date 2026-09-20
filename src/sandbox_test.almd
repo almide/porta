@@ -1,5 +1,5 @@
 import self.sandbox
-import self.wasm.binary
+import self.wasm_imports
 
 // --- parse_capability ---
 
@@ -168,26 +168,26 @@ test "cap_eq: exec" {
 // --- validate_imports ---
 
 test "validate_imports: all allowed" {
-  let imports: List[binary.Import] = [
-    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: binary.ImportFunc(0)},
-    {mod_name: "wasi_snapshot_preview1", name: "proc_exit", desc: binary.ImportFunc(1)},
+  let imports: List[wasm_imports.Import] = [
+    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi_snapshot_preview1", name: "proc_exit", desc: wasm_imports.ImportFunc(1)},
   ]
   let caps = sandbox.profile_ai_agent()
   assert_eq(sandbox.validate_imports(imports, caps), ok(()))
 }
 
 test "validate_imports: denied import" {
-  let imports: List[binary.Import] = [
-    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: binary.ImportFunc(0)},
-    {mod_name: "wasi_snapshot_preview1", name: "path_open", desc: binary.ImportFunc(1)},
+  let imports: List[wasm_imports.Import] = [
+    {mod_name: "wasi_snapshot_preview1", name: "fd_write", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi_snapshot_preview1", name: "path_open", desc: wasm_imports.ImportFunc(1)},
   ]
   let caps = sandbox.profile_ai_agent()
   assert(result.is_err(sandbox.validate_imports(imports, caps)))
 }
 
 test "validate_imports: non-wasi imports fail closed" {
-  let imports: List[binary.Import] = [
-    {mod_name: "env", name: "some_func", desc: binary.ImportFunc(0)},
+  let imports: List[wasm_imports.Import] = [
+    {mod_name: "env", name: "some_func", desc: wasm_imports.ImportFunc(0)},
   ]
   let caps = sandbox.empty()
   assert(result.is_err(sandbox.validate_imports(imports, caps)))
@@ -199,8 +199,8 @@ test "validate_imports: empty imports" {
 
 
 test "direct host execution import is denied even with full capabilities" {
-  let imports: List[binary.Import] = [
-    {mod_name: "porta", name: "exec_command", desc: binary.ImportFunc(0)},
+  let imports: List[wasm_imports.Import] = [
+    {mod_name: "porta", name: "exec_command", desc: wasm_imports.ImportFunc(0)},
   ]
   assert(result.is_err(sandbox.validate_imports(imports, sandbox.profile_full())))
 }

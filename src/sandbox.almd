@@ -1,7 +1,7 @@
 // Capability-based Sandbox Enforcement
 // Deny-by-default: all WASI access requires explicit capability grants.
 
-import self.wasm.binary
+import self.wasm_imports
 
 type Capability =
   | CapIO
@@ -117,10 +117,10 @@ fn check_wasi_call(set: CapabilitySet, wasi_name: String) -> Result[Unit, String
 
 // --- Import validation (module load time) ---
 
-fn validate_imports(imports: List[binary.Import], set: CapabilitySet) -> Result[Unit, String] =
+fn validate_imports(imports: List[wasm_imports.Import], set: CapabilitySet) -> Result[Unit, String] =
   validate_imports_acc(imports, set, 0)
 
-fn validate_imports_acc(imports: List[binary.Import], set: CapabilitySet, idx: Int) -> Result[Unit, String] =
+fn validate_imports_acc(imports: List[wasm_imports.Import], set: CapabilitySet, idx: Int) -> Result[Unit, String] =
   if idx >= list.len(imports) then ok(())
   else match list.get(imports, idx) {
     none => ok(()),

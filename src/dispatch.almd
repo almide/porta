@@ -2,7 +2,7 @@ import value
 // Instance Lifecycle & Dispatch
 
 import json
-import self.wasm.binary
+import self.wasm_imports
 import self.wasm_rt
 import self.sandbox
 import self.observability
@@ -140,10 +140,10 @@ effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] 
   let info = json.parse(info_json)!
   let all_imports = json.get_array(info, "imports") ?? []
   let imports = all_imports |> list.map((imp) => {
-    let i: binary.Import = {
+    let i: wasm_imports.Import = {
       mod_name: json.get_string(imp, "module") ?? "",
       name: json.get_string(imp, "name") ?? "",
-      desc: binary.ImportFunc(0),
+      desc: wasm_imports.ImportFunc(0),
     }
     i
   })
