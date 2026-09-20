@@ -16,7 +16,7 @@ as a definition does.
 | Module | Owns |
 |---|---|
 | `wasmtime_bridge.rs` + `wasmtime_bridge/run.rs` | WASM instance lifecycle and the FFI surface |
-| `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it |
+| `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the egress channels Landlock cannot reach |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
 | `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
@@ -64,12 +64,14 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - Native sandbox execution must fail closed on unsupported platforms.
 - A restriction the platform cannot express must refuse the run, never narrow
   the policy: macOS enforces through `sandbox-exec`, Linux through Landlock.
-  Both cover writes, TCP ports and, under `--read-policy strict`, reads;
-  Landlock cannot express proxy mode, which refuses rather than running with
-  the restriction absent.
+  Both cover writes, TCP ports and, under `--read-policy strict`, reads. On
+  Linux, proxy mode needs a seccomp filter as well, because Landlock's rules
+  reach TCP only; a kernel that will not take the filter refuses the run.
 - A policy rule names the path the kernel resolved, never a symlink to it.
 - `run`, `up`, and MCP execution must share native policy generation.
-- Proxy mode permits only the loopback proxy endpoint, without UDP or Unix sockets.
+- Proxy mode permits only the loopback proxy endpoint, without UDP, Unix
+  sockets or any other egress channel — including a ring that would open a
+  socket without `socket(2)`.
 - MCP stdio uses newline-delimited JSON; diagnostics belong on stderr.
 - MCP result adaptation must preserve multi-field payloads and error status; only legacy single-key Result envelopes unwrap.
 - Agent and tool instances inherit no host environment or implicit directories.

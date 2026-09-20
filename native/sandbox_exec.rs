@@ -27,6 +27,11 @@ struct SandboxRequest {
     /// "open" leaves reads unrestricted; "strict" confines them to the granted
     /// mounts and the platform's own directories. Anything else is refused.
     #[serde(default = "open_reads")] read_policy: String,
+    /// Whether this run's only permitted egress is the loopback proxy named in
+    /// `net`. It is not inferable from `net` — a caller may grant a loopback
+    /// port for its own reasons — and it decides whether every non-TCP egress
+    /// channel has to be closed as well.
+    #[serde(default)] proxy: bool,
 }
 
 fn open_reads() -> String { "open".to_string() }
@@ -102,7 +107,26 @@ impl SandboxRequest {
     /// the macOS ones come through [`Self::profile`].
     #[cfg(target_os = "linux")]
     fn ruleset(&self) -> Result<crate::landlock::Ruleset, String> {
+        if self.proxy && !crate::seccomp::available() {
+            return Err("proxy mode needs seccomp to deny UDP and Unix-socket egress, \
+                        which this kernel will not accept; porta will not run the command \
+                        with the rest of the policy applied".into());
+        }
         crate::landlock_policy::ruleset(&self.allowed_dirs, &self.allowed_net, &self.read_policy)
+    }
+
+    /// Narrow the calling process to this request's policy. Runs after fork and
+    /// before exec: two Landlock syscalls, then one more when the run claims
+    /// the proxy is its only egress. Nothing here allocates.
+    #[cfg(target_os = "linux")]
+    fn restrict_current_process(descriptor: i32, proxy: bool) -> std::io::Result<()> {
+        crate::landlock::Ruleset::restrict_current_process(descriptor)?;
+        // Landlock's network rules reach TCP only. Everything else that could
+        // carry bytes out is closed here, or the proxy is not the only egress.
+        if proxy {
+            crate::seccomp::restrict_current_process()?;
+        }
+        Ok(())
     }
 
     /// A command carrying this request's arguments, directory and environment.
@@ -181,11 +205,11 @@ fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
         Err(reason) => return json_error(&reason),
     };
     let ruleset_fd = ruleset.descriptor();
+    let proxy = request.proxy;
     let mut command = request.command(&request.cmd);
     command.args(&request.args);
-    // Runs after fork and before exec: two syscalls, no allocation.
     unsafe {
-        command.pre_exec(move || crate::landlock::Ruleset::restrict_current_process(ruleset_fd));
+        command.pre_exec(move || SandboxRequest::restrict_current_process(ruleset_fd, proxy));
     }
     finish_sandboxed(command.output())
 }
@@ -219,7 +243,7 @@ fn replace_with_sandboxed(request: &SandboxRequest) -> String {
         Ok(ruleset) => ruleset,
         Err(reason) => return json_error(&reason),
     };
-    if let Err(error) = crate::landlock::Ruleset::restrict_current_process(ruleset.descriptor()) {
+    if let Err(error) = SandboxRequest::restrict_current_process(ruleset.descriptor(), request.proxy) {
         return json_error(&format!("cannot apply the sandbox: {}", error));
     }
     let mut command = request.command(&request.cmd);
@@ -256,10 +280,36 @@ fn supervise_sandboxed(request: &SandboxRequest) -> i64 {
     }
 }
 
-/// Proxy mode needs egress narrowed to one loopback endpoint with UDP and Unix
-/// sockets denied. Landlock expresses none of that, so the run is refused here
-/// rather than supervised with part of the policy missing.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn supervise_sandboxed(request: &SandboxRequest) -> i64 {
+    use std::os::unix::process::CommandExt;
+
+    // porta keeps its own sockets here — a proxy thread it started is still
+    // serving — so only the child is narrowed, after the fork.
+    let ruleset = match request.ruleset() {
+        Ok(ruleset) => ruleset,
+        Err(reason) => {
+            eprintln!("[porta] {}", reason);
+            return -1;
+        }
+    };
+    let descriptor = ruleset.descriptor();
+    let proxy = request.proxy;
+    let mut command = request.command(&request.cmd);
+    command.args(&request.args);
+    command.stdin(std::process::Stdio::inherit());
+    command.stdout(std::process::Stdio::inherit());
+    command.stderr(std::process::Stdio::inherit());
+    unsafe {
+        command.pre_exec(move || SandboxRequest::restrict_current_process(descriptor, proxy));
+    }
+    match command.spawn().and_then(|mut child| child.wait()) {
+        Ok(status) => status.code().unwrap_or(-1) as i64,
+        Err(_) => -1,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn supervise_sandboxed(_request: &SandboxRequest) -> i64 {
     -1
 }

@@ -22,6 +22,10 @@ type ExecRequest = {
   env: List[EnvVar],
   cwd: String,
   read_policy: String,
+  // Whether the loopback endpoint in `net` is this run's only permitted
+  // egress. The native side cannot infer it from `net`, and it decides
+  // whether the channels a TCP rule cannot reach are closed too.
+  proxy: Bool,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -37,6 +41,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("env", value.array(req.env |> list.map(env_pair))),
     ("cwd", value.str(req.cwd)),
     ("read_policy", value.str(req.read_policy)),
+    ("proxy", value.bool(req.proxy)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

@@ -5,7 +5,8 @@
 
 `porta run <native command>` now enforces on Linux through Landlock, in
 `native/landlock.rs`. Writes, TCP ports and — with `--read-policy strict` —
-reads are restricted. Proxy mode is not, and refuses rather than pretends.
+reads are restricted, and proxy mode is enforced with a seccomp filter beside
+the ruleset.
 
 ## What holds now
 
@@ -21,14 +22,16 @@ restricts itself and then execs — a ruleset survives `execve`.
 | Read outside grants, default | denied for `~/.ssh`, `~/.gnupg` only | not confined |
 | Read outside grants, `--read-policy strict` | denied | denied |
 | `--allow-net` by port | enforced | enforced, needs ABI 4 |
-| Proxy mode | enforced | **refused** |
+| Proxy mode | enforced | enforced (Landlock + seccomp) |
 
 `scripts/integration.py` asserts this in CI on both platforms: a write inside a
 mount succeeds while a write outside every grant fails and leaves no file, a
 credential outside every grant is unreadable under `strict` and readable
 without it, and an unknown policy name refuses. On Linux it also asserts that a
 connect to a granted port succeeds while the same connect fails when another
-port is granted, and that both an unexpressible rule and proxy mode refuse.
+port is granted, that an unexpressible rule refuses, and that under proxy mode
+a TCP socket opens while UDP, Unix, IPv6 and netlink sockets do not — and that
+without proxy mode none of them are filtered.
 
 Each platform's policy is built in its own module — `native/sandbox_profile.rs`
 for the macOS profile text, `native/landlock_policy.rs` for the Landlock
@@ -114,17 +117,42 @@ leaves open.
 Both platforms now confine reads. The remaining asymmetry is the default: macOS
 denies two named paths, Linux denies nothing, and neither confines until asked.
 
-## Why proxy mode is still refused
+## Proxy mode: what Landlock could not reach
 
 The invariant is that proxy mode permits only the loopback proxy endpoint,
-without UDP or Unix sockets. Landlock's network rules cover TCP bind and connect
-only, so it cannot deny UDP or Unix-socket egress. Enforcing the TCP half and
-leaving the rest open would be a policy that looks applied and is not, so
-`wt_exec_supervised` keeps returning a failure on Linux.
+without UDP or Unix sockets. Landlock's network rules cover TCP bind and
+connect and nothing else, so for a long time this refused rather than enforce
+the TCP half and leave the rest open.
 
-Closing this needs a mechanism beyond Landlock — a network namespace, or seccomp
-for the socket families — and it is the same work
-`active/01-http-proxy-filtering.md` defers to its v2.
+A seccomp filter closes the rest, in `native/seccomp.rs`. It watches the one
+syscall that opens an egress channel: `socket(2)` returns `EAFNOSUPPORT` unless
+it asks for `AF_INET` with `SOCK_STREAM`, which is the errno a client already
+knows how to fall back from. Landlock still decides *which* TCP port may be
+reached, so the two together are the invariant rather than either alone.
+
+Two details are the difference between a filter and a claim:
+
+- **`io_uring` is refused outright.** A ring can open a socket without ever
+  issuing `socket(2)`, so a filter that watched only that syscall would assert
+  an egress policy the kernel does not hold. `ENOSYS` is the answer, which a
+  library reads as an older kernel and falls back from.
+- **A mismatched `arch` kills the process.** Syscall numbers mean different
+  things in different tables, so a filter that returned an errno there would be
+  guessing. This is the one case where an errno would be a lie.
+
+`socketpair(2)` is deliberately left alone: it makes an anonymous pair both of
+whose ends the process already holds, so it reaches nothing, and runtimes use
+it for their own plumbing.
+
+The filter is checked for acceptance before the run commits to it. seccomp can
+be compiled out or refused by a container's own policy, and a proxy-mode run
+whose filter never loaded would be a policy that looks applied and is not, so
+that refuses like an unexpressible Landlock rule does.
+
+What this does **not** close: Landlock's `ACCESS_NET_BIND_TCP` is not used, so
+the child may still listen on a port. That is ingress, and the invariant is
+about egress, but it is a difference from a container's network namespace and
+not a thing this filter decides.
 
 ## Measured hosts
 
@@ -147,6 +175,5 @@ commands, no failure and no denial, with `~/.ssh` unreadable.
 ## Remaining
 
 - Flip the default to `strict` at a version boundary.
-- Proxy mode on Linux, together with `01-http-proxy-filtering` v2.
 - A host with a Landlock ABI below 4, to confirm the refusal path on a real
   kernel rather than only by construction.

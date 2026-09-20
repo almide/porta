@@ -214,13 +214,39 @@ else:
             assert result.returncode != 0, result
         finally:
             listener.close()
-        # Proxy mode also has to deny UDP and Unix sockets, which Landlock cannot
-        # express, so it stays refused here rather than partly enforced.
-        result = run('run', '/bin/sh', '--proxy-allow', 'api.example.com', '-v', str(workspace),
-                     '--', '-c', 'echo must-not-execute')
-        assert result.returncode != 0, result
-        assert 'must-not-execute' not in result.stdout, result
-        print('PASS: Landlock write denial, port denial, unexpressible rule and proxy mode refused')
+        print('PASS: Landlock write denial, port denial and unexpressible rule refused')
+
+        # Proxy mode claims the loopback proxy is the only egress. Landlock's
+        # rules reach TCP only, so a seccomp filter has to close the rest; the
+        # claim is false if any other socket family still opens.
+        families = '''import socket, sys
+def opens(*args):
+    try:
+        socket.socket(*args).close()
+        return True
+    except OSError:
+        return False
+print('tcp4', opens(socket.AF_INET, socket.SOCK_STREAM))
+print('udp4', opens(socket.AF_INET, socket.SOCK_DGRAM))
+print('unix', opens(socket.AF_UNIX, socket.SOCK_STREAM))
+print('tcp6', opens(socket.AF_INET6, socket.SOCK_STREAM))
+print('netlink', opens(socket.AF_NETLINK, socket.SOCK_RAW, 0))
+print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
+'''
+        result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
+                     '-v', str(workspace), '-v', str(pathlib.Path(sys.base_prefix).resolve()),
+                     '--', '-c', families)
+        assert result.returncode == 0, result.stderr
+        opened = dict(line.split() for line in result.stdout.split('\n') if line)
+        assert opened == {'tcp4': 'True', 'udp4': 'False', 'unix': 'False', 'tcp6': 'False',
+                          'netlink': 'False', 'proxy_env': 'True'}, opened
+        # Without proxy mode nothing claims to be the only egress, so nothing is
+        # filtered: the restriction follows the claim, it is not always on.
+        result = run('run', sys.executable, '-v', str(workspace),
+                     '-v', str(pathlib.Path(sys.base_prefix).resolve()), '--', '-c', families)
+        assert result.returncode == 0, result.stderr
+        assert 'udp4 True' in result.stdout and 'unix True' in result.stdout, result.stdout
+        print('PASS: proxy mode is the only egress — UDP, Unix, IPv6 and netlink all denied')
 
         # --read-policy strict confines reads to the granted mounts and the
         # platform's own directories. A credential outside both is unreadable.

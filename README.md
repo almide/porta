@@ -147,10 +147,11 @@ confining reads to the mounts you granted plus the system directories a command
 needs to start, so nothing under any home directory is readable. The command
 itself is subject to that: one installed outside those directories — a
 toolchain under `/opt`, say — needs `-v` on its own directory.
-HTTPS proxy filtering stays macOS-only: it must also deny UDP and Unix sockets,
-which Landlock cannot express, so proxy mode refuses to run on Linux rather than
-enforce part of a policy. A kernel whose Landlock ABI cannot express a requested
-rule refuses the run instead of widening it.
+HTTPS proxy filtering works on both. Landlock's rules reach TCP only, so on
+Linux porta also installs a seccomp filter that closes every other egress
+channel — UDP, Unix and raw sockets, and `io_uring`, which could open a socket
+without asking for one. A kernel that will not take either the filter or a
+requested Landlock rule refuses the run instead of widening it.
 
 Native read access is broader than write access on both: this is not a container
 filesystem or complete secret isolation. HTTPS proxy filtering controls
@@ -287,7 +288,7 @@ Uses Landlock, unprivileged and without namespaces or an external runtime:
 | **FS write** | Denied everywhere except `-v` mounted dirs, `/tmp` and `/dev` |
 | **FS read** | Open by default. `--read-policy strict` confines reads to your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` — every home directory is closed |
 | **Network** | Open by default. `--allow-net '*:443'` restricts TCP connect by port, needing Landlock ABI 4 |
-| **Proxy mode** | Refused. It must also deny UDP and Unix sockets, which Landlock cannot express |
+| **Proxy mode** | Enforced. Landlock pins egress to the proxy's TCP port; a seccomp filter denies UDP, Unix and raw sockets and `io_uring`, so the proxy is the only way out |
 
 A requested rule this kernel cannot express refuses the run rather than widening
 it: partial enforcement is never silently accepted.
