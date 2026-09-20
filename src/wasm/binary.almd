@@ -23,44 +23,7 @@ type Export = { name: String, kind: ExportKind, index: Int }
 type Limits = { min: Int, max: Option[Int] }
 type TableType = { elem_type: ValType, limits: Limits }
 type GlobalType = { val_type: ValType, mutable: Bool }
-type Global = { global_type: GlobalType, init: List[Instr] }
-type ElemSegment = { table_idx: Int, offset: List[Instr], func_indices: List[Int] }
-type DataSegment = { mem_idx: Int, offset: List[Instr], data: List[Int] }
-type Local = { count: Int, val_type: ValType }
-type FuncBody = { locals: List[Local], code: List[Instr] }
 
-type BlockType = | BlockEmpty | BlockVal(ValType) | BlockFuncType(Int)
-
-type MemArg = { align: Int, offset: Int, mem_idx: Int }
-
-type Instr =
-  | Unreachable | Nop
-  | Block(BlockType, List[Instr]) | Loop(BlockType, List[Instr])
-  | If(BlockType, List[Instr], List[Instr])
-  | Br(Int) | BrIf(Int) | Return
-  | Call(Int) | CallIndirect(Int, Int) | ReturnCall(Int) | ReturnCallIndirect(Int, Int)
-  | Drop | Select
-  | LocalGet(Int) | LocalSet(Int) | LocalTee(Int) | GlobalGet(Int) | GlobalSet(Int)
-  | I32Load(MemArg) | I64Load(MemArg) | F64Load(MemArg)
-  | I32Store(MemArg) | I64Store(MemArg) | F64Store(MemArg)
-  | I32Load8U(MemArg) | I32Store8(MemArg) | I32Load16U(MemArg)
-  | MemorySize(Int) | MemoryGrow(Int) | MemoryFill(Int) | MemoryCopy(Int, Int)
-  | I32Const(Int) | I32Eqz | I32Eq | I32Ne
-  | I32LtS | I32LtU | I32GtS | I32GtU | I32LeS | I32LeU | I32GeS | I32GeU
-  | I32Add | I32Sub | I32Mul | I32DivU | I32RemU
-  | I32And | I32Or | I32Xor | I32Shl | I32ShrU
-  | I64Const(Int) | I64Eqz | I64Eq | I64Ne
-  | I64LtS | I64GtS | I64LeS | I64GeS | I64GeU
-  | I64Add | I64Sub | I64Mul | I64DivS | I64DivU | I64RemS | I64RemU
-  | I64And | I64Or | I64Xor | I64Shl | I64ShrS | I64ShrU
-  | F64Const(Float) | F64Eq | F64Ne | F64Lt | F64Gt | F64Le | F64Ge
-  | F64Abs | F64Neg | F64Sqrt | F64Floor | F64Ceil | F64Nearest | F64Copysign
-  | F64Add | F64Sub | F64Mul | F64Div
-  | I32WrapI64 | I64ExtendI32S | I64ExtendI32U
-  | F64ConvertI64S | F64ConvertI64U | I64TruncF64S
-  | F64ReinterpretI64 | I64ReinterpretF64
-  | V128Load(MemArg) | V128Store(MemArg) | F64x2Splat | F64x2Mul | F64x2Add
-  | End
 
 type WasmModule = {
   types: List[FuncType],
@@ -68,12 +31,8 @@ type WasmModule = {
   func_type_indices: List[Int],
   tables: List[TableType],
   memories: List[Limits],
-  globals: List[Global],
   exports: List[Export],
   start: Option[Int],
-  elements: List[ElemSegment],
-  code: List[FuncBody],
-  data_segments: List[DataSegment],
 }
 
 // --- Parser ---
@@ -227,251 +186,6 @@ effect fn read_export(p: Parser) -> Result[{val: Export, next: Parser}, String] 
   ok({val: {name: name_r.val, kind: kind, index: idx_r.val}, next: idx_r.next})
 }
 
-effect fn read_memarg(p: Parser) -> Result[{val: MemArg, next: Parser}, String] = {
-  let align_r = read_leb128_u(p)!
-  let offset_r = read_leb128_u(align_r.next)!
-  let has_mem_idx = int.band(align_r.val, 0x40) != 0
-  let actual_align = int.band(align_r.val, 0x3F)
-  if has_mem_idx then {
-    let mem_r = read_leb128_u(offset_r.next)!
-    ok({val: {align: actual_align, offset: offset_r.val, mem_idx: mem_r.val}, next: mem_r.next})
-  } else {
-    ok({val: {align: actual_align, offset: offset_r.val, mem_idx: 0}, next: offset_r.next})
-  }
-}
-
-effect fn read_blocktype(p: Parser) -> Result[{val: BlockType, next: Parser}, String] = {
-  let r = read_u8(p)!
-  match r.val {
-    0x40 => ok({val: BlockEmpty, next: r.next}),
-    0x7F => ok({val: BlockVal(I32), next: r.next}),
-    0x7E => ok({val: BlockVal(I64), next: r.next}),
-    0x7C => ok({val: BlockVal(F64), next: r.next}),
-    _ => {
-      let idx_r = read_leb128_s(p)!
-      ok({val: BlockFuncType(idx_r.val), next: idx_r.next})
-    },
-  }
-}
-
-effect fn read_f64(p: Parser) -> Result[{val: Float, next: Parser}, String] = {
-  let r = read_raw_bytes(p, 8)!
-  let b = r.val
-  let bits = byte_at(b, 0)
-    + int.bshl(byte_at(b, 1), 8)
-    + int.bshl(byte_at(b, 2), 16)
-    + int.bshl(byte_at(b, 3), 24)
-    + int.bshl(byte_at(b, 4), 32)
-    + int.bshl(byte_at(b, 5), 40)
-    + int.bshl(byte_at(b, 6), 48)
-    + int.bshl(byte_at(b, 7), 56)
-  ok({val: int.bits_to_float(bits), next: r.next})
-}
-
-// --- Instruction Parser ---
-
-effect fn read_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let op_r = read_u8(p)!
-  let op = op_r.val
-  let p2 = op_r.next
-  match op {
-    0x00 => ok({val: Unreachable, next: p2}),
-    0x01 => ok({val: Nop, next: p2}),
-    0x02 => read_block_instr(p2),
-    0x03 => read_loop_instr(p2),
-    0x04 => read_if_instr(p2),
-    0x0C => { let r = read_leb128_u(p2)!
-      ok({val: Br(r.val), next: r.next}) },
-    0x0D => { let r = read_leb128_u(p2)!
-      ok({val: BrIf(r.val), next: r.next}) },
-    0x0F => ok({val: Return, next: p2}),
-    0x10 => { let r = read_leb128_u(p2)!
-      ok({val: Call(r.val), next: r.next}) },
-    0x11 => {
-      let ty_r = read_leb128_u(p2)!
-      let tab_r = read_leb128_u(ty_r.next)!
-      ok({val: CallIndirect(ty_r.val, tab_r.val), next: tab_r.next})
-    },
-    0x12 => { let r = read_leb128_u(p2)!
-      ok({val: ReturnCall(r.val), next: r.next}) },
-    0x13 => {
-      let ty_r = read_leb128_u(p2)!
-      let tab_r = read_leb128_u(ty_r.next)!
-      ok({val: ReturnCallIndirect(ty_r.val, tab_r.val), next: tab_r.next})
-    },
-    0x1A => ok({val: Drop, next: p2}),
-    0x1B => ok({val: Select, next: p2}),
-    0x20 => { let r = read_leb128_u(p2)!
-      ok({val: LocalGet(r.val), next: r.next}) },
-    0x21 => { let r = read_leb128_u(p2)!
-      ok({val: LocalSet(r.val), next: r.next}) },
-    0x22 => { let r = read_leb128_u(p2)!
-      ok({val: LocalTee(r.val), next: r.next}) },
-    0x23 => { let r = read_leb128_u(p2)!
-      ok({val: GlobalGet(r.val), next: r.next}) },
-    0x24 => { let r = read_leb128_u(p2)!
-      ok({val: GlobalSet(r.val), next: r.next}) },
-    0x28 => { let r = read_memarg(p2)!
-      ok({val: I32Load(r.val), next: r.next}) },
-    0x29 => { let r = read_memarg(p2)!
-      ok({val: I64Load(r.val), next: r.next}) },
-    0x2B => { let r = read_memarg(p2)!
-      ok({val: F64Load(r.val), next: r.next}) },
-    0x36 => { let r = read_memarg(p2)!
-      ok({val: I32Store(r.val), next: r.next}) },
-    0x37 => { let r = read_memarg(p2)!
-      ok({val: I64Store(r.val), next: r.next}) },
-    0x39 => { let r = read_memarg(p2)!
-      ok({val: F64Store(r.val), next: r.next}) },
-    0x2D => { let r = read_memarg(p2)!
-      ok({val: I32Load8U(r.val), next: r.next}) },
-    0x3A => { let r = read_memarg(p2)!
-      ok({val: I32Store8(r.val), next: r.next}) },
-    0x2F => { let r = read_memarg(p2)!
-      ok({val: I32Load16U(r.val), next: r.next}) },
-    0x3F => { let r = read_leb128_u(p2)!
-      ok({val: MemorySize(r.val), next: r.next}) },
-    0x40 => { let r = read_leb128_u(p2)!
-      ok({val: MemoryGrow(r.val), next: r.next}) },
-    0x41 => { let r = read_leb128_s(p2)!
-      ok({val: I32Const(r.val), next: r.next}) },
-    0x45 => ok({val: I32Eqz, next: p2}), 0x46 => ok({val: I32Eq, next: p2}),
-    0x47 => ok({val: I32Ne, next: p2}),
-    0x48 => ok({val: I32LtS, next: p2}), 0x49 => ok({val: I32LtU, next: p2}),
-    0x4A => ok({val: I32GtS, next: p2}), 0x4B => ok({val: I32GtU, next: p2}),
-    0x4C => ok({val: I32LeS, next: p2}), 0x4D => ok({val: I32LeU, next: p2}),
-    0x4E => ok({val: I32GeS, next: p2}), 0x4F => ok({val: I32GeU, next: p2}),
-    0x42 => { let r = read_leb128_s(p2)!
-      ok({val: I64Const(r.val), next: r.next}) },
-    0x50 => ok({val: I64Eqz, next: p2}), 0x51 => ok({val: I64Eq, next: p2}),
-    0x52 => ok({val: I64Ne, next: p2}),
-    0x53 => ok({val: I64LtS, next: p2}), 0x59 => ok({val: I64GtS, next: p2}),
-    0x57 => ok({val: I64LeS, next: p2}), 0x5D => ok({val: I64GeS, next: p2}),
-    0x5E => ok({val: I64GeU, next: p2}),
-    0x44 => {
-      let r = read_f64(p2)!
-      ok({val: F64Const(r.val), next: r.next})
-    },
-    0x61 => ok({val: F64Eq, next: p2}), 0x62 => ok({val: F64Ne, next: p2}),
-    0x63 => ok({val: F64Lt, next: p2}), 0x64 => ok({val: F64Gt, next: p2}),
-    0x65 => ok({val: F64Le, next: p2}), 0x66 => ok({val: F64Ge, next: p2}),
-    0x6A => ok({val: I32Add, next: p2}), 0x6B => ok({val: I32Sub, next: p2}),
-    0x6C => ok({val: I32Mul, next: p2}),
-    0x6E => ok({val: I32DivU, next: p2}), 0x70 => ok({val: I32RemU, next: p2}),
-    0x71 => ok({val: I32And, next: p2}), 0x72 => ok({val: I32Or, next: p2}),
-    0x73 => ok({val: I32Xor, next: p2}),
-    0x74 => ok({val: I32Shl, next: p2}), 0x76 => ok({val: I32ShrU, next: p2}),
-    0x7C => ok({val: I64Add, next: p2}), 0x7D => ok({val: I64Sub, next: p2}),
-    0x7E => ok({val: I64Mul, next: p2}),
-    0x7F => ok({val: I64DivS, next: p2}), 0x80 => ok({val: I64DivU, next: p2}),
-    0x81 => ok({val: I64RemS, next: p2}), 0x82 => ok({val: I64RemU, next: p2}),
-    0x83 => ok({val: I64And, next: p2}), 0x84 => ok({val: I64Or, next: p2}),
-    0x85 => ok({val: I64Xor, next: p2}),
-    0x86 => ok({val: I64Shl, next: p2}), 0x87 => ok({val: I64ShrS, next: p2}),
-    0x88 => ok({val: I64ShrU, next: p2}),
-    0x99 => ok({val: F64Abs, next: p2}), 0x9A => ok({val: F64Neg, next: p2}),
-    0x9F => ok({val: F64Sqrt, next: p2}),
-    0xA0 => ok({val: F64Add, next: p2}), 0xA1 => ok({val: F64Sub, next: p2}),
-    0xA2 => ok({val: F64Mul, next: p2}), 0xA3 => ok({val: F64Div, next: p2}),
-    0x9C => ok({val: F64Floor, next: p2}), 0x9D => ok({val: F64Ceil, next: p2}),
-    0x9E => ok({val: F64Nearest, next: p2}), 0xA6 => ok({val: F64Copysign, next: p2}),
-    0xA7 => ok({val: I32WrapI64, next: p2}),
-    0xAC => ok({val: I64ExtendI32S, next: p2}), 0xAD => ok({val: I64ExtendI32U, next: p2}),
-    0xB9 => ok({val: F64ConvertI64S, next: p2}), 0xBA => ok({val: F64ConvertI64U, next: p2}),
-    0xB0 => ok({val: I64TruncF64S, next: p2}),
-    0xBF => ok({val: F64ReinterpretI64, next: p2}), 0xBD => ok({val: I64ReinterpretF64, next: p2}),
-    0x0B => ok({val: End, next: p2}),
-    0xFC => read_fc_instr(p2),
-    0xFD => read_fd_instr(p2),
-    _ => err("unknown opcode: 0x${int.to_hex(op)} at pos ${int.to_string(p.pos)}"),
-  }
-}
-
-effect fn read_fc_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let sub_r = read_leb128_u(p)!
-  match sub_r.val {
-    11 => {
-      let mem_r = read_leb128_u(sub_r.next)!
-      ok({val: MemoryFill(mem_r.val), next: mem_r.next})
-    },
-    10 => {
-      let dst_r = read_leb128_u(sub_r.next)!
-      let src_r = read_leb128_u(dst_r.next)!
-      ok({val: MemoryCopy(dst_r.val, src_r.val), next: src_r.next})
-    },
-    _ => err("unknown 0xFC sub-opcode: ${int.to_string(sub_r.val)}"),
-  }
-}
-
-effect fn read_fd_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let sub_r = read_leb128_u(p)!
-  match sub_r.val {
-    0 => {
-      let r = read_memarg(sub_r.next)!
-      ok({val: V128Load(r.val), next: r.next})
-    },
-    11 => {
-      let r = read_memarg(sub_r.next)!
-      ok({val: V128Store(r.val), next: r.next})
-    },
-    20 => ok({val: F64x2Splat, next: sub_r.next}),
-    241 => ok({val: F64x2Mul, next: sub_r.next}),
-    240 => ok({val: F64x2Add, next: sub_r.next}),
-    _ => err("unknown 0xFD sub-opcode: ${int.to_string(sub_r.val)}"),
-  }
-}
-
-effect fn read_block_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let bt_r = read_blocktype(p)!
-  let body_r = read_instrs_until_end(bt_r.next)!
-  ok({val: Block(bt_r.val, body_r.val), next: body_r.next})
-}
-
-effect fn read_loop_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let bt_r = read_blocktype(p)!
-  let body_r = read_instrs_until_end(bt_r.next)!
-  ok({val: Loop(bt_r.val, body_r.val), next: body_r.next})
-}
-
-effect fn read_if_instr(p: Parser) -> Result[{val: Instr, next: Parser}, String] = {
-  let bt_r = read_blocktype(p)!
-  let then_r = read_instrs_until_else_or_end(bt_r.next)!
-  match then_r.terminated_by {
-    "else" => {
-      let else_r = read_instrs_until_end(then_r.next)!
-      ok({val: If(bt_r.val, then_r.val, else_r.val), next: else_r.next})
-    },
-    _ => ok({val: If(bt_r.val, then_r.val, []), next: then_r.next}),
-  }
-}
-
-effect fn read_instrs_until_end(p: Parser) -> Result[{val: List[Instr], next: Parser}, String] =
-  read_instrs_until_end_acc(p, [])
-
-effect fn read_instrs_until_end_acc(p: Parser, acc: List[Instr]) -> Result[{val: List[Instr], next: Parser}, String] = {
-  let peek_r = read_u8(p)!
-  if peek_r.val == 0x0B then ok({val: acc, next: peek_r.next})
-  else {
-    let instr_r = read_instr(p)!
-    read_instrs_until_end_acc(instr_r.next, acc + [instr_r.val])
-  }
-}
-
-effect fn read_instrs_until_else_or_end(p: Parser) -> Result[{val: List[Instr], next: Parser, terminated_by: String}, String] =
-  read_instrs_until_else_or_end_acc(p, [])
-
-effect fn read_instrs_until_else_or_end_acc(p: Parser, acc: List[Instr]) -> Result[{val: List[Instr], next: Parser, terminated_by: String}, String] = {
-  let peek_r = read_u8(p)!
-  if peek_r.val == 0x0B then ok({val: acc, next: peek_r.next, terminated_by: "end"})
-  else if peek_r.val == 0x05 then ok({val: acc, next: peek_r.next, terminated_by: "else"})
-  else {
-    let instr_r = read_instr(p)!
-    read_instrs_until_else_or_end_acc(instr_r.next, acc + [instr_r.val])
-  }
-}
-
-effect fn read_init_expr(p: Parser) -> Result[{val: List[Instr], next: Parser}, String] =
-  read_instrs_until_end(p)
 
 // --- Section Parsers ---
 
@@ -535,18 +249,6 @@ effect fn read_memories(p: Parser, remaining: Int, acc: List[Limits]) -> Result[
     read_memories(r.next, remaining - 1, acc + [r.val])
   }
 
-effect fn parse_global_section(p: Parser) -> Result[{val: List[Global], next: Parser}, String] = {
-  let count_r = read_leb128_u(p)!
-  read_globals(count_r.next, count_r.val, [])
-}
-
-effect fn read_globals(p: Parser, remaining: Int, acc: List[Global]) -> Result[{val: List[Global], next: Parser}, String] =
-  if remaining == 0 then ok({val: acc, next: p})
-  else {
-    let gt_r = read_globaltype(p)!
-    let init_r = read_init_expr(gt_r.next)!
-    read_globals(init_r.next, remaining - 1, acc + [{global_type: gt_r.val, init: init_r.val}])
-  }
 
 effect fn parse_export_section(p: Parser) -> Result[{val: List[Export], next: Parser}, String] = {
   let count_r = read_leb128_u(p)!
@@ -560,91 +262,17 @@ effect fn read_exports(p: Parser, remaining: Int, acc: List[Export]) -> Result[{
     read_exports(r.next, remaining - 1, acc + [r.val])
   }
 
-effect fn parse_element_section(p: Parser) -> Result[{val: List[ElemSegment], next: Parser}, String] = {
-  let count_r = read_leb128_u(p)!
-  read_elems(count_r.next, count_r.val, [])
-}
 
-effect fn read_elems(p: Parser, remaining: Int, acc: List[ElemSegment]) -> Result[{val: List[ElemSegment], next: Parser}, String] =
-  if remaining == 0 then ok({val: acc, next: p})
-  else {
-    let flags_r = read_leb128_u(p)!
-    match flags_r.val {
-      0 => {
-        let offset_r = read_init_expr(flags_r.next)!
-        let count_r = read_leb128_u(offset_r.next)!
-        let indices_r = read_u32_vec(count_r.next, count_r.val, [])!
-        read_elems(indices_r.next, remaining - 1, acc + [{table_idx: 0, offset: offset_r.val, func_indices: indices_r.val}])
-      },
-      2 => {
-        // Active with explicit table index + elemkind
-        let table_r = read_leb128_u(flags_r.next)!
-        let offset_r = read_init_expr(table_r.next)!
-        let _elemkind = read_u8(offset_r.next)!
-        let count_r = read_leb128_u(_elemkind.next)!
-        let indices_r = read_u32_vec(count_r.next, count_r.val, [])!
-        read_elems(indices_r.next, remaining - 1, acc + [{table_idx: table_r.val, offset: offset_r.val, func_indices: indices_r.val}])
-      },
-      _ => err("unsupported element segment flags: ${int.to_string(flags_r.val)}"),
-    }
-  }
 
-effect fn parse_code_section(p: Parser) -> Result[{val: List[FuncBody], next: Parser}, String] = {
-  let count_r = read_leb128_u(p)!
-  read_func_bodies(count_r.next, count_r.val, [])
-}
 
-effect fn read_func_bodies(p: Parser, remaining: Int, acc: List[FuncBody]) -> Result[{val: List[FuncBody], next: Parser}, String] =
-  if remaining == 0 then ok({val: acc, next: p})
-  else {
-    let size_r = read_leb128_u(p)!
-    let local_count_r = read_leb128_u(size_r.next)!
-    let locals_r = read_locals(local_count_r.next, local_count_r.val, [])!
-    let code_r = read_instrs_until_end(locals_r.next)!
-    read_func_bodies(code_r.next, remaining - 1, acc + [{locals: locals_r.val, code: code_r.val}])
-  }
 
-effect fn read_locals(p: Parser, remaining: Int, acc: List[Local]) -> Result[{val: List[Local], next: Parser}, String] =
-  if remaining == 0 then ok({val: acc, next: p})
-  else {
-    let count_r = read_leb128_u(p)!
-    let vt_r = read_valtype(count_r.next)!
-    read_locals(vt_r.next, remaining - 1, acc + [{count: count_r.val, val_type: vt_r.val}])
-  }
 
-effect fn parse_data_section(p: Parser) -> Result[{val: List[DataSegment], next: Parser}, String] = {
-  let count_r = read_leb128_u(p)!
-  read_data_segments(count_r.next, count_r.val, [])
-}
-
-effect fn read_data_segments(p: Parser, remaining: Int, acc: List[DataSegment]) -> Result[{val: List[DataSegment], next: Parser}, String] =
-  if remaining == 0 then ok({val: acc, next: p})
-  else {
-    let flags_r = read_leb128_u(p)!
-    match flags_r.val {
-      0 => {
-        let offset_r = read_init_expr(flags_r.next)!
-        let size_r = read_leb128_u(offset_r.next)!
-        let data_r = read_raw_bytes(size_r.next, size_r.val)!
-        read_data_segments(data_r.next, remaining - 1, acc + [{mem_idx: 0, offset: offset_r.val, data: data_r.val}])
-      },
-      2 => {
-        let mem_r = read_leb128_u(flags_r.next)!
-        let offset_r = read_init_expr(mem_r.next)!
-        let size_r = read_leb128_u(offset_r.next)!
-        let data_r = read_raw_bytes(size_r.next, size_r.val)!
-        read_data_segments(data_r.next, remaining - 1, acc + [{mem_idx: mem_r.val, offset: offset_r.val, data: data_r.val}])
-      },
-      _ => err("unsupported data segment flags"),
-    }
-  }
 
 // --- Top-Level ---
 
 fn empty_module() -> WasmModule = {
   types: [], imports: [], func_type_indices: [], tables: [],
-  memories: [], globals: [], exports: [], start: none,
-  elements: [], code: [], data_segments: [],
+  memories: [], exports: [], start: none,
 }
 
 effect fn parse(bytes: List[Int]) -> Result[WasmModule, String] = {
@@ -687,10 +315,6 @@ effect fn parse_sections(p: Parser, m: WasmModule) -> Result[WasmModule, String]
         let r = parse_memory_section(sp)!
         {...m, memories: r.val}
       },
-      6 => {
-        let r = parse_global_section(sp)!
-        {...m, globals: r.val}
-      },
       7 => {
         let r = parse_export_section(sp)!
         {...m, exports: r.val}
@@ -698,18 +322,6 @@ effect fn parse_sections(p: Parser, m: WasmModule) -> Result[WasmModule, String]
       8 => {
         let r = read_leb128_u(sp)!
         {...m, start: some(r.val)}
-      },
-      9 => {
-        let r = parse_element_section(sp)!
-        {...m, elements: r.val}
-      },
-      10 => {
-        let r = parse_code_section(sp)!
-        {...m, code: r.val}
-      },
-      11 => {
-        let r = parse_data_section(sp)!
-        {...m, data_segments: r.val}
       },
       _ => m,
     }
