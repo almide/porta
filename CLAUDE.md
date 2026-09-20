@@ -1,13 +1,24 @@
 # Porta
 
 Porta is an Almide 0.63.0 WASM agent and team runtime, with MCP interoperability.
-Almide owns CLI, manifests, capability checks and MCP. `native/wasmtime_bridge.rs`
-provides Wasmtime, native OS enforcement, CONNECT proxying and TOML parsing.
-`native/agent_runtime.rs` brokers guest-driven agents: model credentials, scoped
-WASM tools, delegation, and shared team budgets. `examples/chat-agent` is the
-actual reasoning/control loop compiled to WASM. `native/agent_journal.rs` owns
-durable broker records, exclusive access, and replay validation.
-`native/agent_mcp.rs` handles explicitly granted remote MCP tool calls.
+Almide owns CLI, manifests, capability checks and MCP. `examples/chat-agent` is
+the actual reasoning/control loop compiled to WASM.
+
+`native/` is the host side. The Almide `@extern(rs, "<module>", …)` declarations
+resolve against `wasmtime_bridge` and `agent_runtime`, so those two files are
+the FFI surface and re-export the rest; a `pub use` satisfies the binding just
+as a definition does.
+
+| Module | Owns |
+|---|---|
+| `wasmtime_bridge.rs` + `wasmtime_bridge/run.rs` | WASM instance lifecycle and the FFI surface |
+| `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset |
+| `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
+| `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
+| `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
+| `agent_journal.rs` | durable broker records, exclusive access, replay validation |
+| `agent_mcp.rs` | explicitly granted remote MCP tool calls |
+| `json_text.rs`, `locking.rs` | JSON escaping for hand-built replies; lock acquisition that survives poisoning |
 
 ## Build and verify
 
@@ -18,7 +29,18 @@ bash scripts/install-wasmtime.sh && export PATH="$PWD/.tools/wasmtime:$PATH"
 .tools/almide/almide build src/mod.almd -o target/porta
 .tools/almide/almide test --ci
 python3 scripts/integration.py target/porta
+
+bash scripts/install-codopsy.sh
+.tools/codopsy/codopsy analyze . -o /tmp/codopsy.json
+python3 scripts/check_grade.py /tmp/codopsy.json --min-score 90
 ```
+
+CI fails below 90, the grade-A boundary. The analyzer is pinned because the
+score moves with its thresholds and with how much Almide its grammar parses;
+run the pinned binary, not whichever `codopsy` is on PATH. Where parse coverage
+is poor the reported function boundaries are wrong, so splitting an `.almd`
+file may not move its complexity number — see
+`docs/roadmap/done/04-code-quality-grade.md` before chasing one.
 
 `almide test` runs a test file through `wasmtime` when it is on PATH and
 otherwise builds it natively; the native path rebuilds every test binary and
