@@ -46,6 +46,24 @@ is poor the reported function boundaries are wrong, so splitting an `.almd`
 file may not move its complexity number — see
 `docs/roadmap/done/04-code-quality-grade.md` before chasing one.
 
+`landlock.rs`, `landlock_policy.rs` and `seccomp.rs` open with
+`#![cfg(target_os = "linux")]`, so on macOS they are not compiled — not type
+checked, not const-evaluated, not linted. Every gate above can pass while one
+of them does not build. Changing one means building it on Linux before
+committing:
+
+```bash
+docker run --rm -v "$PWD:/w:ro" rust:1-trixie bash -c '
+  cp -r /w /src && cd /src && rm -rf target .tools
+  apt-get update -qq && apt-get install -y -qq python3 curl
+  bash scripts/install-almide.sh
+  .tools/almide/almide build src/mod.almd -o target/porta
+  python3 scripts/integration.py target/porta'
+```
+
+Mount the source read-only and copy it: the container must not write the host's
+`target/`. `rust:1-bookworm` is too old — almide needs GLIBC_2.39.
+
 `almide test` runs a test file through `wasmtime` when it is on PATH and
 otherwise builds it natively; the native path rebuilds every test binary and
 costs about an hour on a cold cache. Six of the nine files take the wasmtime
