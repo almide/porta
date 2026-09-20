@@ -21,6 +21,7 @@ type ExecRequest = {
   net: List[String],
   env: List[EnvVar],
   cwd: String,
+  read_policy: String,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -35,6 +36,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("net", strings(req.net)),
     ("env", value.array(req.env |> list.map(env_pair))),
     ("cwd", value.str(req.cwd)),
+    ("read_policy", value.str(req.read_policy)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

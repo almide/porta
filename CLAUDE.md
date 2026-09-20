@@ -59,8 +59,10 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - Never deserialize native Wasmtime code from agent-controlled files.
 - Native sandbox execution must fail closed on unsupported platforms.
 - A restriction the platform cannot express must refuse the run, never narrow
-  the policy: macOS enforces through `sandbox-exec`, Linux through Landlock,
-  which covers writes and TCP ports but not reads or proxy mode.
+  the policy: macOS enforces through `sandbox-exec`, Linux through Landlock.
+  Landlock covers writes, TCP ports and, under `--read-policy strict`, reads;
+  it cannot express proxy mode. macOS cannot yet express `strict` reads. Each
+  gap refuses rather than running with the restriction absent.
 - `run`, `up`, and MCP execution must share native policy generation.
 - Proxy mode permits only the loopback proxy endpoint, without UDP or Unix sockets.
 - MCP stdio uses newline-delimited JSON; diagnostics belong on stderr.

@@ -21,7 +21,15 @@ struct SandboxRequest {
     #[serde(rename = "net")] allowed_net: Vec<String>,
     #[serde(rename = "env")] env_vars: Vec<(String, String)>,
     cwd: String,
+    /// "open" leaves reads unrestricted; "strict" confines them to the granted
+    /// mounts and the platform's own directories. Anything else is refused.
+    #[serde(default = "open_reads")] read_policy: String,
 }
+
+fn open_reads() -> String { "open".to_string() }
+
+/// Read policies this build understands.
+const READ_POLICIES: [&str; 2] = ["open", "strict"];
 
 /// Absolute mount path, keeping the `:ro` marker the policy builders read.
 fn resolve_mount(mount: &str) -> String {
@@ -42,6 +50,19 @@ impl SandboxRequest {
     fn parse(request_json: &str) -> Result<Self, String> {
         let mut request: Self = serde_json::from_str(request_json)
             .map_err(|error| format!("invalid sandbox request: {error}"))?;
+        if !READ_POLICIES.contains(&request.read_policy.as_str()) {
+            return Err(format!("unknown read policy: {}; use open or strict", request.read_policy));
+        }
+        // macOS cannot express a strict read policy yet. `(deny file-read*)`
+        // with a system allow-list aborts every process on macOS 26.3, and the
+        // profile trace facility that would say what dyld needs is itself
+        // denied. Refusing keeps the guarantee honest, as the network and proxy
+        // paths already do on Linux.
+        #[cfg(target_os = "macos")]
+        if request.read_policy == "strict" {
+            return Err("--read-policy strict is not implemented on macOS; \
+                        porta will not run the command with reads open instead".into());
+        }
         request.allowed_dirs = request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect();
         Ok(request)
     }
@@ -117,6 +138,14 @@ fn json_error(reason: &str) -> String {
 #[cfg(target_os = "linux")]
 const ALWAYS_WRITABLE: [&str; 2] = ["/tmp", "/dev"];
 
+/// The platform's own directories, readable under a strict read policy. A
+/// dynamically linked command cannot start without its interpreter, its
+/// libraries and the loader cache, so confining reads to the granted mounts
+/// alone would only mean nothing runs. A caller's home directory is
+/// deliberately absent: that is what this policy exists to close.
+#[cfg(target_os = "linux")]
+const SYSTEM_READABLE: [&str; 7] = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/proc"];
+
 /// TCP ports from `--allow-net` entries, or the entry that cannot be expressed.
 #[cfg(target_os = "linux")]
 fn requested_tcp_ports(allowed_net: &[String]) -> Result<Vec<u16>, String> {
@@ -150,11 +179,22 @@ fn writable_dirs(allowed_dirs: &[String]) -> Vec<String> {
     dirs
 }
 
+/// Every mount the caller was granted, read-only ones included. Under a strict
+/// read policy these and the system directories are the only readable roots.
+#[cfg(target_os = "linux")]
+fn readable_dirs(allowed_dirs: &[String]) -> Vec<String> {
+    allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro").to_string()).collect()
+}
+
 /// The Landlock policy a request asks for, or why this kernel cannot apply it.
 #[cfg(target_os = "linux")]
 fn linux_ruleset(request: &SandboxRequest) -> Result<crate::landlock::Ruleset, String> {
+    let strict = request.read_policy == "strict";
     let policy = crate::landlock::Policy {
         writable_dirs: writable_dirs(&request.allowed_dirs),
+        readable_dirs: if strict { readable_dirs(&request.allowed_dirs) } else { Vec::new() },
+        system_dirs: SYSTEM_READABLE.iter().map(|dir| dir.to_string()).collect(),
+        restrict_reads: strict,
         tcp_ports: requested_tcp_ports(&request.allowed_net)?,
         restrict_network: !request.allowed_net.is_empty(),
     };

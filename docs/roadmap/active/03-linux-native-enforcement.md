@@ -4,8 +4,8 @@
 **Priority: High**
 
 `porta run <native command>` now enforces on Linux through Landlock, in
-`native/landlock.rs`. Writes and TCP ports are restricted; reads and proxy mode
-are not, and both refuse rather than pretend.
+`native/landlock.rs`. Writes, TCP ports and — with `--read-policy strict` —
+reads are restricted. Proxy mode is not, and refuses rather than pretends.
 
 ## What holds now
 
@@ -18,7 +18,8 @@ restricts itself and then execs — a ruleset survives `execve`.
 |---|---|---|
 | Write outside `-v` mounts | denied | denied |
 | `/tmp` and `/dev` | writable | writable |
-| Read `~/.ssh`, `~/.gnupg` | denied | **not confined** |
+| Read outside grants, default | denied for `~/.ssh`, `~/.gnupg` only | not confined |
+| Read outside grants, `--read-policy strict` | **refused** (unimplemented) | **denied** |
 | `--allow-net` by port | enforced | enforced, needs ABI 4 |
 | Proxy mode | enforced | **refused** |
 
@@ -27,30 +28,44 @@ succeeds, a write outside every grant fails and leaves no file, a connect to a
 granted port succeeds while the same connect fails when another port is granted,
 and both an unexpressible rule and proxy mode refuse to run.
 
-## Why reads are still open
+## Reads: strict is an allow-list, and Linux got it first
 
-Landlock is allow-list only. The macOS profile denies two paths and permits
-every other read, which cannot be expressed: either reads are not handled, and
-those paths stay readable, or they are handled and every path the command
-legitimately reads has to be enumerated.
+Landlock is allow-list only, so the macOS deny-list cannot be ported. That
+turned out to be the better shape. `--read-policy strict` handles
+`READ_FILE | READ_DIR` and grants reads beneath exactly two sets: the mounts the
+caller was given, and the platform's own directories — `/usr`, `/lib`,
+`/lib64`, `/bin`, `/sbin`, `/etc`, `/proc`, plus the always-writable `/tmp` and
+`/dev`. Everything else in the filesystem is closed, including every home
+directory.
 
-Replicating the macOS deny-list is the wrong target. Denying `~/.ssh` and
-`~/.gnupg` while `~/.aws/credentials`, `~/.config/gh`, `~/.npmrc` and every
-`.env` stay readable is a mitigation, not a guarantee, and it contradicts the
-claim that porta runs a command with the permissions it was granted.
+That is a guarantee rather than a mitigation. The deny-list this item
+originally rejected would have left `~/.aws/credentials`, `~/.config/gh`,
+`~/.npmrc` and every `.env` readable; the allow-list closes them without
+enumerating them. It needs ABI 1 — a lower bar than the ABI 4 the network rules
+need — and `scripts/integration.py` asserts on Linux that a credential outside
+every grant is unreadable, that the granted mount and a system interpreter
+still are, and that an unknown policy name refuses.
 
-The intended end state is deny-by-default reads on **both** platforms:
+A path in the system set that does not exist on a host is skipped rather than
+refused: these are the platform's directories, not a caller's grant, and
+`/lib64` is absent on arm64 Debian.
 
-1. Add `--read-policy` with `open` (today's behaviour) and `strict`
-   (allow-list), defaulting to `open`.
-2. Implement `strict` on Linux first, since Landlock can only do that shape.
-3. Refuse any run whose requested policy the platform cannot express, as the
-   write and network paths already do.
-4. Flip the default to `strict` at a version boundary, once the grants a real
-   agent needs are known.
+The default stays `open`. Flipping it is a version boundary, once the grants a
+real agent needs are known.
 
-Until then the documents must say plainly that reads are not confined, which
-they now do.
+### macOS is not done
+
+`--read-policy strict` refuses on macOS. `sandbox-exec` can express an
+allow-list — `(deny file-read*)` plus `(allow file-read* (subpath ...))` — but a
+naive system set aborts every process with SIGABRT on macOS 26.3, including
+`/bin/echo`: dyld needs paths this list does not name, and the profile `(trace
+...)` facility that would report them is itself denied (exit 71). Determining
+the set empirically is the remaining work. Until then macOS refuses the policy
+rather than running with reads open, which is what the write and network paths
+already do when a rule cannot be expressed.
+
+This leaves the platforms crossed over: macOS denies two named paths by default
+and cannot yet do better, Linux confines everything or nothing.
 
 ## Why proxy mode is still refused
 
@@ -80,7 +95,8 @@ express.
 
 ## Remaining
 
-- `--read-policy strict` on both platforms.
+- `--read-policy strict` on macOS: determine the dyld read set empirically.
+- Flip the default to `strict` at a version boundary.
 - Proxy mode on Linux, together with `01-http-proxy-filtering` v2.
 - A host with a Landlock ABI below 4, to confirm the refusal path on a real
   kernel rather than only by construction.

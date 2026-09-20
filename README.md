@@ -141,9 +141,12 @@ published in the same place.
 ## Limits
 
 Native restrictions cover **macOS** and **Linux**, and not identically. macOS
-uses `sandbox-exec`; Linux uses Landlock, which enforces writes and TCP ports
-but **does not confine reads** — it is allow-list only and cannot express the
-macOS denial of `~/.ssh` and `~/.gnupg` while leaving other reads permitted.
+uses `sandbox-exec`; Linux uses Landlock, which enforces writes and TCP ports.
+Reads are open by default on both. On Linux, `--read-policy strict` closes them:
+reads are confined to the mounts you granted plus the system directories a
+command needs to start, so nothing under any home directory is readable. macOS
+cannot express that yet and refuses the flag rather than running with reads
+open.
 HTTPS proxy filtering stays macOS-only: it must also deny UDP and Unix sockets,
 which Landlock cannot express, so proxy mode refuses to run on Linux rather than
 enforce part of a policy. A kernel whose Landlock ABI cannot express a requested
@@ -282,7 +285,7 @@ Uses Landlock, unprivileged and without namespaces or an external runtime:
 | Control | Behavior |
 |---------|----------|
 | **FS write** | Denied everywhere except `-v` mounted dirs, `/tmp` and `/dev` |
-| **FS read** | Not confined. Landlock is allow-list only, so the macOS denial of `~/.ssh` and `~/.gnupg` has no equivalent |
+| **FS read** | Open by default. `--read-policy strict` confines reads to your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/proc`, `/tmp`, `/dev` — every home directory is closed |
 | **Network** | Open by default. `--allow-net '*:443'` restricts TCP connect by port, needing Landlock ABI 4 |
 | **Proxy mode** | Refused. It must also deny UDP and Unix sockets, which Landlock cannot express |
 

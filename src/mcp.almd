@@ -212,6 +212,8 @@ effect fn handle_builtin_exec(config: dispatch.InstanceConfig, args: Value) -> R
     net: config.allowed_hosts,
     env: config.env_vars + config.secrets,
     cwd: json.get_string(args, "cwd") ?? ".",
+    // MCP exec keeps today's behaviour until an instance can declare one.
+    read_policy: "open",
   }
   let result_json = wasm_rt.wt_exec_sandboxed(dispatch.exec_request_json(request))!
   let parsed = json.parse(result_json)

@@ -18,6 +18,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --proxy-allow <hosts>   HTTPS proxy allowlist (comma-separated, *.wildcard ok)")
   println("  --proxy-deny <hosts>    HTTPS proxy denylist (comma-separated, *.wildcard ok)")
   println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
+  println("  --read-policy <mode>    open (default) or strict: confine reads to mounts (Linux)")
 }
 
 fn print_help(topic: String) -> Unit =

@@ -28,6 +28,7 @@ type Options = {
   proxy_allow: List[String],
   proxy_deny: List[String],
   proxy_audit: String,
+  read_policy: String,
 }
 
 fn default_options() -> Options = {
@@ -50,6 +51,7 @@ fn default_options() -> Options = {
   proxy_allow: [],
   proxy_deny: [],
   proxy_audit: "",
+  read_policy: "open",
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -86,6 +88,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> ParsedOption =
     "--proxy-allow" => valued({...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
     "--proxy-deny" => valued({...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
     "--proxy-audit" => valued({...opts, proxy_audit: next}),
+    "--read-policy" => valued({...opts, read_policy: next}),
     "-d" => flag({...opts, detach: true}),
     "--detach" => flag({...opts, detach: true}),
     "--_daemon" => valued({...opts, daemon_id: next}),

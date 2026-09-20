@@ -90,6 +90,7 @@ effect fn run_native_direct(opts: cli.Options) -> Result[Unit, String] = {
     net: opts.allow_net,
     env: cli.resolve_env(opts)! + opts.secrets,
     cwd: dispatch.first_mount(opts.preopen_dirs),
+    read_policy: opts.read_policy,
   }
 
   // exec() replaces this process — terminal is inherited, never returns on success
@@ -128,6 +129,7 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
     net: [proxy.sandbox_net_rule(h)],
     env: cli.resolve_env(opts)! + opts.secrets + proxy_env,
     cwd: dispatch.first_mount(opts.preopen_dirs),
+    read_policy: opts.read_policy,
   }
 
   let exit_code = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))

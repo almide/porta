@@ -16,6 +16,12 @@ const RULE_NET_PORT: libc::c_long = 2;
 
 const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
 
+/// Reads, as understood by Landlock ABI 1. Handling these closes every path
+/// that no rule names, which is the only shape an allow-list can take.
+const READ_RIGHTS_ABI1: u64 = (1 << 0)   // EXECUTE
+    | (1 << 2)   // READ_FILE
+    | (1 << 3);  // READ_DIR
+
 /// Filesystem writes, as understood by Landlock ABI 1.
 const WRITE_RIGHTS_ABI1: u64 = (1 << 1)   // WRITE_FILE
     | (1 << 4)   // REMOVE_DIR
@@ -64,6 +70,14 @@ struct NetPortAttr {
 /// What the caller asked the kernel to enforce.
 pub struct Policy {
     pub writable_dirs: Vec<String>,
+    /// Roots the caller was granted read access to. A path here that cannot be
+    /// opened refuses the run, exactly as a write grant does.
+    pub readable_dirs: Vec<String>,
+    /// The platform's own directories. One that does not exist on this host is
+    /// skipped rather than refused — it is not something the caller asked for,
+    /// and `/lib64` is absent on arm64 Debian.
+    pub system_dirs: Vec<String>,
+    pub restrict_reads: bool,
     pub tcp_ports: Vec<u16>,
     pub restrict_network: bool,
 }
@@ -177,11 +191,22 @@ pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
             MIN_ABI_FOR_NET, abi
         ));
     }
-    let rights = write_rights(abi);
+    let writes = write_rights(abi);
+    let reads = if policy.restrict_reads { READ_RIGHTS_ABI1 } else { 0 };
     let handled_net = if policy.restrict_network { ACCESS_NET_CONNECT_TCP } else { 0 };
-    let ruleset = create_ruleset(rights, handled_net)?;
+    let ruleset = create_ruleset(writes | reads, handled_net)?;
     for dir in &policy.writable_dirs {
-        allow_directory(&ruleset, dir, rights)?;
+        allow_directory(&ruleset, dir, writes | reads)?;
+    }
+    // Reading is handled all-or-nothing: with reads restricted, a path no rule
+    // names is closed, so the platform's own directories have to be named too.
+    if policy.restrict_reads {
+        for dir in &policy.readable_dirs {
+            allow_directory(&ruleset, dir, reads)?;
+        }
+        for dir in policy.system_dirs.iter().filter(|dir| std::path::Path::new(dir).exists()) {
+            allow_directory(&ruleset, dir, reads)?;
+        }
     }
     for port in &policy.tcp_ports {
         allow_tcp_port(&ruleset, *port)?;
