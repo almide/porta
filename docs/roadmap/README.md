@@ -4,13 +4,14 @@
 
 ## Active
 
-3 items
+4 items
 
 | Item | Description |
 |------|-------------|
 | [HTTP Proxy Filtering](active/01-http-proxy-filtering.md) | Host-level HTTP filtering via local CONNECT proxy |
 | [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
 | [Linux Native Enforcement](active/03-linux-native-enforcement.md) | Enforce native command restrictions on Linux, not just macOS |
+| [Code Quality Grade](active/04-code-quality-grade.md) | Raise the codopsy project grade from B to A |
 
 ## On Hold
 
