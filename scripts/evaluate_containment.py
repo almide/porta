@@ -230,9 +230,11 @@ class Honeypot(http.server.BaseHTTPRequestHandler):
     """An endpoint no arm was granted. Any request here escaped the runtime."""
 
     def handle_one_request(self):
+        # A malformed probe must not take the honeypot thread down with it;
+        # the request is still recorded by record() before anything can fail.
         try:
             super().handle_one_request()
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     def record(self):

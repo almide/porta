@@ -1,7 +1,17 @@
 {
+  "_comment": [
+    "Standard output is this repository's interface, not its debugging channel.",
+    "Every Python file here is an integration test, an evaluation harness or an",
+    "auditor, where `assert` is the verification and `print` is the result. Every",
+    "println! is either a WASM guest answering its host, which reads the result",
+    "from stdout, or the proxy's audit line, which has to go to stderr because",
+    "stdout carries newline-delimited MCP JSON. No complexity threshold is",
+    "relaxed here."
+  ],
   "rules": {
     "no-assert": false,
     "no-print": false,
-    "no-printf": false
+    "no-printf": false,
+    "no-println": false
   }
 }

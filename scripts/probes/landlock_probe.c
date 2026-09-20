@@ -36,7 +36,7 @@ static int try_connect(int port) {
     struct sockaddr_in a = {0};
     a.sin_family = AF_INET; a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(LOOPBACK_ADDR);
-    int r = connect(s, (struct sockaddr *)&a, sizeof(a));
+    int r = connect(s, (struct sockaddr *)&a, sizeof(struct sockaddr_in));
     int e = errno; close(s);
     return r == 0 ? 0 : e;
 }
@@ -59,7 +59,7 @@ int main(void) {
            nm(try_write("/tmp/allowed/a")), nm(try_write("/tmp/denied/a")));
 
     struct ruleset_attr attr = { .fs = FS_WRITE_FILE | FS_MAKE_REG, .net = NET_CONNECT_TCP };
-    int rs = syscall(NR_create, &attr, sizeof(attr), 0);
+    int rs = syscall(NR_create, &attr, sizeof(struct ruleset_attr), 0);
     if (rs < 0) { printf("create_ruleset(fs+net) failed: %s\n", strerror(errno)); return 1; }
     printf("ruleset created with fs+net handled\n");
 

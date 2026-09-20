@@ -112,7 +112,7 @@ effect fn wasi_fd_write(m: Machine, ws: WasiState) -> Result[{m: Machine, ws: Wa
         let ws2 = match entry.kind {
           FdStdout => {...ws, stdout_buf: ws.stdout_buf + data},
           FdStderr => {...ws, stderr_buf: ws.stderr_buf + data},
-          FdFile(path, _content) => ws,  // TODO: file write
+          FdFile(path, _content) => ws,  // the interpreter path drops file writes
           _ => ws,
         }
 

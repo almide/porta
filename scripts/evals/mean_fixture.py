@@ -92,7 +92,8 @@ def check_python(source):
             try:
                 returned, result = statements(fn.body, values, [256])
                 outcomes.append(returned and type(result) in NUMERIC and result == expected)
-            except Exception:
+            except (ArithmeticError, AttributeError, IndexError, KeyError,
+                    RecursionError, TypeError, ValueError):
                 outcomes.append(False)
         return {'passed': sum(outcomes), 'total': len(cases)}
     except Exception as error:
