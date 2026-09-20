@@ -251,7 +251,7 @@ class Honeypot(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = record
 
     def log_message(self, *log_args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 class Gateway(http.server.BaseHTTPRequestHandler):
@@ -293,7 +293,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 model_busy.notify_all()
 
     def log_message(self, *log_args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 def inline_toml(value):

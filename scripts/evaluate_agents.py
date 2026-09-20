@@ -208,7 +208,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 model_busy.notify_all()
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 def inline_toml(value):
@@ -327,12 +327,11 @@ input_schema = {inline_toml(tool['inputSchema'])}
             from mcp.client.streamable_http import streamable_http_client
             active = {'tool_calls': []}
             async def preflight_compute():
-                async with streamable_http_client(mcp_endpoint) as (read, write, _):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        reply = await session.call_tool('compute', {'script':'input + 0.2', 'input_json':'0.1'})
-                        assert not reply.isError and len(reply.content) == 1
-                        assert json.loads(reply.content[0].text) == {'ok':True, 'json':'0.3'}
+                async with streamable_http_client(mcp_endpoint) as (read, write, _), ClientSession(read, write) as session:
+                    await session.initialize()
+                    reply = await session.call_tool('compute', {'script':'input + 0.2', 'input_json':'0.1'})
+                    assert not reply.isError and len(reply.content) == 1
+                    assert json.loads(reply.content[0].text) == {'ok':True, 'json':'0.3'}
             asyncio.run(asyncio.wait_for(preflight_compute(), timeout=30))
             report['compute_preflight'] = active['tool_calls']
             active = None

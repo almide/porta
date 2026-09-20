@@ -4,7 +4,6 @@ import http.server
 import json
 import os
 import pathlib
-import signal
 import subprocess
 import sys
 import tempfile
@@ -143,7 +142,7 @@ class Server(http.server.BaseHTTPRequestHandler):
             self.answer(response)
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Server)
 thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -16,6 +16,10 @@
 #define NR_create 444
 #define NR_add    445
 #define NR_self   446
+#define LOOPBACK_ADDR   0x7f000001
+#define PROBE_DIR_MODE  0700
+#define DENIED_PORT     80
+#define ALLOWED_PORT    443
 #define RULE_PATH_BENEATH 1
 #define RULE_NET_PORT     2
 #define NET_BIND_TCP    (1ULL << 0)
@@ -31,7 +35,7 @@ static int try_connect(int port) {
     int s = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = {0};
     a.sin_family = AF_INET; a.sin_port = htons(port);
-    a.sin_addr.s_addr = htonl(0x7f000001);
+    a.sin_addr.s_addr = htonl(LOOPBACK_ADDR);
     int r = connect(s, (struct sockaddr *)&a, sizeof(a));
     int e = errno; close(s);
     return r == 0 ? 0 : e;
@@ -49,9 +53,9 @@ int main(void) {
     long abi = syscall(NR_create, NULL, 0, 1U /* LANDLOCK_CREATE_RULESET_VERSION */);
     if (abi < 0) printf("landlock_abi=unavailable (%s)\n", strerror(errno));
     else printf("landlock_abi=%ld\n", abi);
-    mkdir("/tmp/allowed", 0700); mkdir("/tmp/denied", 0700);
+    mkdir("/tmp/allowed", PROBE_DIR_MODE); mkdir("/tmp/denied", PROBE_DIR_MODE);
     printf("BEFORE  connect:80=%s  connect:443=%s  write /tmp/allowed=%s  write /tmp/denied=%s\n",
-           nm(try_connect(80)), nm(try_connect(443)),
+           nm(try_connect(DENIED_PORT)), nm(try_connect(ALLOWED_PORT)),
            nm(try_write("/tmp/allowed/a")), nm(try_write("/tmp/denied/a")));
 
     struct ruleset_attr attr = { .fs = FS_WRITE_FILE | FS_MAKE_REG, .net = NET_CONNECT_TCP };
@@ -59,7 +63,7 @@ int main(void) {
     if (rs < 0) { printf("create_ruleset(fs+net) failed: %s\n", strerror(errno)); return 1; }
     printf("ruleset created with fs+net handled\n");
 
-    struct net_port np = { .allowed = NET_CONNECT_TCP, .port = 443 };
+    struct net_port np = { .allowed = NET_CONNECT_TCP, .port = ALLOWED_PORT };
     if (syscall(NR_add, rs, RULE_NET_PORT, &np, 0) < 0)
         printf("add net rule failed: %s\n", strerror(errno));
 
@@ -73,7 +77,7 @@ int main(void) {
     printf("restrict_self applied (unprivileged, no namespaces)\n");
 
     printf("AFTER   connect:80=%s  connect:443=%s  write /tmp/allowed=%s  write /tmp/denied=%s\n",
-           nm(try_connect(80)), nm(try_connect(443)),
+           nm(try_connect(DENIED_PORT)), nm(try_connect(ALLOWED_PORT)),
            nm(try_write("/tmp/allowed/b")), nm(try_write("/tmp/denied/b")));
     return 0;
 }

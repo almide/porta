@@ -653,7 +653,7 @@ pub fn agent_step(handle: i64) -> String {
     match runs.get_mut(&(handle as u64)) {
         Some(run) => match run.tick() {
             Ok(value) => {
-                if value["done"] == true {
+                if value["done"].as_bool().unwrap_or(false) {
                     if let Some(journal) = &run.journal {
                         if let Err(error) = locked(&journal).finish(value["output"].as_str().unwrap_or(""), value["metrics"]["elapsed_ms"].as_u64().unwrap_or(0)) { return fail(error); }
                     }

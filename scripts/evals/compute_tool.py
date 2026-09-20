@@ -13,19 +13,18 @@ async def invoke(porta, wasm, manifest, arguments):
         params = StdioServerParameters(command=str(porta), cwd=directory, args=[
             'serve', str(wasm), '--manifest', str(manifest),
             '--step-limit', '50000000', '--max-memory', '1024'])
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                reply = await session.call_tool('compute', arguments)
-                wire = reply.model_dump(by_alias=True, exclude_none=True)
-                if len(reply.content) != 1 or reply.content[0].type != 'text':
-                    raise ValueError('unexpected compute MCP content')
-                result = json.loads(reply.content[0].text)
-                if not isinstance(result, dict) or not isinstance(result.get('ok'), bool):
-                    raise ValueError('compute response lost its status/result envelope')
-                if bool(reply.isError) != (not result['ok']):
-                    raise ValueError('compute status differs from MCP isError')
-                return result, wire
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            reply = await session.call_tool('compute', arguments)
+            wire = reply.model_dump(by_alias=True, exclude_none=True)
+            if len(reply.content) != 1 or reply.content[0].type != 'text':
+                raise ValueError('unexpected compute MCP content')
+            result = json.loads(reply.content[0].text)
+            if not isinstance(result, dict) or not isinstance(result.get('ok'), bool):
+                raise ValueError('compute response lost its status/result envelope')
+            if bool(reply.isError) != (not result['ok']):
+                raise ValueError('compute status differs from MCP isError')
+            return result, wire
 
 
 def compute(porta, wasm, manifest, arguments):

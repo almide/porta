@@ -51,7 +51,8 @@ class Model(http.server.BaseHTTPRequestHandler):
             message={'role':'assistant','tool_calls':[call('fixed-1','one.txt','first valid'),call('fixed-2','two.txt','second valid')]}
         data=json.dumps({'choices':[{'message':message}]}).encode()
         self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
-    def log_message(self,*args):pass
+    def log_message(self, *args):
+        """Silence the request log; these tests assert on their own output."""
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Model)
 thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
 try:

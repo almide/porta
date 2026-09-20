@@ -20,43 +20,41 @@ async def main():
         params = StdioServerParameters(command=porta, cwd=directory, args=[
             'serve', compute, '--manifest', str(repo / 'examples/compute/compute.manifest.json'),
             '--step-limit', '50000000', '--max-memory', '1024'])
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
-                assert any(t.name == 'compute' for t in listed.tools)
-                for script, text, expected in [('input.a + input.b', '{"a":0.1,"b":0.2}', '0.3'),
-                                                ('input', '9007199254740993', '9007199254740993')]:
-                    result = await session.call_tool('compute', {'script': script, 'input_json': text})
-                    assert not result.isError, result
-                    assert json.loads(result.content[0].text) == {'ok': True, 'json': expected}, result
-                result = await session.call_tool('compute', {'script': '1 / 0', 'input_json': 'null'})
-                assert result.isError and json.loads(result.content[0].text)['error']['code'] == 'compute_failed', result
-                try:
-                    await session.call_tool('porta.exec', {'command': 'echo', 'args': ['not granted']})
-                except McpError as error:
-                    assert 'capability not granted' in str(error), error
-                else:
-                    raise AssertionError('native execution unexpectedly granted')
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            listed = await session.list_tools()
+            assert any(t.name == 'compute' for t in listed.tools)
+            for script, text, expected in [('input.a + input.b', '{"a":0.1,"b":0.2}', '0.3'),
+                                            ('input', '9007199254740993', '9007199254740993')]:
+                result = await session.call_tool('compute', {'script': script, 'input_json': text})
+                assert not result.isError, result
+                assert json.loads(result.content[0].text) == {'ok': True, 'json': expected}, result
+            result = await session.call_tool('compute', {'script': '1 / 0', 'input_json': 'null'})
+            assert result.isError and json.loads(result.content[0].text)['error']['code'] == 'compute_failed', result
+            try:
+                await session.call_tool('porta.exec', {'command': 'echo', 'args': ['not granted']})
+            except McpError as error:
+                assert 'capability not granted' in str(error), error
+            else:
+                raise AssertionError('native execution unexpectedly granted')
         print('PASS: official SDK receives full compute results, exact numeric text and structured errors; native execution is denied')
 
         for mounted in (False, True):
             params = StdioServerParameters(command=porta, cwd=directory, args=[
                 'serve', demo, '--manifest', str(repo / 'examples/demo-agent/manifest.json'),
                 '--step-limit', '50000000', '--max-memory', '1024'] + (['-v', '.'] if mounted else []))
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool('read_file', {'path': 'marker.txt'})
-                    if mounted:
-                        assert not result.isError and result.content[0].text == 'explicit grant only', result
-                    else:
-                        assert result.isError, result
-                    written = await session.call_tool('write_file', {'path':'created.txt', 'content':'explicit'})
-                    if mounted:
-                        assert not written.isError and (root / 'created.txt').read_text() == 'explicit', written
-                    else:
-                        assert written.isError and not (root / 'created.txt').exists(), written
+            async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool('read_file', {'path': 'marker.txt'})
+                if mounted:
+                    assert not result.isError and result.content[0].text == 'explicit grant only', result
+                else:
+                    assert result.isError, result
+                written = await session.call_tool('write_file', {'path':'created.txt', 'content':'explicit'})
+                if mounted:
+                    assert not written.isError and (root / 'created.txt').read_text() == 'explicit', written
+                else:
+                    assert written.isError and not (root / 'created.txt').exists(), written
         print('PASS: declared filesystem capability alone exposes no cwd; explicit mounts enable legacy reads and writes')
 
 

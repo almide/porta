@@ -38,7 +38,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, *args):
-        pass
+        """Silence the request log; these tests assert on their own output."""
 
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Model)

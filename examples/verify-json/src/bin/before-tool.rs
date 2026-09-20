@@ -12,7 +12,7 @@ fn check(request: &Value) -> Result<(), String> {
         let result = &call["result"];
         call["name"] == required && result.is_object()
             && result.get("error").is_none() && result.get("err").is_none()
-            && result.get("isError").is_none_or(|v| v == false)
+            && result.get("isError").is_none_or(|flag| !flag.as_bool().unwrap_or(true))
             && p.get("requires_arguments").is_none_or(|v| v == &call["arguments"])
             && p.get("requires_result").is_none_or(|v| v == result)
     }) { Ok(()) } else {

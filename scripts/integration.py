@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
             self.end_headers()
             self.wfile.write(b'redirect not followed')
         def log_message(self, *args):
-            pass
+            """Silence the request log; these tests assert on their own output."""
 
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), RedirectServer)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

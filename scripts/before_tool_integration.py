@@ -2,7 +2,6 @@
 """Pre-effect WASM policies: correction, durable reconstruction and confinement."""
 import http.server
 import json
-import os
 import pathlib
 import subprocess
 import sys
@@ -30,7 +29,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         message = {'role':'assistant','content':'Done'} if name is None else {'role':'assistant','tool_calls':[{'id':f'call-{len(requests)}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
         payload = json.dumps({'choices':[{'message':message}]}).encode()
         self.send_response(200); self.send_header('Content-Length',str(len(payload))); self.end_headers(); self.wfile.write(payload)
-    def log_message(self,*args): pass
+    def log_message(self, *args):
+        """Silence the request log; these tests assert on their own output."""
 server = http.server.ThreadingHTTPServer(('127.0.0.1',0),Model)
 thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()
 try:
