@@ -223,8 +223,13 @@ fn build_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, e
 
 // --- Policy capture ---
 
+// A TOML basic string: backslash and double-quote escaped so a path holding
+// either stays valid TOML rather than closing the string early.
+fn toml_quote(s: String) -> String =
+  "\"" + string.replace(string.replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+
 fn toml_strings(items: List[String]) -> String =
-  "[" + string.join(items |> list.map((s) => "\"" + s + "\""), ", ") + "]"
+  "[" + string.join(items |> list.map(toml_quote), ", ") + "]"
 
 fn line_when(present: Bool, line: String) -> List[String] =
   if present then [line] else []
@@ -238,7 +243,7 @@ fn policy_toml(opts: Options) -> String = {
   let proxy_on = list.len(opts.proxy_allow) > 0 or list.len(opts.proxy_deny) > 0 or opts.proxy_audit != ""
   let has_env = list.len(opts.env_vars) > 0 or list.len(opts.secrets) > 0
   let lines =
-    ["[runtime]", "type = \"native\"", "command = \"" + opts.path + "\"", "", "[sandbox]",
+    ["[runtime]", "type = \"native\"", "command = " + toml_quote(opts.path), "", "[sandbox]",
      "mounts = " + toml_strings(mounts)]
     + line_when(list.len(opts.allow_net) > 0, "network = " + toml_strings(opts.allow_net))
     + line_when(opts.read_policy == "strict", "read-policy = \"strict\"")
@@ -246,11 +251,11 @@ fn policy_toml(opts: Options) -> String = {
     + line_when(list.len(opts.allow_unix) > 0, "unix = " + toml_strings(opts.allow_unix))
     + line_when(list.len(opts.allow_bind) > 0, "bind = " + toml_strings(opts.allow_bind))
     + line_when(opts.timeout > 0, "timeout = " + int.to_string(opts.timeout))
-    + line_when(opts.profile != "", "profile = \"" + opts.profile + "\"")
+    + line_when(opts.profile != "", "profile = " + toml_quote(opts.profile))
     + (if proxy_on then ["", "[proxy]"] else [])
     + line_when(list.len(opts.proxy_allow) > 0, "allow = " + toml_strings(opts.proxy_allow))
     + line_when(list.len(opts.proxy_deny) > 0, "deny = " + toml_strings(opts.proxy_deny))
-    + line_when(opts.proxy_audit != "", "audit = \"" + opts.proxy_audit + "\"")
+    + line_when(opts.proxy_audit != "", "audit = " + toml_quote(opts.proxy_audit))
     + line_when(has_env, "\n# -e values and secrets were not saved; add [env] and [secrets] yourself")
   string.join(lines, "\n") + "\n"
 }

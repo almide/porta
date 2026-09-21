@@ -298,7 +298,15 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         assert 'must-not-be-saved' not in text, 'a -e value leaked into the saved policy'
         result = run('up', '--', 'saved', cwd=save_dir)
         assert result.returncode == 0 and result.stdout.strip() == 'saved', result
-    print('PASS: explain --save writes a committable porta.toml (no secrets) that porta up runs')
+        # A mount path holding a double quote must stay valid TOML, not close
+        # the string early: the saver escapes it, and porta up reads it back.
+        quoted_dir = pathlib.Path(save_dir) / 'od"d'
+        quoted_dir.mkdir()
+        result = run('explain', '/bin/echo', '-v', str(quoted_dir), '--save', str(quoted_dir / 'porta.toml'), '--', 'q')
+        assert result.returncode == 0 and '\\"' in (quoted_dir / 'porta.toml').read_text(), result
+        result = run('up', '--', 'q', cwd=str(quoted_dir))
+        assert result.returncode == 0 and result.stdout.strip() == 'q', result
+    print('PASS: explain --save writes a committable porta.toml (no secrets, TOML-escaped) that porta up runs')
 
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.
