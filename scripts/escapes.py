@@ -125,6 +125,54 @@ def write_git_hook(ctx):
     return Result(HELD, "hook write refused")
 
 
+def write_through_symlink(ctx):
+    # A symlink the run makes inside its own mount, pointing outside it. The
+    # kernel resolves the link to its target, so the write must be judged by the
+    # target's path, not the link's: porta names the path the kernel resolved.
+    target = ctx.ungranted / "via-symlink"
+    ctx.porta_run("/bin/sh", "-c", 'ln -sf "$1" "$2/link" && echo x > "$2/link"',
+                  "sh", str(target), str(ctx.workspace), policy=["-v", str(ctx.workspace)])
+    if target.exists():
+        target.unlink()
+        return Result(ESCAPED, "the write reached the symlink's target outside the mount")
+    return Result(HELD, "write through a symlink to outside refused")
+
+
+def read_secret_through_symlink(ctx):
+    # The same trick for reading: a symlink inside the mount to a file outside
+    # every grant, opened under strict reads. Resolving the link must not open a
+    # door the policy did not.
+    secret_dir = ctx.ungranted / "creds"
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    (secret_dir / "token").write_text(f"token={MARKER}\n")
+    result = ctx.porta_run("/bin/sh", "-c", 'ln -sf "$1" "$2/k" && cat "$2/k" 2>/dev/null',
+                           "sh", str(secret_dir / "token"), str(ctx.workspace),
+                           policy=["--read-policy", "strict", "-v", str(ctx.workspace)])
+    return Result(ESCAPED, "read the secret through a symlink") if MARKER in result.stdout else Result(HELD, "read through a symlink refused")
+
+
+def inherit_porta_fd(ctx):
+    # In proxy mode porta holds a listening socket, and with --proxy-audit an
+    # open log, while it supervises the child. None of porta's descriptors may
+    # cross into the child: an fd to the proxy, the audit log or the journal
+    # would be a capability the policy never granted. std opens them O_CLOEXEC;
+    # this confirms nothing beyond stdio survives the exec.
+    code = (
+        "import os\n"
+        "leaked=[]\n"
+        "for fd in range(3, 64):\n"
+        "    try:\n"
+        "        os.fstat(fd); leaked.append(fd)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "print('LEAK' if leaked else 'clean')"
+    )
+    result = ctx.py(code, policy=["--proxy-allow", "example.com",
+                                  "--proxy-audit", str(ctx.workspace / "audit.jsonl"),
+                                  "-v", str(ctx.workspace)])
+    return Result(ESCAPED, "a porta descriptor crossed into the child") if "LEAK" in result.stdout else Result(HELD, "no descriptor beyond stdio inherited")
+
+
 def _read_secret(ctx, secret_dir, name, policy):
     """A read of a file the sandbox should not open. The file holds MARKER;
     the probe prints whatever it managed to read."""
@@ -322,6 +370,9 @@ CORPUS = [
     Attempt("write outside every mount", "filesystem", None, write_outside_mount),
     Attempt("rename the mount root away", "filesystem", ["Darwin"], rename_mount_root),
     Attempt("write a git hook inside a mount", "filesystem", ["Darwin"], write_git_hook),
+    Attempt("write through a symlink pointing outside the mount", "filesystem", None, write_through_symlink),
+    Attempt("read a secret through a symlink under strict", "credentials", None, read_secret_through_symlink),
+    Attempt("inherit an open file descriptor from porta", "processes", None, inherit_porta_fd),
     Attempt("read an SSH private key", "credentials", None, read_ssh_key),
     Attempt("read /etc/shadow under strict", "credentials", ["Linux"], read_etc_shadow_strict),
     Attempt("read another process's arguments", "processes", None, read_other_process_argv),

@@ -41,9 +41,45 @@ struct SandboxRequest {
     /// credential agent. Empty by default: the SSH agent, gpg-agent and the
     /// container runtimes are closed unless named.
     #[serde(rename = "unix", default)] allowed_unix: Vec<String>,
+    /// Seconds the command may run before porta kills it and everything it
+    /// started. 0 means no limit. A native command is a process on the host,
+    /// so nothing else bounds its wall-clock; an agent that hangs or loops
+    /// runs forever without this.
+    #[serde(default)] timeout: u64,
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
+}
+
+/// The exit code porta reports when a run hit its `--timeout`, the same code
+/// `timeout(1)` uses.
+const TIMED_OUT: i64 = 124;
+
+/// Waits for a supervised child, killing it and everything it started once the
+/// deadline passes. The child leads its own process group (the caller set
+/// that before spawning), so one signal to the negated pid reaches the whole
+/// tree, not just the shell porta launched. `timeout` of 0 waits without a
+/// limit.
+fn wait_within(mut child: std::process::Child, timeout: u64) -> std::io::Result<i64> {
+    if timeout == 0 {
+        return child.wait().map(exit_code);
+    }
+    let group = child.id() as libc::pid_t;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(exit_code(status));
+        }
+        if std::time::Instant::now() >= deadline {
+            // Negated pid: the whole process group, so a shell's children die
+            // with it. SIGKILL because a run past its deadline has already had
+            // its time; then reap so no zombie is left.
+            unsafe { libc::kill(-group, libc::SIGKILL) };
+            let _ = child.wait();
+            return Ok(TIMED_OUT);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// A tag for one run: the pid and the clock, which no two runs on one host
@@ -247,12 +283,67 @@ impl SandboxRequest {
         if !self.allowed_unix.is_empty() {
             text.push_str(&format!("unix sockets {}\n", self.allowed_unix.join(", ")));
         }
+        text.push_str(&format!(
+            "time limit   {}\n",
+            if self.timeout == 0 { "none".to_string() } else { format!("{}s, then killed with its process group", self.timeout) }
+        ));
         let mut inherited: Vec<&str> = INHERITED_ENV.iter().copied().filter(|key| std::env::var_os(key).is_some()).collect();
         let named: Vec<&str> = self.env_vars.iter().map(|(key, _)| key.as_str()).collect();
         inherited.extend(named.iter().copied());
         text.push_str(&format!("environment  {}\n", inherited.join(" ")));
         text.push_str(&self.explain_enforcement());
         text
+    }
+
+    /// The same policy as `explain`, as one JSON object for tooling and CI. A
+    /// refused request is not reached here: the wrapper reports the refusal.
+    fn explain_json(&self) -> String {
+        let quoted = |text: &str| format!("\"{}\"", crate::json_text::escape_json_text(text));
+        let array = |items: &[String]| -> String {
+            let parts: Vec<String> = items
+                .iter()
+                .map(|item| format!("\"{}\"", crate::json_text::escape_json_text(item)))
+                .collect();
+            format!("[{}]", parts.join(","))
+        };
+        let (net_mode, net_allow): (&str, &[String]) = if self.proxy {
+            ("proxy", &[])
+        } else if self.allowed_net.is_empty() {
+            ("open", &[])
+        } else {
+            ("allowlist", &self.allowed_net)
+        };
+        format!(
+            "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
+\"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
+\"timeout_seconds\":{},\"enforcement\":{}}}",
+            quoted(&self.cmd),
+            array(&self.args),
+            quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
+            array(&self.allowed_dirs),
+            quoted(if self.read_policy == "strict" { "strict" } else { "open" }),
+            quoted(net_mode),
+            array(net_allow),
+            array(&self.allowed_bind),
+            array(&self.allowed_unix),
+            self.timeout,
+            quoted(self.enforcement_backend()),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn enforcement_backend(&self) -> &'static str {
+        "sandbox-exec"
+    }
+
+    #[cfg(target_os = "linux")]
+    fn enforcement_backend(&self) -> &'static str {
+        "landlock+seccomp"
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn enforcement_backend(&self) -> &'static str {
+        "none"
     }
 
     #[cfg(target_os = "macos")]
@@ -474,6 +565,15 @@ pub fn wt_sandbox_explain(request_json: impl AsRef<str>) -> String {
     }
 }
 
+/// The policy as one JSON object, or `{"refused":"..."}` when porta would
+/// refuse the run before it began.
+pub fn wt_sandbox_explain_json(request_json: impl AsRef<str>) -> String {
+    match SandboxRequest::parse(request_json.as_ref()) {
+        Ok(request) => request.explain_json(),
+        Err(reason) => format!("{{\"refused\":\"{}\"}}", crate::json_text::escape_json_text(&reason)),
+    }
+}
+
 /// Spawn a sandboxed command with this process's stdio, wait for it, and report
 /// its exit code. Unlike `wt_exec_replace` porta stays alive, so a proxy thread
 /// it started keeps serving, and it is still there to say what the sandbox
@@ -498,11 +598,16 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     command.stdin(std::process::Stdio::inherit());
     command.stdout(std::process::Stdio::inherit());
     command.stderr(std::process::Stdio::inherit());
-    let status = command
+    // The child leads its own process group so `--timeout` can signal the
+    // whole tree, not just the sandbox-exec shell in front of the command.
+    command.process_group(0);
+    let code = command
         .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|error| format!("cannot start the command: {error}"))?;
-    let code = exit_code(status);
+        .map_err(|error| format!("cannot start the command: {error}"))
+        .and_then(|child| {
+            wait_within(child, request.timeout)
+                .map_err(|error| format!("waiting for the command failed: {error}"))
+        })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
     Ok(code)
 }
@@ -590,11 +695,17 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     unsafe {
         command.pre_exec(move || SandboxRequest::restrict_current_process(policy));
     }
-    let status = command
+    // Its own process group, so `--timeout` reaches everything the command
+    // starts, not only the command itself.
+    command.process_group(0);
+    let code = command
         .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|error| format!("cannot start the command under the sandbox: {error}"))?;
-    Ok(exit_code(status))
+        .map_err(|error| format!("cannot start the command under the sandbox: {error}"))
+        .and_then(|child| {
+            wait_within(child, request.timeout)
+                .map_err(|error| format!("waiting for the command failed: {error}"))
+        })?;
+    Ok(code)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

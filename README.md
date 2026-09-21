@@ -297,6 +297,7 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
 | `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
+| `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -338,6 +339,16 @@ Exit codes tell a script what happened:
 
 `porta explain <command> [same options]` prints the policy a run would apply
 without applying it; `porta check` prints what this host can enforce at all.
+Add `--json` to either for a machine-readable form: `explain --json` gives the
+effective policy (command, mounts, reads, network, listen ports, Unix sockets,
+timeout, backend), or `{"refused": "..."}` for a run porta would decline;
+`check --json` gives the host's primitives and whether each is present. Both
+let a CI step gate on the policy without parsing prose.
+
+`porta explain <command> [flags] --save porta.toml` writes those flags as a
+`porta.toml` you can commit and re-run with `porta up`, so the invocation you
+converged on becomes the project's checked-in policy. Secrets and `-e` values
+are left out on purpose: a committed file is the wrong place for them.
 
 ## Security Model
 

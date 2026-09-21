@@ -35,6 +35,9 @@ type ExecRequest = {
   // Unix sockets the command may connect to although they hold a credential
   // agent.
   unix: List[String],
+  // Seconds before porta kills the command and everything it started. 0 means
+  // no limit.
+  timeout: Int,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -54,6 +57,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("allow_root", value.bool(req.allow_root)),
     ("bind", strings(req.bind)),
     ("unix", strings(req.unix)),
+    ("timeout", value.int(req.timeout)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

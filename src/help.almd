@@ -23,6 +23,9 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --env-pass <NAME,...>   Copy these host variables in (the rest stay outside)")
   println("  --allow-unix <path>     Let the command reach this credential socket (repeatable)")
   println("  --allow-bind <port>     Let the command listen on this port under --allow-net")
+  println("  --timeout <secs>        Kill the command and all it started after this many seconds (exit 124)")
+  println("  --json                  Machine-readable output for 'explain' and 'check'")
+  println("  --save <path>           'explain --save' writes these flags as a porta.toml you can commit")
 }
 
 fn print_help(topic: String) -> Unit =

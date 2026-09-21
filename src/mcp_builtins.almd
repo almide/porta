@@ -138,6 +138,8 @@ effect fn run_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value
     allow_root: true,
     bind: [],
     unix: [],
+    // MCP exec is bounded by the caller's own request, not a wall-clock here.
+    timeout: 0,
   }
   let result_json = wasm_rt.wt_exec_sandboxed(dispatch.exec_request_json(request))!
   ok(match json.parse(result_json) {

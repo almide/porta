@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 porta = str(pathlib.Path(sys.argv[1]).resolve())
 
@@ -236,6 +237,76 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
     assert result.returncode == 0 and 'would refuse' in result.stdout, result
     print('PASS: exit codes pass through; refusals exit 125/126/127; check and explain run nothing')
+
+    # --timeout bounds a native run's wall-clock: a hung command is killed and
+    # reports 124, the code timeout(1) uses. A run that finishes first keeps
+    # its own exit code, and 0 (the default) never kills.
+    started = time.monotonic()
+    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 30')
+    elapsed = time.monotonic() - started
+    assert result.returncode == 124, result
+    assert elapsed < 10, f'timeout did not stop the run promptly: {elapsed:.1f}s'
+    # The command leads its own process group, so a backgrounded child is
+    # killed with it rather than orphaned to run out its sleep. The run prints
+    # the child's pid; after the deadline that pid must be gone.
+    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 300 & echo $!; wait')
+    assert result.returncode == 124, result
+    child = int(result.stdout.split()[0])
+    time.sleep(1)
+    try:
+        os.kill(child, 0)
+        raise AssertionError(f'a backgrounded child ({child}) outlived the timeout')
+    except ProcessLookupError:
+        pass
+    result = run('run', '/bin/sh', '--timeout', '5', '--', '-c', 'exit 7')
+    assert result.returncode == 7, result
+    result = run('explain', '/bin/sh', '--timeout', '3', '--', '-c', 'x')
+    assert result.returncode == 0 and 'time limit' in result.stdout and '3s' in result.stdout, result
+    print('PASS: --timeout kills a hung run (124) with its whole group; a run that finishes keeps its code')
+
+    # --json gives explain and check a machine-readable form. explain reports
+    # the effective policy; a run it would refuse reports the refusal instead.
+    result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
+                 '--timeout', '30', '--json', '--', 'hi')
+    assert result.returncode == 0, result
+    policy = json.loads(result.stdout)
+    assert policy['command'] == '/bin/echo' and policy['args'] == ['hi'], policy
+    assert policy['network'] == {'mode': 'allowlist', 'allow': ['api.example.com:443']}, policy
+    assert policy['timeout_seconds'] == 30 and policy['reads'] == 'open', policy
+    assert str(root) in policy['mounts'][0], policy
+    result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--json', '--', 'x')
+    assert result.returncode == 0 and 'refused' in json.loads(result.stdout), result
+    result = run('check', '--json')
+    assert result.returncode == 0, result
+    host = json.loads(result.stdout)
+    assert host['all_enforced'] is True and host['missing'] == 0, host
+    assert host['primitives'] and all('present' in p for p in host['primitives']), host
+    print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
+
+    # explain --save writes a porta.toml of the flags in use, so an invocation
+    # a user converged on can be committed and re-run with `porta up`. Secrets
+    # and -e values are left out on purpose: a committed file is the wrong place.
+    with tempfile.TemporaryDirectory() as save_dir:
+        cfg = pathlib.Path(save_dir) / 'porta.toml'
+        result = run('explain', '/bin/echo', '-v', save_dir, '--allow-net', 'api.example.com:443',
+                     '--read-policy', 'strict', '--timeout', '20', '--env-pass', 'FOO',
+                     '-e', 'TOKEN=must-not-be-saved', '--save', str(cfg), '--', 'saved')
+        assert result.returncode == 0 and cfg.is_file(), result
+        text = cfg.read_text()
+        assert 'command = "/bin/echo"' in text and 'read-policy = "strict"' in text, text
+        assert 'timeout = 20' in text and 'network = ["api.example.com:443"]' in text, text
+        assert 'must-not-be-saved' not in text, 'a -e value leaked into the saved policy'
+        result = run('up', '--', 'saved', cwd=save_dir)
+        assert result.returncode == 0 and result.stdout.strip() == 'saved', result
+        # A mount path holding a double quote must stay valid TOML, not close
+        # the string early: the saver escapes it, and porta up reads it back.
+        quoted_dir = pathlib.Path(save_dir) / 'od"d'
+        quoted_dir.mkdir()
+        result = run('explain', '/bin/echo', '-v', str(quoted_dir), '--save', str(quoted_dir / 'porta.toml'), '--', 'q')
+        assert result.returncode == 0 and '\\"' in (quoted_dir / 'porta.toml').read_text(), result
+        result = run('up', '--', 'q', cwd=str(quoted_dir))
+        assert result.returncode == 0 and result.stdout.strip() == 'q', result
+    print('PASS: explain --save writes a committable porta.toml (no secrets, TOML-escaped) that porta up runs')
 
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.

@@ -96,6 +96,16 @@ the end.
 
 ## Status
 
+**v0.6.0 released 2026-09-21** — the closures below, the denial footer,
+`check`/`explain`, exit codes, the escape corpus (published, green on both
+platforms) and the threat model. It shipped through the self-verifying
+release pipeline: built and tested on each platform, published as a
+prerelease, installed and attacked from outside the repository, and only
+then promoted. Three real bugs surfaced on CI's macOS runner and were fixed
+before merge — the credential-socket deny had missed the runner's `/var/run`
+agent path, and `--allow-unix` had not reopened a socket reached through a
+symlink.
+
 - **0.6 shipped** (2026-09-21): everything below under Phase 0.6 except two
   items withdrawn after measurement. `TMPDIR` was granted and passed, and the
   suite caught it opening other tools' scratch state to a strict run; it is
@@ -108,9 +118,18 @@ the end.
   read back from the unified log after a failed run), `porta check`, `porta
   explain`, exit codes 125/126/127 with the child's code passed through in
   every mode, and `run` now supervising rather than exec-ing in place so porta
-  is there to report. Still to do: the Linux footer (needs ABI 7 audit records
-  or a `SIGSYS`/exit classifier), `--json`, the post-run save prompt, the
-  `--ldd`-style interpreter hint, and `strict` as the default.
+  is there to report. Supervising also bought `--timeout <secs>`: the command
+  leads its own process group and porta kills the group at the deadline (exit
+  124), so a hung or looping agent is bounded — the one wall-clock limit the
+  native sandbox now has, closing the gap the threat model called out. `explain
+  --json` and `check --json` also landed: the effective policy (or a
+  `{"refused":...}`) and the host's primitives as machine-readable objects, so
+  a CI step can gate on the policy without parsing prose. `explain --save
+  porta.toml` writes the flags in use as a committable config (secrets and `-e`
+  values left out on purpose) that `porta up` reads back, so a converged
+  invocation becomes the project's policy. Still to do: the Linux footer (needs
+  ABI 7 audit records or a `SIGSYS`/exit classifier), the `--ldd`-style
+  interpreter hint, and `strict` as the default.
 - **0.8 started** with the parts that need no TLS termination: a per-run proxy
   credential (a CONNECT without it is 407, so the loopback proxy is not an
   open relay for other processes; `NODE_USE_ENV_PROXY=1` is set so Node's

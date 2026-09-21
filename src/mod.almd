@@ -93,7 +93,8 @@ effect fn main() -> Result[Unit, String] = {
       some(opts) => engine.explain_native(opts),
     },
     "check" => {
-      println(wasm_rt.wt_sandbox_check())
+      let want_json = list.drop(args, 2) |> list.any((a) => a == "--json")
+      println(if want_json then wasm_rt.wt_sandbox_check_json() else wasm_rt.wt_sandbox_check())
       ok(())
     },
     "init" => {
