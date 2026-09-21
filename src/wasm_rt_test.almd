@@ -101,7 +101,34 @@ test "build_sandbox_profile: allow_net restricts to listed ports" {
 
 test "build_sandbox_profile: no allow_net leaves the network open, resolver included" {
   let profile = wasm_rt.build_sandbox_profile(["."], [], "open")
-  assert(not string.contains(profile, "network-outbound"))
+  assert(not string.contains(profile, "(deny network-outbound)"))
+  assert(not string.contains(profile, "remote tcp"))
+  // The credential sockets are closed even with the network open.
+  assert(string.contains(profile, "Listeners$"))
+  assert(string.contains(profile, "docker\\.sock$"))
+}
+
+test "build_sandbox_profile: host facilities are closed in every mode" {
+  let profile = wasm_rt.build_sandbox_profile([], [], "open")
+  assert(string.contains(profile, "(deny sysctl-read (sysctl-name-regex #\"procargs\"))"))
+  assert(string.contains(profile, "(deny process-info-pidinfo)"))
+  assert(string.contains(profile, "(allow process-info-pidinfo (target same-sandbox))"))
+  assert(string.contains(profile, "(deny lsopen)"))
+  assert(string.contains(profile, "com.apple.SecurityServer"))
+  assert(string.contains(profile, "/.aws"))
+  assert(string.contains(profile, "(deny file-read* (subpath \"/Library/Keychains\"))"))
+  assert(string.contains(profile, "(allow file-read* (literal \"/Library/Keychains/System.keychain\"))"))
+}
+
+test "build_sandbox_profile: a writable mount keeps its trusted files and its root" {
+  let profile = wasm_rt.build_sandbox_profile(["/workspace"], [], "open")
+  assert(string.contains(profile, "(deny file-write* (literal \"/workspace/.mcp.json\"))"))
+  assert(string.contains(profile, "(deny file-write* (subpath \"/workspace/.claude/commands\"))"))
+  assert(string.contains(profile, "(deny file-write-unlink (literal \"/workspace\"))"))
+  assert(string.contains(profile, "(deny file-write-unlink (literal \"/workspace/.claude\"))"))
+  // A read-only mount has nothing to protect: nothing in it can be written.
+  let readonly = wasm_rt.build_sandbox_profile(["/workspace:ro"], [], "open")
+  assert(not string.contains(readonly, "/workspace/.mcp.json"))
 }
 
 test "build_sandbox_profile: allowed_net adds port-based TCP rules" {
@@ -125,12 +152,14 @@ test "build_sandbox_profile: writable mount has file-write rule" {
   assert(string.contains(profile, "(allow file-write* (subpath \"/workspace\"))"))
 }
 
-test "build_sandbox_profile: cryptographic keys denied" {
+test "build_sandbox_profile: credential stores denied, ordinary documents not" {
   let profile = wasm_rt.build_sandbox_profile(["."], [], "open")
-  assert(string.contains(profile, ".ssh"))
-  assert(string.contains(profile, ".gnupg"))
-  assert(not string.contains(profile, ".aws"))
+  assert(string.contains(profile, "/.ssh\"))"))
+  assert(string.contains(profile, "/.gnupg\"))"))
+  assert(string.contains(profile, "/.aws\"))"))
+  assert(string.contains(profile, "/.netrc\"))"))
   assert(not string.contains(profile, "Documents"))
+  assert(not string.contains(profile, "Desktop"))
 }
 
 // --- wt_getpid ---

@@ -192,9 +192,14 @@ What Porta does **not** do, stated here rather than discovered later:
   your kernel. A kernel that can be exploited is a kernel both sides share.
 - **Read access is broader than write access** unless you pass
   `--read-policy strict`, and even then the system directories a command needs
-  to start stay readable. This is not complete secret isolation.
-- **Proxy filtering controls connection targets, not TLS contents**, and it
-  does not stop a child from listening on a port.
+  to start stay readable. Credential stores under your home are closed in every
+  mode; the rest of what your user can read, a command can read too.
+- **Proxy filtering controls connection targets, not TLS contents.** Listening
+  is closed once `--allow-net` is in force and opened per port with
+  `--allow-bind`; with the network open, so is listening.
+- **Linux protects a mount as a whole.** The repository-hooks and trusted-file
+  protections inside a writable mount are macOS only until Landlock can express
+  a directory minus some of its files.
 - **macOS and Linux only**, and not identically — see
   [Native Restrictions](#native-restrictions) for exactly where they differ.
   Anywhere else, native execution fails closed rather than running unrestricted.
@@ -251,6 +256,8 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `porta agent-resume <agent.toml> <journal>` | Continue a recorded run |
 | `porta agent-replay <agent.toml> <journal>` | Verify a completed run offline |
 | `porta run <target>` | Execute WASM (.wasm) or native command |
+| `porta explain <command> [options]` | Print the policy `run` would apply with the same options, and run nothing |
+| `porta check` | Say what this host can enforce and what porta will refuse here |
 | `porta run -d <agent.wasm>` | Run WASM as background daemon |
 | `porta serve <agent.wasm>` | Start MCP server on stdio |
 
@@ -286,7 +293,10 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--proxy-deny <hosts>` | Same, denying these hosts |
 | `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
 | `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
-| `--allow-root` | Run as root anyway. Refused by default: `/etc` has to be readable and it holds `shadow`, which only permissions were keeping away |
+| `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
+| `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
+| `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
+| `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -295,7 +305,50 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `-d`, `--detach` | Run as background daemon |
 | `--help`, `-h` | Show help for any command |
 
+### When a run is refused
+
+A refusal looks exactly like a broken tool — `Operation not permitted` — until
+someone says which flag it would have needed. After a run that exits non-zero,
+porta reads the kernel's denial records for that run (macOS; each deny rule
+carries a per-run tag, so other processes' denials are not mixed in) and says
+so:
+
+```
+[porta] the sandbox refused this run 2 times; what each would have needed:
+  file-write-create /Users/me/notes/out.txt
+    → -v /Users/me/notes
+  network-outbound remote:*:443
+    → --allow-net '*:443'
+```
+
+Some refusals have no flag — a credential store, another process's arguments,
+`open(1)` — and the footer says that instead. `PORTA_DENIALS=always` asks after
+every run, including ones that exited 0; `PORTA_DENIALS=never` keeps the footer
+away. On Linux the footer is not available yet: it needs Landlock ABI 7's audit
+records.
+
+Exit codes tell a script what happened:
+
+| Exit | Meaning |
+|---|---|
+| the command's own | the command ran; this is what it returned (128 + signal if a signal ended it) |
+| 125 | porta refused the run before it began — a rule this kernel cannot express, a missing mount, root without `--allow-root` |
+| 126 | the command exists but the policy leaves it unrunnable (an interpreter outside the strict read set, say) |
+| 127 | the command was not found |
+
+`porta explain <command> [same options]` prints the policy a run would apply
+without applying it; `porta check` prints what this host can enforce at all.
+
 ## Security Model
+
+What porta defends against, what it does not, and the test behind each claim
+are written out in [the threat model](docs/threat-model.md). The escape corpus
+that backs it — every way out this project knows about, run against the binary —
+is `scripts/escapes.py`; it runs in CI and you can run it yourself:
+
+```bash
+python3 scripts/escapes.py "$(command -v porta)"
+```
 
 ### Two-Layer Enforcement
 
@@ -311,9 +364,13 @@ does not show you where.
 
 | Control | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
 |---|---|---|
-| **Write** | denied outside `-v` mounts, `/tmp` | denied outside `-v` mounts, `/tmp`, `/dev` |
-| **Read, default** | `~/.ssh` and `~/.gnupg` denied; everything else readable | not confined |
-| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` |
+| **Write** | denied outside `-v` mounts, `/tmp`, `/dev` | denied outside `-v` mounts, `/tmp`, `/dev` |
+| **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the root's shell rc files, `.gitconfig`, `.mcp.json`, `.npmrc`, `.claude/commands`, `.claude/agents`, `.vscode`, `.idea`, `porta.toml` stay unwritable; the mount root and those paths cannot be renamed away | not yet (Landlock grants a directory whole) |
+| **Read, default** | credential stores denied — `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, Keychains, browser profiles; everything else readable | not confined |
+| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass` | same |
+| **Other processes** | their arguments and environment unreadable (`procargs`, `proc_pidinfo`); signals to them not restricted | `/proc` closed under `strict`; signals and abstract sockets scoped to the sandbox on Landlock ABI 6 |
+| **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
+| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
 | **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
 | **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
@@ -343,8 +400,16 @@ filter that also refuses `io_uring`, because a ring can open a socket without
 ever asking for one.
 
 Only HTTPS CONNECT on port 443 is supported, and clients must respect
-`HTTPS_PROXY`. Deny lists are weaker than explicit allow lists, and this is not
-a credential broker or a private-address filter. See [Limits](#limits).
+`HTTPS_PROXY` (Node's `fetch` does once `NODE_USE_ENV_PROXY=1` is set, which
+porta sets). The proxy serves this run's client alone: `HTTPS_PROXY` carries a
+per-run credential, and a CONNECT without it is answered 407, so another
+process on the machine cannot use porta's proxy as a relay carrying this run's
+allow-list. An allowed name that resolves to loopback, a link-local or cloud
+metadata address, or a multicast group is refused: a hostname on the list is a
+promise about a public service, not a route to this machine. Private ranges
+stay reachable. Every decision is written and synced to the audit file before
+the connection proceeds. Deny lists are weaker than explicit allow lists, and
+this is not a credential broker. See [Limits](#limits).
 
 ### WASM Sandbox
 

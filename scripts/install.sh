@@ -19,7 +19,7 @@ case "$(uname -m)" in
 esac
 
 asset="porta-${os}-${arch}.tar.gz"
-install_dir="${1:-${PORTA_INSTALL_DIR:-$HOME/.local/bin}}"
+install_dir="${1:-${PORTA_INSTALL_DIR:-"$HOME/.local/bin"}}"
 repo="https://github.com/almide/porta"
 
 if [ -n "${PORTA_RELEASE_TAG:-}" ]; then

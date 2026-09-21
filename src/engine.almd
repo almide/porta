@@ -68,41 +68,68 @@ effect fn run_foreground(opts: cli.Options) -> Result[Unit, String] = {
 
 // --- Native sandbox execution ---
 
-effect fn run_native(opts: cli.Options) -> Result[Unit, String] = {
-  let proxy_cfg: proxy.ProxyConfig = {
-    allow: opts.proxy_allow,
-    deny: opts.proxy_deny,
-    audit_path: opts.proxy_audit,
-  }
+fn proxy_config(opts: cli.Options) -> proxy.ProxyConfig =
+  {allow: opts.proxy_allow, deny: opts.proxy_deny, audit_path: opts.proxy_audit}
+
+// Runs a native command under the policy the options describe and returns
+// the command's own exit code, so the caller can exit with it.
+effect fn run_native(opts: cli.Options) -> Result[Int, String] = {
+  let proxy_cfg = proxy_config(opts)
   if proxy.is_enabled(proxy_cfg) then run_native_proxied(opts, proxy_cfg)
   else run_native_direct(opts)
 }
 
-effect fn run_native_direct(opts: cli.Options) -> Result[Unit, String] = {
+// The request every native entry point builds: the command, its mounts and
+// its policy, with `net` and `env` supplied by the caller because proxy mode
+// replaces both.
+effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[dispatch.EnvVar], proxied: Bool) -> Result[dispatch.ExecRequest, String] = {
   let request: dispatch.ExecRequest = {
     cmd: opts.path,
     args: opts.wasm_args,
     dirs: opts.preopen_dirs,
-    net: opts.allow_net,
-    env: cli.resolve_env(opts)! + opts.secrets,
+    net: net,
+    env: cli.resolve_env(opts)! + opts.secrets + proxy_env,
     cwd: dispatch.first_mount(opts.preopen_dirs),
     read_policy: opts.read_policy,
-    proxy: false,
+    proxy: proxied,
     allow_root: opts.allow_root,
+    bind: opts.allow_bind,
+    unix: opts.allow_unix,
   }
+  ok(request)
+}
 
-  // exec() replaces this process — terminal is inherited, never returns on success
-  let error_json = wasm_rt.wt_exec_replace(dispatch.exec_request_json(request))
-  let parsed = json.parse(error_json)!
-  let error = json.get_string(parsed, "error") ?? "unknown error"
-  err(error)
+// What a supervised run reported: the command's exit code, or the reason the
+// run was refused before it began.
+fn supervised_exit(reply_json: String) -> Result[Int, String] = {
+  let reply = json.parse(reply_json)!
+  let error = json.get_string(reply, "error") ?? ""
+  if error != "" then err(error)
+  else ok(json.get_int(reply, "exit_code") ?? 1)
+}
+
+// The policy in words, without running anything. Proxy mode is described
+// with a placeholder endpoint: the proxy is not started for an explanation.
+effect fn explain_native(opts: cli.Options) -> Result[Unit, String] = {
+  let proxied = proxy.is_enabled(proxy_config(opts))
+  let net = if proxied then ["127.0.0.1:1"] else opts.allow_net
+  let request = native_request(opts, net, [], proxied)!
+  println(wasm_rt.wt_sandbox_explain(dispatch.exec_request_json(request)))
+  ok(())
+}
+
+// porta stays as the parent rather than becoming the command: it is then
+// still there when the command exits to say what the sandbox refused.
+effect fn run_native_direct(opts: cli.Options) -> Result[Int, String] = {
+  let request = native_request(opts, opts.allow_net, [], false)!
+  supervised_exit(wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request)))
 }
 
 // Proxy mode: start CONNECT proxy, constrain net to the proxy port only,
 // inject HTTP(S)_PROXY, run supervised so the proxy thread stays alive.
 // Any user-supplied --allow-net is intentionally ignored in this mode:
 // the proxy is the only permitted egress.
-effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) -> Result[Unit, String] = {
+effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) -> Result[Int, String] = {
   if list.len(opts.allow_net) > 0 then
     eprintln("[porta] --allow-net is ignored when --proxy-allow/--proxy-deny is set; proxy is the only egress")
   else ()
@@ -113,29 +140,19 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
   // Env: inject HTTP(S)_PROXY so well-behaved clients route through the proxy.
   // Raw sockets bypassing HTTPS_PROXY will be blocked by the sandbox net policy.
   let endpoint = proxy.endpoint(h)
+  // Node's fetch ignores the proxy variables unless told to honour them.
   let proxy_env: List[dispatch.EnvVar] = [
     {key: "HTTP_PROXY", val: endpoint},
     {key: "HTTPS_PROXY", val: endpoint},
     {key: "http_proxy", val: endpoint},
     {key: "https_proxy", val: endpoint},
+    {key: "NODE_USE_ENV_PROXY", val: "1"},
   ]
-  let request: dispatch.ExecRequest = {
-    cmd: opts.path,
-    args: opts.wasm_args,
-    dirs: opts.preopen_dirs,
-    // Net: strictly the proxy port. Anything else must be blocked at the OS level.
-    net: [proxy.sandbox_net_rule(h)],
-    env: cli.resolve_env(opts)! + opts.secrets + proxy_env,
-    cwd: dispatch.first_mount(opts.preopen_dirs),
-    read_policy: opts.read_policy,
-    proxy: true,
-    allow_root: opts.allow_root,
-  }
-
-  let exit_code = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))
+  // Net: strictly the proxy port. Anything else must be blocked at the OS level.
+  let request = native_request(opts, [proxy.sandbox_net_rule(h)], proxy_env, true)!
+  let reply = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))
   proxy.stop(h)!
-  if exit_code == 0 then ok(())
-  else err("child exited with code ${int.to_string(exit_code)}")
+  supervised_exit(reply)
 }
 
 // --- Validate ---

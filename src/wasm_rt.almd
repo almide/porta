@@ -56,8 +56,18 @@ fn wt_inspect(wasm_path: String) -> String
 @extern(rs, "wasmtime_bridge", "wt_exec_replace")
 fn wt_exec_replace(request_json: String) -> String
 
+// Runs the command with porta's own stdio and waits. Returns
+// {"exit_code":N}, or {"error":"…"} when the run was refused before it began.
 @extern(rs, "wasmtime_bridge", "wt_exec_supervised")
-fn wt_exec_supervised(request_json: String) -> Int
+fn wt_exec_supervised(request_json: String) -> String
+
+// The policy a request would apply, in words, without applying it.
+@extern(rs, "wasmtime_bridge", "wt_sandbox_explain")
+fn wt_sandbox_explain(request_json: String) -> String
+
+// What this host can enforce, and what porta will refuse here.
+@extern(rs, "wasmtime_bridge", "wt_sandbox_check")
+fn wt_sandbox_check() -> String
 
 @extern(rs, "wasmtime_bridge", "wt_proxy_start")
 fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String) -> String

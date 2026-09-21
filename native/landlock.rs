@@ -1,9 +1,9 @@
 //! Linux native enforcement through Landlock.
 //!
 //! The ruleset is built in the parent and only applied in the child, so the
-//! post-fork path makes two syscalls and allocates nothing. Rules the running
-//! kernel cannot express are refused rather than skipped: a policy that is not
-//! applied must fail the run, never run it unrestricted.
+//! post-fork path makes a handful of syscalls and allocates nothing. Rules the
+//! running kernel cannot express are refused rather than skipped: a policy
+//! that is not applied must fail the run, never run it unrestricted.
 #![cfg(target_os = "linux")]
 
 const SYS_CREATE_RULESET: libc::c_long = 444;
@@ -14,6 +14,7 @@ const CREATE_RULESET_VERSION: u32 = 1;
 const RULE_PATH_BENEATH: libc::c_long = 1;
 const RULE_NET_PORT: libc::c_long = 2;
 
+const ACCESS_NET_BIND_TCP: u64 = 1 << 0;
 const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
 
 /// Reads, as understood by Landlock ABI 1. Handling these closes every path
@@ -33,13 +34,33 @@ const WRITE_RIGHTS_ABI1: u64 = (1 << 1)   // WRITE_FILE
     | (1 << 10)  // MAKE_FIFO
     | (1 << 11)  // MAKE_BLOCK
     | (1 << 12); // MAKE_SYM
+/// Linking or renaming across directories, from ABI 2. Once a kernel knows
+/// this right, a ruleset that does not handle it denies every cross-directory
+/// rename and link — `mv a/x b/` inside a mount degrades to copy-and-delete,
+/// and `ln` fails with EXDEV. It is handled and granted wherever writes are.
+const ACCESS_FS_REFER: u64 = 1 << 13;
 /// TRUNCATE exists from ABI 3; requesting it on an older kernel is rejected.
 const ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 
+/// The rights a rule on a single file may carry. A directory right on a file
+/// rule is rejected by the kernel, so file rules are masked to these.
+const FILE_RIGHTS: u64 = (1 << 0) | (1 << 1) | (1 << 2) | ACCESS_FS_TRUNCATE;
+
+/// From ABI 6 a domain can be scoped: the sandboxed process cannot send a
+/// signal to a process outside it, nor connect to an abstract Unix socket
+/// another process outside it listens on. Both are channels to the caller's
+/// other processes that no file or port rule would ever name.
+const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+const SCOPE_SIGNAL: u64 = 1 << 1;
+
 /// ABI that first understands network rules.
 const MIN_ABI_FOR_NET: i64 = 4;
+/// ABI that first understands cross-directory rename and link.
+const MIN_ABI_FOR_REFER: i64 = 2;
 /// ABI that first understands truncation as a distinct right.
 const MIN_ABI_FOR_TRUNCATE: i64 = 3;
+/// ABI that first understands signal and abstract-socket scoping.
+const MIN_ABI_FOR_SCOPE: i64 = 6;
 
 /// The only place a landlock syscall is issued. The arguments travel as one
 /// array in syscall order, and a caller that has a pointer casts it, so the
@@ -49,11 +70,17 @@ fn landlock_syscall(operation: libc::c_long, args: [libc::c_long; 4]) -> libc::c
     unsafe { libc::syscall(operation, args[0], args[1], args[2], args[3]) }
 }
 
+/// The ruleset attributes as ABI 6 lays them out. Older kernels are handed
+/// only the first two words, which is the size they know.
 #[repr(C)]
 struct RulesetAttr {
     handled_access_fs: u64,
     handled_access_net: u64,
+    scoped: u64,
 }
+
+const RULESET_ATTR_SIZE_ABI1: usize = 16;
+const RULESET_ATTR_SIZE_ABI6: usize = 24;
 
 #[repr(C)]
 struct PathBeneathAttr {
@@ -77,8 +104,14 @@ pub struct Policy {
     /// skipped rather than refused — it is not something the caller asked for,
     /// and `/lib64` is absent on arm64 Debian.
     pub system_dirs: Vec<String>,
+    /// Single files under `/etc` a command needs to start. Skipped when absent,
+    /// for the same reason as the directories.
+    pub system_files: Vec<String>,
     pub restrict_reads: bool,
     pub tcp_ports: Vec<u16>,
+    /// Ports the command may listen on. With a network rule in force every
+    /// other port is closed to `bind(2)`.
+    pub bind_ports: Vec<u16>,
     pub restrict_network: bool,
 }
 
@@ -103,7 +136,17 @@ impl Ruleset {
         }
         Ok(())
     }
+
 }
+
+// `/proc/self` is not granted under a strict read policy, and this is where
+// the reason is recorded. A rule added by the process that then execs in
+// place does grant its own entry — measured — but `/proc/self` names whoever
+// opens it, so the shell that is porta's usual command gets its entry and
+// every tool the shell starts gets nothing, since each has a pid of its own.
+// A grant that covers the wrapper and not the work is a grant that misleads,
+// so `/proc` stays closed as a whole, and a command that needs it takes it as
+// a mount.
 
 /// Landlock ABI the running kernel reports, or an error when it has none.
 pub fn abi_version() -> Result<i64, String> {
@@ -120,22 +163,20 @@ pub fn abi_version() -> Result<i64, String> {
 }
 
 fn write_rights(abi: i64) -> u64 {
-    if abi >= MIN_ABI_FOR_TRUNCATE {
-        WRITE_RIGHTS_ABI1 | ACCESS_FS_TRUNCATE
-    } else {
-        WRITE_RIGHTS_ABI1
-    }
+    let mut rights = WRITE_RIGHTS_ABI1;
+    if abi >= MIN_ABI_FOR_REFER { rights |= ACCESS_FS_REFER; }
+    if abi >= MIN_ABI_FOR_TRUNCATE { rights |= ACCESS_FS_TRUNCATE; }
+    rights
 }
 
-fn create_ruleset(handled_fs: u64, handled_net: u64) -> Result<Ruleset, String> {
-    let attr = RulesetAttr {
-        handled_access_fs: handled_fs,
-        handled_access_net: handled_net,
-    };
+fn create_ruleset(abi: i64, handled_fs: u64, handled_net: u64) -> Result<Ruleset, String> {
+    let scoped = if abi >= MIN_ABI_FOR_SCOPE { SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL } else { 0 };
+    let size = if abi >= MIN_ABI_FOR_SCOPE { RULESET_ATTR_SIZE_ABI6 } else { RULESET_ATTR_SIZE_ABI1 };
+    let attr = RulesetAttr { handled_access_fs: handled_fs, handled_access_net: handled_net, scoped };
     // attr, size, flags — in that order, as the kernel declares them.
     let fd = landlock_syscall(SYS_CREATE_RULESET, [
         &attr as *const RulesetAttr as libc::c_long,
-        std::mem::size_of::<RulesetAttr>() as libc::c_long,
+        size as libc::c_long,
         0,
         0,
     ]);
@@ -151,29 +192,31 @@ fn add_rule(ruleset_fd: i32, rule_type: libc::c_long, attr: libc::c_long) -> lib
     landlock_syscall(SYS_ADD_RULE, [ruleset_fd as libc::c_long, rule_type, attr, 0])
 }
 
-fn allow_directory(ruleset: &Ruleset, dir: &str, rights: u64) -> Result<(), String> {
+/// Grants `rights` beneath `path`, a directory or a single file. A path that
+/// cannot be opened cannot be granted; refusing here keeps the policy honest
+/// instead of silently narrowing it. The handle owns the descriptor, so no
+/// exit path from here leaks it.
+fn allow_path(ruleset: &Ruleset, path: &str, rights: u64) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
-    // A mount that cannot be opened cannot be granted. Refusing here keeps the
-    // policy honest instead of silently narrowing it. The handle owns the
-    // descriptor, so no exit path from here leaks it.
     let handle = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
-        .open(dir)
-        .map_err(|error| format!("cannot open mount {}: {}", dir, error))?;
+        .open(path)
+        .map_err(|error| format!("cannot open mount {}: {}", path, error))?;
+    let is_dir = handle.metadata().map(|meta| meta.is_dir()).unwrap_or(false);
     let attr = PathBeneathAttr {
-        allowed_access: rights,
+        allowed_access: if is_dir { rights } else { rights & FILE_RIGHTS },
         parent_fd: std::os::fd::AsRawFd::as_raw_fd(&handle),
     };
     let added = add_rule(ruleset.descriptor(), RULE_PATH_BENEATH, &attr as *const PathBeneathAttr as libc::c_long);
     if added != 0 {
-        return Err(format!("cannot grant writes beneath {}: {}", dir, std::io::Error::last_os_error()));
+        return Err(format!("cannot grant access beneath {}: {}", path, std::io::Error::last_os_error()));
     }
     Ok(())
 }
 
-fn allow_tcp_port(ruleset: &Ruleset, port: u16) -> Result<(), String> {
-    let attr = NetPortAttr { allowed_access: ACCESS_NET_CONNECT_TCP, port: port as u64 };
+fn allow_tcp_port(ruleset: &Ruleset, port: u16, access: u64) -> Result<(), String> {
+    let attr = NetPortAttr { allowed_access: access, port: port as u64 };
     let added = add_rule(ruleset.descriptor(), RULE_NET_PORT, &attr as *const NetPortAttr as libc::c_long);
     if added != 0 {
         return Err(format!("cannot allow TCP port {}: {}", port, std::io::Error::last_os_error()));
@@ -193,23 +236,30 @@ pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
     }
     let writes = write_rights(abi);
     let reads = if policy.restrict_reads { READ_RIGHTS_ABI1 } else { 0 };
-    let handled_net = if policy.restrict_network { ACCESS_NET_CONNECT_TCP } else { 0 };
-    let ruleset = create_ruleset(writes | reads, handled_net)?;
+    let handled_net = if policy.restrict_network { ACCESS_NET_CONNECT_TCP | ACCESS_NET_BIND_TCP } else { 0 };
+    let ruleset = create_ruleset(abi, writes | reads, handled_net)?;
     for dir in &policy.writable_dirs {
-        allow_directory(&ruleset, dir, writes | reads)?;
+        allow_path(&ruleset, dir, writes | reads)?;
     }
     // Reading is handled all-or-nothing: with reads restricted, a path no rule
     // names is closed, so the platform's own directories have to be named too.
     if policy.restrict_reads {
         for dir in &policy.readable_dirs {
-            allow_directory(&ruleset, dir, reads)?;
+            allow_path(&ruleset, dir, reads)?;
         }
-        for dir in policy.system_dirs.iter().filter(|dir| std::path::Path::new(dir).exists()) {
-            allow_directory(&ruleset, dir, reads)?;
+        let present = |path: &&String| std::path::Path::new(path.as_str()).exists();
+        for dir in policy.system_dirs.iter().filter(present) {
+            allow_path(&ruleset, dir, reads)?;
+        }
+        for file in policy.system_files.iter().filter(present) {
+            allow_path(&ruleset, file, reads)?;
         }
     }
     for port in &policy.tcp_ports {
-        allow_tcp_port(&ruleset, *port)?;
+        allow_tcp_port(&ruleset, *port, ACCESS_NET_CONNECT_TCP)?;
+    }
+    for port in &policy.bind_ports {
+        allow_tcp_port(&ruleset, *port, ACCESS_NET_BIND_TCP)?;
     }
     Ok(ruleset)
 }

@@ -15,14 +15,24 @@ notes unless you would rather not be named.
 
 ## What counts
 
-porta's claims are the invariants in `CLAUDE.md`. A report is interesting if it
-breaks one of them. The short version:
+porta's claims are the invariants in `CLAUDE.md`, and what porta does and does
+not defend against is written out in [the threat model](docs/threat-model.md),
+with each claim mapped to the test that keeps it honest. A report is interesting
+if it breaks one of them. The short version:
 
 - A command cannot write outside the mounts it was granted, or `/tmp` and `/dev`.
 - Under `--read-policy strict` it cannot read outside those mounts and the
   platform's own directories.
 - Under proxy mode the loopback proxy is its only egress — no UDP, no Unix
-  sockets, no `io_uring`.
+  sockets, no `io_uring` — and the proxy serves only a client presenting this
+  run's credential, never tunnels to loopback, link-local, metadata or
+  multicast addresses, and records every decision before acting on it.
+- The child's environment holds nothing of the caller's shell beyond `PATH`,
+  `HOME`, the locale and the terminal unless `-e` or `--env-pass` named it.
+- On macOS, inside a writable mount, the operator's repository hooks and config
+  and the trusted files at the mount root cannot be written or renamed away;
+  another process's arguments, the Keychain, `open(1)` and the credential
+  agents' sockets are closed.
 - A WASM agent's tool arguments are validated against the declared schema
   before anything executes, and a guest cannot grant itself a capability,
   choose a credential, or bypass a failed completion check.
@@ -37,20 +47,34 @@ not a container is accurate and not news.
 - **porta is not a VM.** Restrictions apply to a process on your kernel. A
   kernel privilege escalation defeats them, and defeats them for a container
   too. Report those upstream.
-- **`/etc` is readable under `strict`.** A command cannot start without
-  `ld.so.cache`, `localtime`, `resolv.conf` and the trust store, and Landlock
-  grants directories rather than files. File permissions are what separate
-  `shadow` and host keys from an ordinary user — which is why porta refuses to
-  run as root, where they separate nothing. Narrowing `/etc` is open work.
-- **Reads are open by default.** `--read-policy strict` is opt-in in 0.5.x.
+- **Under `strict`, the `/etc` files a command needs to start are readable.**
+  On Linux they are granted one by one — the loader cache, the resolver
+  configuration, the trust store, `passwd`, `localtime` — and `shadow`,
+  `sudoers` and the host keys are not among them. On macOS `sandbox-exec`
+  grants `/private/etc` whole; file permissions separate `shadow` there, which
+  is one reason porta refuses to run as root.
+- **Reads are open by default.** `--read-policy strict` is opt-in in 0.6.x.
 - **The default policy is not a secret store.** Without `strict`, an agent can
-  read what your user can read, minus `~/.ssh` and `~/.gnupg` on macOS.
-- **A child may listen on a port.** `LANDLOCK_ACCESS_NET_BIND_TCP` is unused;
-  the egress invariant is about outbound.
+  read what your user can read, minus the credential stores porta closes in
+  every mode on macOS (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`,
+  `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, the Keychains,
+  browser profiles). On Linux the default mode closes none of these; `strict`
+  closes the whole home.
+- **With the network open, a child may listen and may reach Unix sockets.**
+  Listening is closed only once `--allow-net` names a port, and reopened per
+  port by `--allow-bind`. On macOS the SSH agent, gpg-agent and container
+  runtime sockets are closed in every mode; on Linux they are not until
+  Landlock's `RESOLVE_UNIX` is used.
+- **Inside a writable mount, Linux protects nothing in particular.** The
+  macOS profile keeps the operator's repository hooks and config and the
+  trusted files at a mount root unwritable; Landlock grants a directory whole.
+- **UDP is open under `--allow-net` on Linux.** Landlock's rules reach TCP;
+  a named port on Linux says nothing about UDP. Proxy mode closes UDP on both
+  platforms.
 - **A tool you granted can do what you granted it.** porta checks arguments
   against a schema, not intent.
 
 ## Versions
 
-Fixes go to the latest release. 0.5.x is the current line; there are no
-backports to 0.4.x.
+Fixes go to the latest release. 0.6.x is the current line; there are no
+backports to 0.5.x.

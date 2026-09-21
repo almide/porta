@@ -78,6 +78,8 @@ jobs:
         run: .tools/almide/almide test --ci
       - name: Integration
         run: python3 scripts/integration.py target/porta
+      - name: Escape corpus
+        run: python3 scripts/escapes.py target/porta
       - name: Build WASM agents and probes
         run: |
           .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm

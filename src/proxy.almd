@@ -14,6 +14,10 @@ type ProxyConfig = {
 type ProxyHandle = {
   handle: Int,
   port: Int,
+  // This run's proxy credential. The proxy is on loopback, which every
+  // process of the same user can reach; only a client presenting the token
+  // is served, so the proxy is not an open relay carrying this run's policy.
+  token: String,
 }
 
 fn empty_config() -> ProxyConfig = {
@@ -42,8 +46,9 @@ effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
   else {
     let handle = json.get_int(parsed, "handle") ?? -1
     let port = json.get_int(parsed, "port") ?? 0
-    if handle < 0 or port == 0 then err("proxy start returned invalid handle or port")
-    else ok({handle: handle, port: port})
+    let token = json.get_string(parsed, "token") ?? ""
+    if handle < 0 or port == 0 or token == "" then err("proxy start returned invalid handle, port or token")
+    else ok({handle: handle, port: port, token: token})
   }
 }
 
@@ -53,8 +58,9 @@ effect fn stop(h: ProxyHandle) -> Result[Unit, String] = {
   else err("proxy stop failed (handle=${int.to_string(h.handle)})")
 }
 
-// Endpoint string the sandboxed process should see as HTTP_PROXY / HTTPS_PROXY.
-fn endpoint(h: ProxyHandle) -> String = "http://127.0.0.1:${int.to_string(h.port)}"
+// Endpoint string the sandboxed process should see as HTTP_PROXY / HTTPS_PROXY,
+// credential included: a client that honours the variable presents it.
+fn endpoint(h: ProxyHandle) -> String = "http://porta:${h.token}@127.0.0.1:${int.to_string(h.port)}"
 
 // sandbox-exec allow rule that restricts net to just the proxy port.
 fn sandbox_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"

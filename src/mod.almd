@@ -9,6 +9,7 @@ import self.build
 import self.project
 import self.agent
 import self.util
+import self.wasm_rt
 
 fn has_help_flag(args: List[String]) -> Bool =
   args |> list.any((a) => a == "--help" or a == "-h")
@@ -22,6 +23,29 @@ effect fn target_options(args: List[String], topic: String) -> Result[Option[cli
     if opts.path == "" then { help.print_help(topic); ok(none) }
     else ok(some(opts))
   }
+
+// How a native run ends, as a shell sees it. The command's own exit code is
+// passed through untouched. A run porta refused before it began exits with a
+// code of porta's own, so a script can tell "the command failed" from "the
+// command never ran": 127 when the command does not exist, 126 when it exists
+// but the policy leaves it unrunnable, 125 for every other refusal.
+effect fn finish(outcome: Result[Int, String]) -> Result[Unit, String] =
+  match outcome {
+    ok(code) => {
+      if code != 0 then process.exit(code) else ()
+      ok(())
+    },
+    err(reason) => {
+      eprintln("Error: ${reason}")
+      process.exit(refusal_code(reason))
+      ok(())
+    },
+  }
+
+fn refusal_code(reason: String) -> Int =
+  if string.contains(reason, "command not found") then 127
+  else if string.contains(reason, "cannot be started") or string.contains(reason, "cannot start the command") then 126
+  else 125
 
 // porta ps/stop/kill/logs/rm all name one instance and say the same thing
 // when it is missing.
@@ -57,12 +81,20 @@ effect fn main() -> Result[Unit, String] = {
       none => ok(()),
       some(opts) =>
         if string.ends_with(opts.path, ".wasm") then engine.run_wasm(opts)
-        else engine.run_native(opts),
+        else finish(engine.run_native(opts)),
     },
     "up" => {
       let rest = list.drop(args, 2)
       let extra_args = if list.get(rest, 0) ?? "" == "--" then list.drop(rest, 1) else rest
-      project.porta_up(extra_args)
+      finish(project.porta_up(extra_args))
+    },
+    "explain" => match target_options(args, "explain")! {
+      none => ok(()),
+      some(opts) => engine.explain_native(opts),
+    },
+    "check" => {
+      println(wasm_rt.wt_sandbox_check())
+      ok(())
     },
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
@@ -73,7 +105,7 @@ effect fn main() -> Result[Unit, String] = {
     // Alias: porta run-native is equivalent to porta run <non-wasm>
     "run-native" => match target_options(args, "run")! {
       none => ok(()),
-      some(opts) => engine.run_native(opts),
+      some(opts) => finish(engine.run_native(opts)),
     },
     "inspect" => match target_options(args, "inspect")! {
       none => ok(()),

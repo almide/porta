@@ -24,6 +24,9 @@ type PortaConfig = {
   proxy_allow: List[String],
   proxy_deny: List[String],
   proxy_audit: String,
+  env_pass: List[String],
+  allow_unix: List[String],
+  allow_bind: List[String],
 }
 
 fn default_porta_config() -> PortaConfig = {
@@ -43,6 +46,9 @@ fn default_porta_config() -> PortaConfig = {
   proxy_allow: [],
   proxy_deny: [],
   proxy_audit: "",
+  env_pass: [],
+  allow_unix: [],
+  allow_bind: [],
 }
 
 effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
@@ -71,6 +77,9 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
       proxy_allow: strings_at(px, "allow", []),
       proxy_deny: strings_at(px, "deny", []),
       proxy_audit: json.get_string(px, "audit") ?? "",
+      env_pass: strings_at(sb, "env-pass", []),
+      allow_unix: strings_at(sb, "unix", []),
+      allow_bind: strings_at(sb, "bind", []),
     })
   }
 }

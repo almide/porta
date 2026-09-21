@@ -9,9 +9,10 @@
 //! module owns the listener and the policy matching.
 
 use crate::locking::locked;
+use crate::proxy_egress::{basic_credential, dial, mint_token, Dial};
 use crate::proxy_audit::{audit_log, Decision};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,6 +27,12 @@ enum ProxyMode {
 struct ProxyPolicy {
     mode: ProxyMode,
     patterns: Vec<String>,
+    /// The `Proxy-Authorization` value this run's client must present. The
+    /// proxy listens on loopback, which every process of the same user can
+    /// reach; without a credential it would be an open relay for any of them,
+    /// carrying this run's allow-list. The token is minted per run and handed
+    /// to the child in its `HTTPS_PROXY`.
+    credential: String,
 }
 
 struct ProxyInstance {
@@ -81,8 +88,8 @@ fn handle_connection(client: TcpStream, policy: Arc<ProxyPolicy>, audit_path: Ar
     let _ = client.set_read_timeout(Some(Duration::from_secs(30)));
     let Ok(mut client_for_write) = client.try_clone() else { return };
     let mut reader = BufReader::new(client);
-    let Some(request_line) = read_request(&mut reader) else { return };
-    match connect_target(&request_line, &policy) {
+    let Some((request_line, headers)) = read_request(&mut reader) else { return };
+    match connect_target(&request_line, &headers, &policy) {
         Ok((host, port)) => tunnel(client_for_write, &audit_path, &host, port),
         Err((status, decision)) => {
             let _ = client_for_write.write_all(status.as_bytes());
@@ -91,30 +98,47 @@ fn handle_connection(client: TcpStream, policy: Arc<ProxyPolicy>, audit_path: Ar
     }
 }
 
-/// Reads the request line and drains the headers that follow it.
-fn read_request(reader: &mut BufReader<TcpStream>) -> Option<String> {
+/// Reads the request line and the headers that follow it.
+fn read_request(reader: &mut BufReader<TcpStream>) -> Option<(String, Vec<String>)> {
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
         return None;
     }
+    let mut headers = Vec::new();
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) | Err(_) => return None,
-            Ok(_) if line == "\r\n" || line == "\n" => return Some(request_line),
-            Ok(_) => {}
+            Ok(_) if line == "\r\n" || line == "\n" => return Some((request_line, headers)),
+            Ok(_) => headers.push(line.trim_end().to_string()),
         }
     }
 }
 
+/// Whether the request carries this run's credential.
+fn authorised(headers: &[String], credential: &str) -> bool {
+    headers.iter().any(|header| {
+        header
+            .split_once(':')
+            .is_some_and(|(name, value)| name.trim().eq_ignore_ascii_case("proxy-authorization") && value.trim() == credential)
+    })
+}
+
 /// Where this request may be tunnelled, or the status line and the record for
-/// why it may not: only CONNECT, only port 443, only an allowed host.
-fn connect_target(request_line: &str, policy: &ProxyPolicy) -> Result<(String, u16), (&'static str, Decision)> {
+/// why it may not: only this run's client, only CONNECT, only port 443, only
+/// an allowed host.
+fn connect_target(request_line: &str, headers: &[String], policy: &ProxyPolicy) -> Result<(String, u16), (&'static str, Decision)> {
     let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
     if parts.len() < 2 || !parts[0].eq_ignore_ascii_case("CONNECT") {
         return Err(("HTTP/1.1 400 Bad Request\r\n\r\n", Decision::new("<invalid>", 0, "deny", "non-CONNECT method")));
     }
     let (host, port) = split_authority(parts[1]);
+    if !authorised(headers, &policy.credential) {
+        return Err((
+            "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"porta\"\r\n\r\n",
+            Decision::new(&host, port, "deny", "not this run's client: no proxy credential"),
+        ));
+    }
     if port != 443 {
         return Err(("HTTP/1.1 403 Forbidden\r\n\r\n", Decision::new(&host, port, "deny", "non-443 port")));
     }
@@ -138,7 +162,11 @@ fn split_authority(target: &str) -> (String, u16) {
 fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: u16) {
     let upstream = match dial(host, port) {
         Ok(upstream) => upstream,
-        Err(reason) => {
+        Err(Dial::Blocked(reason)) => {
+            let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
+            return audit_log(audit_path, &Decision::new(host, port, "deny", reason));
+        }
+        Err(Dial::Failed(reason)) => {
             let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
             return audit_log(audit_path, &Decision::new(host, port, "error", reason));
         }
@@ -150,17 +178,6 @@ fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: 
     let inbound = thread::spawn(move || { let _ = copy_bytes(upstream_side, client); });
     let _ = outbound.join();
     let _ = inbound.join();
-}
-
-/// The first address the host resolves to, connected within ten seconds.
-fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
-    let address = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve failed: {e}"))?
-        .next()
-        .ok_or_else(|| "resolve failed: no addr".to_string())?;
-    TcpStream::connect_timeout(&address, Duration::from_secs(10))
-        .map_err(|e| format!("upstream connect failed: {e}"))
 }
 
 /// Start the CONNECT proxy on 127.0.0.1:<random>.
@@ -186,6 +203,8 @@ pub fn wt_proxy_start(
     };
     let shutdown = Arc::new(AtomicBool::new(false));
     let audit = Some(audit_path.as_ref().to_string()).filter(|path| !path.is_empty());
+    let token = mint_token();
+    let policy = ProxyPolicy { credential: basic_credential(&token), ..policy };
     serve(listener, Arc::new(policy), Arc::new(audit), shutdown.clone());
 
     let handle = {
@@ -193,18 +212,20 @@ pub fn wt_proxy_start(
         proxies.push(Some(ProxyInstance { port, shutdown }));
         (proxies.len() - 1) as i64
     };
-    format!("{{\"handle\":{},\"port\":{}}}", handle, port)
+    format!("{{\"handle\":{},\"port\":{},\"token\":\"{}\"}}", handle, port, token)
 }
 
 /// The policy these two lists ask for. Exactly one of them must be given:
-/// an allow-list and a deny-list together have no single meaning.
+/// an allow-list and a deny-list together have no single meaning. The
+/// credential is filled in by the caller once the run's token is minted.
 fn requested_policy(allow_json: &str, deny_json: &str) -> Result<ProxyPolicy, &'static str> {
     let allow: Vec<String> = serde_json::from_str(allow_json).unwrap_or_default();
     let deny: Vec<String> = serde_json::from_str(deny_json).unwrap_or_default();
+    let credential = String::new();
     match (allow.is_empty(), deny.is_empty()) {
         (false, false) => Err("allow and deny are mutually exclusive"),
-        (false, true) => Ok(ProxyPolicy { mode: ProxyMode::Allow, patterns: allow }),
-        (true, false) => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: deny }),
+        (false, true) => Ok(ProxyPolicy { mode: ProxyMode::Allow, patterns: allow, credential }),
+        (true, false) => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: deny, credential }),
         (true, true) => Err("neither allow nor deny list provided"),
     }
 }

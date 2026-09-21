@@ -30,6 +30,11 @@ type ExecRequest = {
   // otherwise: for root, the file permissions this policy leans on separate
   // nothing.
   allow_root: Bool,
+  // TCP ports the command may listen on once `net` closes the network.
+  bind: List[String],
+  // Unix sockets the command may connect to although they hold a credential
+  // agent.
+  unix: List[String],
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -47,6 +52,8 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("read_policy", value.str(req.read_policy)),
     ("proxy", value.bool(req.proxy)),
     ("allow_root", value.bool(req.allow_root)),
+    ("bind", strings(req.bind)),
+    ("unix", strings(req.unix)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

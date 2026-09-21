@@ -125,11 +125,21 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
         assert reply['result']['content'][0]['text'] == 'redirect not followed', reply
         assert paths == ['/redirect'], paths
         if platform.system() == 'Darwin':
-            probe = r'''import errno, os, socket, sys, urllib.parse
+            probe = r'''import base64, errno, os, socket, sys, urllib.parse
 proxy = urllib.parse.urlsplit(os.environ['HTTPS_PROXY'])
-with socket.create_connection((proxy.hostname, proxy.port), 2) as stream:
-    stream.sendall(b'CONNECT blocked.example:443 HTTP/1.1\r\n\r\n')
-    assert b'403 Forbidden' in stream.recv(4096)
+credential = base64.b64encode(f'{proxy.username}:{proxy.password}'.encode()).decode()
+def connect(target, authorised=True):
+    with socket.create_connection((proxy.hostname, proxy.port), 2) as stream:
+        auth = f'Proxy-Authorization: Basic {credential}\r\n' if authorised else ''
+        stream.sendall(f'CONNECT {target} HTTP/1.1\r\n{auth}\r\n'.encode())
+        return stream.recv(4096)
+# The proxy serves this run's client alone: without the run's credential it
+# answers 407, and no policy question is even asked.
+assert b'407 Proxy Authentication Required' in connect('blocked.example:443', authorised=False)
+assert b'403 Forbidden' in connect('blocked.example:443')
+# An allowed name that resolves to this machine is refused: a hostname on the
+# allow-list is a promise about a public service, not a route to loopback.
+assert b'403 Forbidden' in connect('localhost:443')
 def denied(attempt):
     """Whether an egress attempt was refused by the sandbox rather than served."""
     try:
@@ -145,10 +155,11 @@ assert denied(lambda: socket.create_connection(('127.0.0.1', int(sys.argv[1])), 
 assert denied(lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('8.8.8.8', 53)))
 assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect('/var/run/syslog'))
 '''
-            result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
+            result = run('run', sys.executable, '--proxy-allow', 'api.example.com,localhost',
                          '--', '-c', probe, str(port))
             assert result.returncode == 0, result.stderr
-            print('PASS: CONNECT policy denial; direct TCP, UDP and Unix-socket egress blocked')
+            assert 'no proxy credential' in result.stderr and 'blocked addresses' in result.stderr, result.stderr
+            print('PASS: CONNECT needs the run credential; policy and loopback denials; direct TCP, UDP and Unix-socket egress blocked')
     finally:
         server.shutdown()
         server.server_close()
@@ -187,6 +198,54 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('up', cwd=empty)
     assert result.returncode != 0 and 'porta.toml' in result.stderr, result
     print('PASS: a mistyped command line is refused and named, never silently narrowed')
+
+    # The caller's shell is full of credentials — API keys, agent sockets — and
+    # none of it is the command's business. The child starts from an empty
+    # environment plus what a command needs to run; a host variable crosses
+    # only when -e or --env-pass names it.
+    import os
+    leaky = {**os.environ, 'PORTA_TEST_SECRET': 'host-only', 'LANG': os.environ.get('LANG', 'C.UTF-8')}
+    result = run('run', '/bin/sh', '--', '-c', 'echo "secret=${PORTA_TEST_SECRET:-unset} path=${PATH:+set} home=${HOME:+set} lang=${LANG:+set}"', env=leaky)
+    assert result.returncode == 0 and result.stdout.strip() == 'secret=unset path=set home=set lang=set', result
+    result = run('run', '/bin/sh', '--env-pass', 'PORTA_TEST_SECRET', '--', '-c', 'echo "$PORTA_TEST_SECRET"', env=leaky)
+    assert result.returncode == 0 and result.stdout.strip() == 'host-only', result
+    # A listen grant without a network rule would grant nothing; it is refused
+    # so a caller learns the two go together rather than believing a port was
+    # closed.
+    result = run('run', '/bin/echo', '--allow-bind', '8080', '--', 'must-not-execute')
+    assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
+    assert '--allow-net' in result.stderr, result.stderr
+    print('PASS: the host environment stays outside unless named; --allow-bind needs --allow-net')
+
+    # What a shell sees. The command's own exit code passes through in every
+    # mode; a run porta refused exits with porta's own code, so a script can
+    # tell "the command failed" from "the command never ran".
+    result = run('run', '/bin/sh', '--proxy-allow', 'api.example.com', '--', '-c', 'exit 9')
+    assert result.returncode == 9, result
+    result = run('run', 'no-such-command-porta-test', '--', 'x')
+    assert result.returncode == 127, result
+    result = run('run', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
+    assert result.returncode == 125, result
+    # `check` says what this host enforces and exits 0 wherever porta runs;
+    # `explain` shows the policy and runs nothing.
+    result = run('check')
+    assert result.returncode == 0 and result.stdout.startswith('porta on '), result
+    result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', '*:443', '--', 'must-not-execute')
+    assert result.returncode == 0 and 'must-not-execute' in result.stdout.splitlines()[0], result
+    assert 'mounts' in result.stdout and '*:443' in result.stdout and result.stdout.count('must-not-execute') == 1, result
+    result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
+    assert result.returncode == 0 and 'would refuse' in result.stdout, result
+    print('PASS: exit codes pass through; refusals exit 125/126/127; check and explain run nothing')
+
+    # A listener the tests below try to reach or to bind, and a helper that
+    # says whether a bind attempt was refused by policy.
+    bind_probe = '''import socket, sys
+s = socket.socket()
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); print("bound")
+except OSError as e:
+    print("bind denied", e.errno)
+'''
 
     # Whether this host can resolve a public name at all. The suite is offline
     # by design; the DNS checks below run only where the answer is yes, and
@@ -262,6 +321,84 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
             assert 'must-not-execute' not in result.stdout, result
             assert 'unreadable' in result.stdout + result.stderr, result
         print('PASS: strict read policy confines reads to grants and system paths')
+
+        # What the field closes and porta did not, measured before this block
+        # existed: another process's arguments, the login Keychain, the
+        # credential directories under the home, the operator's repository
+        # hooks and config, the files at a mount root a host tool trusts, and
+        # the mount root itself.
+        procargs = '''import ctypes, sys
+libc = ctypes.CDLL(None, use_errno=True)
+mib = (ctypes.c_int * 3)(1, 49, int(sys.argv[1])); size = ctypes.c_size_t(1 << 20)
+buf = ctypes.create_string_buffer(size.value)
+rc = libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0)
+print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] else "empty"))
+'''
+        decoy = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', '--token=sk-live-MUST-NOT-LEAK'])
+        try:
+            result = run('run', sys.executable, '-v', str(workspace), '--', '-c', procargs, str(decoy.pid))
+            assert result.returncode == 0 and result.stdout.strip() == 'denied', result
+        finally:
+            decoy.terminate()
+            decoy.wait()
+        result = run('run', '/usr/bin/security', '--', 'list-keychains')
+        assert result.returncode != 0 and 'login.keychain' not in result.stdout, result
+        fake_home = ungranted / 'home'
+        (fake_home / '.aws').mkdir(parents=True)
+        (fake_home / '.aws' / 'credentials').write_text('aws_secret_access_key = EXAMPLE\n')
+        result = run('run', '/bin/cat', '-v', str(fake_home), '--', str(fake_home / '.aws' / 'credentials'),
+                     env={**os.environ, 'HOME': str(fake_home)})
+        assert result.returncode != 0 and 'EXAMPLE' not in result.stdout, result
+        repo = ungranted / 'repo'
+        repo.mkdir()
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        subprocess.run(['git', '-C', str(repo), '-c', 'user.email=a@b', '-c', 'user.name=n', 'commit', '-q', '--allow-empty', '-m', 'init'], check=True)
+        denied_writes = ['echo x > .git/hooks/pre-commit', 'git config user.name evil', 'mv .git g',
+                         'echo x > .mcp.json', 'mkdir -p .claude/commands && echo x > .claude/commands/x.md',
+                         'echo x > .zshrc']
+        for attempt in denied_writes:
+            result = run('run', '/bin/sh', '-v', str(repo), '--', '-c', attempt)
+            assert result.returncode != 0, (attempt, result)
+        assert not (repo / '.git' / 'hooks' / 'pre-commit').exists()
+        assert not (repo / '.mcp.json').exists() and (repo / '.git').is_dir()
+        result = run('run', '/bin/sh', '-v', str(repo), '--', '-c',
+                     'echo hi > f && git add f && git -c user.email=a@b -c user.name=n commit -q -m x && '
+                     'mkdir -p .claude && echo x > .claude/settings.local.json && echo worked')
+        assert result.returncode == 0 and 'worked' in result.stdout, result
+        result = run('run', '/bin/sh', '-v', str(repo), '-v', str(ungranted), '--', '-c', f'mv {repo} {repo}.moved')
+        assert result.returncode != 0 and repo.is_dir(), result
+        print('PASS: other processes\' arguments, the Keychain, credential directories, '
+              'repository hooks and mount roots are closed')
+
+        # Once --allow-net is in force a granted port is a port to reach, not
+        # one to serve on. The SSH agent is closed by default in every mode.
+        result = run('run', sys.executable, '--allow-net', '*:443', '--', '-c', bind_probe, '0')
+        assert result.returncode == 0 and 'bind denied' in result.stdout, result
+        result = run('run', sys.executable, '--allow-net', '*:443', '--allow-bind', '47123', '--', '-c', bind_probe, '47123')
+        assert result.returncode == 0 and result.stdout.strip() == 'bound', result
+        agent = os.environ.get('SSH_AUTH_SOCK')
+        if agent and pathlib.Path(agent).exists():
+            # ssh-add exits 2 whether the socket is refused by the sandbox or
+            # simply absent; the socket is present here, so 2 means refused.
+            result = run('run', '/usr/bin/ssh-add', '--env-pass', 'SSH_AUTH_SOCK', '--', '-l')
+            assert result.returncode == 2, f'the SSH agent at {agent} was reachable: {result}'
+            result = run('run', '/usr/bin/ssh-add', '--env-pass', 'SSH_AUTH_SOCK', '--allow-unix', agent, '--', '-l')
+            assert result.returncode in (0, 1), result
+            print('PASS: listening needs --allow-bind; the SSH agent needs --allow-unix')
+        else:
+            print('PASS: listening needs --allow-bind (no SSH agent on this host; --allow-unix not exercised)')
+
+        # A refusal looks exactly like a broken tool until someone says which
+        # flag it would have needed. After a failed run porta reads the
+        # kernel's denial records for this run and says so.
+        result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
+                     'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
+        assert result.returncode == 3, result
+        assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
+        assert f'-v {ungranted}' in result.stderr, result.stderr
+        result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})
+        assert result.returncode == 3 and '[porta]' not in result.stderr, result
+        print('PASS: a failed run says which flag each refusal would have needed')
     elif platform.system() == 'Linux':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result
@@ -394,6 +531,70 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
             decoy.terminate()
             decoy.wait()
         print('PASS: a strict run cannot enumerate other processes through /proc')
+
+        # Its own entry stays closed too. A rule on /proc/self would cover the
+        # shell and none of the tools it starts, each with a pid of its own —
+        # a grant that misleads — so nothing under /proc is granted.
+        result = run('run', '/bin/sh', '--read-policy', 'strict', '-v', str(workspace), '--', '-c',
+                     'cat /proc/self/status 2>/dev/null && echo SELF; ls /proc/1 >/dev/null 2>&1 && echo OTHER || echo closed')
+        assert 'SELF' not in result.stdout and 'OTHER' not in result.stdout and 'closed' in result.stdout, result
+        # /etc is granted file by file: what a command needs to start, never
+        # what only root should read, and not the listing.
+        result = run('run', '/bin/sh', '--read-policy', 'strict', '-v', str(workspace), '--', '-c',
+                     'cat /etc/hosts >/dev/null && echo hosts; cat /etc/shadow 2>/dev/null && echo SHADOW; '
+                     'ls /etc >/dev/null 2>&1 && echo LISTED || echo unlisted')
+        assert 'hosts' in result.stdout and 'SHADOW' not in result.stdout and 'unlisted' in result.stdout, result
+        # Cross-directory rename and link need the REFER right; without it
+        # handled, `mv` inside a mount silently degrades to copy-and-delete.
+        (workspace / 'a').mkdir(exist_ok=True)
+        (workspace / 'b').mkdir(exist_ok=True)
+        (workspace / 'a' / 'h').write_text('h')
+        result = run('run', '/bin/ln', '-v', str(workspace), '--', str(workspace / 'a' / 'h'), str(workspace / 'b' / 'h'))
+        assert result.returncode == 0 and (workspace / 'b' / 'h').exists(), result
+        result = run('run', '/bin/ln', '-v', str(workspace), '--', str(workspace / 'a' / 'h'), str(ungranted / 'h'))
+        assert result.returncode != 0 and not (ungranted / 'h').exists(), result
+        print('PASS: strict keeps /proc closed and grants the /etc files a command needs; REFER honoured inside a mount')
+
+        # The baseline seccomp filter, in every mode: the syscalls that reach
+        # around a file policy or a debugger's boundary, the socket families a
+        # TCP rule cannot see, and multipath TCP, which is routed past it.
+        baseline = '''import ctypes, socket, threading
+libc = ctypes.CDLL(None, use_errno=True)
+def call(nr): r = libc.syscall(nr, 0, 0, 0, 0, 0); return ctypes.get_errno() if r < 0 else 0
+print("unshare", call(%d)); print("ptrace", call(%d)); print("io_uring_setup", call(425)); print("clone3", call(435))
+t = threading.Thread(target=lambda: None); t.start(); t.join(); print("threads ok")
+def sock(*a):
+    try: socket.socket(*a).close(); return "open"
+    except OSError as e: return e.errno
+print("mptcp", sock(socket.AF_INET, socket.SOCK_STREAM, 262))
+print("packet", sock(17, socket.SOCK_RAW))
+print("raw", sock(socket.AF_INET, socket.SOCK_RAW, 1))
+print("udp", sock(socket.AF_INET, socket.SOCK_DGRAM))
+print("unix", sock(socket.AF_UNIX, socket.SOCK_STREAM))
+''' % ((272, 101) if platform.machine() == 'x86_64' else (97, 117))
+        result = run('run', sys.executable, '-v', str(workspace), '--', '-c', baseline)
+        assert result.returncode == 0, result
+        got = dict(line.split(' ', 1) for line in result.stdout.strip().splitlines() if ' ' in line)
+        assert got['unshare'] == '1' and got['ptrace'] == '1', got            # EPERM
+        assert got['io_uring_setup'] == '38' and got['clone3'] == '38', got   # ENOSYS
+        assert got['mptcp'] == '93' and got['packet'] == '97' and got['raw'] == '97', got
+        assert got['udp'] == 'open' and got['unix'] == 'open', got
+        assert 'threads ok' in result.stdout
+        # A granted port is a port to reach; listening needs its own grant.
+        result = run('run', sys.executable, '--allow-net', '*:443', '-v', str(workspace), '--', '-c', bind_probe, '0')
+        assert result.returncode == 0 and 'bind denied' in result.stdout, result
+        result = run('run', sys.executable, '--allow-net', '*:443', '--allow-bind', '47123', '-v', str(workspace), '--', '-c', bind_probe, '47123')
+        assert result.returncode == 0 and result.stdout.strip() == 'bound', result
+        # From ABI 6 the domain is scoped: no signal reaches a process outside it.
+        import ctypes
+        abi = ctypes.CDLL(None).syscall(444, None, 0, 1)
+        if abi >= 6:
+            result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'kill -0 1 2>/dev/null && echo SIGNALLED || echo scoped')
+            assert 'scoped' in result.stdout, result
+            print('PASS: baseline seccomp closes the bypass syscalls and families; bind needs a grant; signals are scoped')
+        else:
+            print(f'PASS: baseline seccomp closes the bypass syscalls and families; bind needs a grant '
+                  f'(Landlock ABI {abi}: signal scoping not available here, not tested)')
     else:
         result = run('run', '/bin/echo', '--', 'must-not-execute')
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result

@@ -39,12 +39,12 @@ test "validate: both allow and deny is an error" {
   }
 }
 
-test "endpoint: formats as http://127.0.0.1:PORT" {
-  let h: proxy.ProxyHandle = {handle: 0, port: 42123}
-  assert_eq(proxy.endpoint(h), "http://127.0.0.1:42123")
+test "endpoint: carries the run's credential to 127.0.0.1:PORT" {
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123"}
+  assert_eq(proxy.endpoint(h), "http://porta:abc123@127.0.0.1:42123")
 }
 
-test "sandbox_net_rule: formats as 127.0.0.1:PORT" {
-  let h: proxy.ProxyHandle = {handle: 0, port: 42123}
+test "sandbox_net_rule: formats as 127.0.0.1:PORT, no credential" {
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123"}
   assert_eq(proxy.sandbox_net_rule(h), "127.0.0.1:42123")
 }
