@@ -22,32 +22,22 @@
 ## What Porta is
 
 Letting an AI agent run commands on your machine puts your keys, tokens and
-network within its reach — they are all right there. Porta runs that command and
-lets the OS kernel actually stop it. Writes, reads, network and sockets are
-enforced by Seatbelt on macOS and Landlock + seccomp on Linux: the OS boundary
-itself, not a wrapper library and not a prompt asking nicely. A restriction the
-kernel cannot express refuses the run rather than quietly weakening it
-(**fail-closed**).
+network within its reach. Porta runs the command and lets the OS kernel stop
+it — writes, reads, network and sockets enforced by Seatbelt on macOS or
+Landlock + seccomp on Linux, not by a wrapper or a prompt. A restriction the
+kernel cannot express refuses the run rather than weakening it (**fail-closed**).
 
-And it is shown, not claimed. A published jailbreak corpus runs known escape
-techniques against the binary — **12/12 held on macOS, 15/15 on Linux, zero
-escapes** — with losing rows kept in, because a corpus that hides its losses is
-a brochure. See [the corpus](docs/benchmarks/escapes.md) and the
-[threat model](docs/threat-model.md).
-
-One run doing its job: the legitimate work goes through, the theft and the
-runaway do not.
+Shown, not claimed: a published jailbreak
+[corpus](docs/benchmarks/escapes.md) holds 12/12 on macOS and 15/15 on Linux,
+zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
 
 ```text
-$ porta run sh -v ./work --read-policy strict --timeout 5 -- -c '…'
-[agent] legitimate work        →  wrote ./work/out.txt
-[agent] read the SSH key       →  refused
-[agent] write outside ./work   →  refused
-# a command that hangs is killed at the deadline → exit 124
+$ porta run sh -v ./work --read-policy strict --timeout 5 -- …
+  wrote ./work/out.txt              legitimate work goes through
+  read the SSH key       → refused
+  write outside ./work   → refused
+  # a hung command is killed at the deadline → exit 124
 ```
-
-A working restriction is invisible, so the point is the two `refused` lines and
-the deadline: the kernel stopped them, whatever the agent tried.
 
 ## Who this is for
 
