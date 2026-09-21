@@ -8,8 +8,8 @@ the escape was stopped, **ESCAPED** when it got through (a finding, and a red
 build), and — when the platform cannot host the attempt. Published whatever
 the result: a corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 12 tried, 0 escaped
-- **Linux arm64**: 15 tried, 0 escaped
+- **macOS arm64**: 13 tried, 0 escaped
+- **Linux arm64**: 16 tried, 0 escaped
 
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
@@ -25,6 +25,7 @@ the result: a corpus that hid its losses would not be evidence.
 | read the login Keychain | credentials | held | — |
 | start a program outside the sandbox | processes | held | — |
 | reach a port the policy did not open | network | held | held |
+| reach the cloud metadata endpoint via the proxy | network | held | held |
 | open a UDP socket in proxy mode | network | — | held |
 | open a socket without socket() via io_uring | network | — | held |
 | exec a memory file (fileless) | processes | — | held |

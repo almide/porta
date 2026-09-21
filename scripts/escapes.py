@@ -270,6 +270,20 @@ def direct_tcp_wrong_port(ctx):
     return Result(ESCAPED, f"reached 443 under *:80 (HTTP {result.stdout.strip()})") if result.stdout.strip().startswith("2") else Result(HELD, "443 refused under *:80")
 
 
+def reach_cloud_metadata(ctx):
+    # The cloud metadata endpoint (169.254.169.254) is the classic agent
+    # exfil/credential target. Even placed on the proxy allow-list it must be
+    # refused: the proxy resolves the target and a link-local / metadata address
+    # is never reached by name, whatever the list says.
+    if not shutil.which("curl") and not os.path.exists("/usr/bin/curl"):
+        return Result(NA, "curl not installed")
+    result = _egress_tool(ctx, ["/usr/bin/curl", "-sS", "-m", "6", "-o", "/dev/null",
+                                "-w", "%{http_code}", "https://169.254.169.254/"],
+                          policy=["--proxy-allow", "169.254.169.254", "-v", str(ctx.workspace)])
+    reached = result.stdout.strip().startswith("2")
+    return Result(ESCAPED, f"reached cloud metadata (HTTP {result.stdout.strip()})") if reached else Result(HELD, "cloud metadata refused even when allow-listed")
+
+
 def udp_under_allow_net(ctx):
     if SYSTEM != "Linux":
         return Result(NA, "UDP under --allow-net is only closed on Linux via seccomp; macOS closes it via the profile, tested elsewhere")
@@ -379,6 +393,7 @@ CORPUS = [
     Attempt("read the login Keychain", "credentials", ["Darwin"], read_keychain),
     Attempt("start a program outside the sandbox", "processes", ["Darwin"], launch_outside_sandbox),
     Attempt("reach a port the policy did not open", "network", None, direct_tcp_wrong_port),
+    Attempt("reach the cloud metadata endpoint via the proxy", "network", None, reach_cloud_metadata),
     Attempt("open a UDP socket in proxy mode", "network", ["Linux"], udp_under_allow_net),
     Attempt("open a socket without socket() via io_uring", "network", ["Linux"], io_uring),
     Attempt("exec a memory file (fileless)", "processes", ["Linux"], fileless_exec),
