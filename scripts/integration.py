@@ -378,8 +378,10 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
         assert result.returncode == 0 and result.stdout.strip() == 'bound', result
         agent = os.environ.get('SSH_AUTH_SOCK')
         if agent and pathlib.Path(agent).exists():
+            # ssh-add exits 2 whether the socket is refused by the sandbox or
+            # simply absent; the socket is present here, so 2 means refused.
             result = run('run', '/usr/bin/ssh-add', '--env-pass', 'SSH_AUTH_SOCK', '--', '-l')
-            assert result.returncode == 2, result
+            assert result.returncode == 2, f'the SSH agent at {agent} was reachable: {result}'
             result = run('run', '/usr/bin/ssh-add', '--env-pass', 'SSH_AUTH_SOCK', '--allow-unix', agent, '--', '-l')
             assert result.returncode in (0, 1), result
             print('PASS: listening needs --allow-bind; the SSH agent needs --allow-unix')
