@@ -124,9 +124,12 @@ symlink.
   native sandbox now has, closing the gap the threat model called out. `explain
   --json` and `check --json` also landed: the effective policy (or a
   `{"refused":...}`) and the host's primitives as machine-readable objects, so
-  a CI step can gate on the policy without parsing prose. Still to do: the Linux
-  footer (needs ABI 7 audit records or a `SIGSYS`/exit classifier), the post-run
-  save prompt, the `--ldd`-style interpreter hint, and `strict` as the default.
+  a CI step can gate on the policy without parsing prose. `explain --save
+  porta.toml` writes the flags in use as a committable config (secrets and `-e`
+  values left out on purpose) that `porta up` reads back, so a converged
+  invocation becomes the project's policy. Still to do: the Linux footer (needs
+  ABI 7 audit records or a `SIGSYS`/exit classifier), the `--ldd`-style
+  interpreter hint, and `strict` as the default.
 - **0.8 started** with the parts that need no TLS termination: a per-run proxy
   credential (a CONNECT without it is 407, so the loopback proxy is not an
   open relay for other processes; `NODE_USE_ENV_PROXY=1` is set so Node's

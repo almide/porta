@@ -345,6 +345,11 @@ timeout, backend), or `{"refused": "..."}` for a run porta would decline;
 `check --json` gives the host's primitives and whether each is present. Both
 let a CI step gate on the policy without parsing prose.
 
+`porta explain <command> [flags] --save porta.toml` writes those flags as a
+`porta.toml` you can commit and re-run with `porta up`, so the invocation you
+converged on becomes the project's checked-in policy. Secrets and `-e` values
+are left out on purpose: a committed file is the wrong place for them.
+
 ## Security Model
 
 What porta defends against, what it does not, and the test behind each claim

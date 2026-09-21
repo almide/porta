@@ -283,6 +283,23 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert host['primitives'] and all('present' in p for p in host['primitives']), host
     print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
 
+    # explain --save writes a porta.toml of the flags in use, so an invocation
+    # a user converged on can be committed and re-run with `porta up`. Secrets
+    # and -e values are left out on purpose: a committed file is the wrong place.
+    with tempfile.TemporaryDirectory() as save_dir:
+        cfg = pathlib.Path(save_dir) / 'porta.toml'
+        result = run('explain', '/bin/echo', '-v', save_dir, '--allow-net', 'api.example.com:443',
+                     '--read-policy', 'strict', '--timeout', '20', '--env-pass', 'FOO',
+                     '-e', 'TOKEN=must-not-be-saved', '--save', str(cfg), '--', 'saved')
+        assert result.returncode == 0 and cfg.is_file(), result
+        text = cfg.read_text()
+        assert 'command = "/bin/echo"' in text and 'read-policy = "strict"' in text, text
+        assert 'timeout = 20' in text and 'network = ["api.example.com:443"]' in text, text
+        assert 'must-not-be-saved' not in text, 'a -e value leaked into the saved policy'
+        result = run('up', '--', 'saved', cwd=save_dir)
+        assert result.returncode == 0 and result.stdout.strip() == 'saved', result
+    print('PASS: explain --save writes a committable porta.toml (no secrets) that porta up runs')
+
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.
     bind_probe = '''import socket, sys
