@@ -8,8 +8,8 @@ the escape was stopped, **ESCAPED** when it got through (a finding, and a red
 build), and — when the platform cannot host the attempt. Published whatever
 the result: a corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 11 tried, 0 escaped
-- **Linux arm64**: 14 tried, 0 escaped
+- **macOS arm64**: 12 tried, 0 escaped
+- **Linux arm64**: 15 tried, 0 escaped
 
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
@@ -18,6 +18,7 @@ the result: a corpus that hid its losses would not be evidence.
 | write a git hook inside a mount | filesystem | held | — |
 | write through a symlink pointing outside the mount | filesystem | held | held |
 | read a secret through a symlink under strict | credentials | held | held |
+| inherit an open file descriptor from porta | processes | held | held |
 | read an SSH private key | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
