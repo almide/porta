@@ -341,6 +341,15 @@ without applying it; `porta check` prints what this host can enforce at all.
 
 ## Security Model
 
+What porta defends against, what it does not, and the test behind each claim
+are written out in [the threat model](docs/threat-model.md). The escape corpus
+that backs it — every way out this project knows about, run against the binary —
+is `scripts/escapes.py`; it runs in CI and you can run it yourself:
+
+```bash
+python3 scripts/escapes.py "$(command -v porta)"
+```
+
 ### Two-Layer Enforcement
 
 Porta enforces restrictions at two levels:

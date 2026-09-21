@@ -15,8 +15,10 @@ notes unless you would rather not be named.
 
 ## What counts
 
-porta's claims are the invariants in `CLAUDE.md`. A report is interesting if it
-breaks one of them. The short version:
+porta's claims are the invariants in `CLAUDE.md`, and what porta does and does
+not defend against is written out in [the threat model](docs/threat-model.md),
+with each claim mapped to the test that keeps it honest. A report is interesting
+if it breaks one of them. The short version:
 
 - A command cannot write outside the mounts it was granted, or `/tmp` and `/dev`.
 - Under `--read-policy strict` it cannot read outside those mounts and the
