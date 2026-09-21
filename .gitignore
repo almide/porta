@@ -7,3 +7,4 @@ porta
 .almide/cache/
 .tools/
 __pycache__/
+.references/
