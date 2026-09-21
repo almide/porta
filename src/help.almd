@@ -19,7 +19,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --proxy-deny <hosts>    HTTPS proxy denylist (comma-separated, *.wildcard ok)")
   println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
   println("  --read-policy <mode>    open (default) or strict: confine reads to mounts")
-  println("  --allow-root           run as root anyway; permissions stop separating secrets")
+  println("  --allow-root            Run as root anyway (file permissions then protect nothing)")
 }
 
 fn print_help(topic: String) -> Unit =
@@ -30,6 +30,7 @@ fn print_help(topic: String) -> Unit =
       println("Execute a WASM binary or native command.")
       println("Auto-detects mode: .wasm files run in WASM sandbox, everything else")
       println("runs as a native command with filesystem and network restrictions.")
+      println("Options before -- are porta's; everything after -- goes to the command.")
       println("")
       println("examples:")
       println("  porta run agent.wasm --profile full -v .")

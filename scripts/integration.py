@@ -162,6 +162,43 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     # /tmp, not /dev, not a system directory, and closed unless mounted.
     ungranted = pathlib.Path(tempfile.mkdtemp(prefix='porta-ungranted-', dir=pathlib.Path.home()))
 
+    # What a first-time user types, before they have read about `--`. Each of
+    # these used to exit 0 with nothing on the terminal — `porta run echo hello`
+    # ran `echo` alone — and nothing distinguishes that from a command that
+    # worked. A mistake porta can see has to be named, and has to fail.
+    result = run('run', '/bin/echo', 'hello')
+    assert result.returncode != 0 and 'hello' not in result.stdout, result
+    assert 'after --' in result.stderr, result.stderr
+    result = run('run', '/bin/echo', '--bogus', 'x')
+    assert result.returncode != 0 and 'unknown option --bogus' in result.stderr, result
+    result = run('run', '/bin/echo', '--', 'hello', '--bogus')
+    assert result.returncode == 0 and result.stdout == 'hello --bogus\n', result
+    result = run('run', 'no-such-command-porta-test', '--', 'x')
+    assert result.returncode != 0 and 'command not found' in result.stderr, result
+    result = run('run', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'must-not-execute')
+    assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
+    assert 'mount' in result.stderr and 'no-such-mount' in result.stderr, result.stderr
+    result = run('run', '/bin/echo', '-v', str(root / 'agent.wasm'), '--', 'must-not-execute')
+    assert result.returncode != 0 and 'not a directory' in result.stderr, result
+    result = run('no-such-subcommand')
+    assert result.returncode != 0 and 'unknown command' in result.stderr, result
+    empty = root / 'empty'
+    empty.mkdir()
+    result = run('up', cwd=empty)
+    assert result.returncode != 0 and 'porta.toml' in result.stderr, result
+    print('PASS: a mistyped command line is refused and named, never silently narrowed')
+
+    # Whether this host can resolve a public name at all. The suite is offline
+    # by design; the DNS checks below run only where the answer is yes, and
+    # then assert that the sandbox neither breaks nor widens what the host has.
+    import socket
+    try:
+        socket.getaddrinfo('example.com', 443)
+        host_resolves = True
+    except OSError:
+        host_resolves = False
+    resolve = 'import socket; print(socket.getaddrinfo("example.com", 443)[0][4][0])'
+
     if platform.system() == 'Darwin':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result
@@ -178,6 +215,21 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
         print('PASS: native exit code, porta.toml proxy enforcement, default write denial, '
               'unknown read policy refused')
+
+        # `--allow-net` closes every outbound channel but the granted ports, and
+        # on macOS name resolution is one of those channels: getaddrinfo talks
+        # to mDNSResponder over a socket. With that socket closed, the README's
+        # own `curl --allow-net '*:443' https://example.com` failed to resolve.
+        # The grant has to leave names resolvable; proxy mode has to not, since
+        # the proxy resolves the CONNECT target and is the only egress there.
+        if host_resolves:
+            result = run('run', sys.executable, '--allow-net', '*:443', '--', '-c', resolve)
+            assert result.returncode == 0, result.stderr
+            result = run('run', sys.executable, '--proxy-allow', 'api.example.com', '--', '-c', resolve)
+            assert result.returncode != 0, result
+            print('PASS: --allow-net leaves names resolvable; proxy mode does not')
+        else:
+            print('SKIP: this host cannot resolve example.com; DNS checks not run')
 
         # --read-policy strict confines reads to the granted mounts and the
         # platform's own directories. A credential outside both is unreadable.

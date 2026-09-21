@@ -7,10 +7,8 @@ import self.engine
 
 effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
   let config_path = if fs.exists("porta.toml") then "porta.toml" else ".porta.toml"
-  if not fs.exists(config_path) then {
-    println("No porta.toml found. Run 'porta init' to create one.")
-    ok(())
-  }
+  if not fs.exists(config_path) then
+    err("no porta.toml in this directory; run 'porta init native <command>' to create one")
   else {
     let cfg = config.load_porta_config(config_path)!
     let env_list = cfg.env_vars

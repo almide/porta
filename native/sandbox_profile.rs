@@ -38,11 +38,12 @@ pub(crate) fn build_sandbox_profile_rs(
     allowed_dirs: &[String],
     allowed_net: &[String],
     read_policy: &str,
+    proxy: bool,
 ) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
     profile.push_str(&write_rules(allowed_dirs));
     profile.push_str(&read_rules(allowed_dirs, read_policy));
-    profile.push_str(&network_rules(allowed_net));
+    profile.push_str(&network_rules(allowed_net, proxy));
     profile
 }
 
@@ -101,11 +102,30 @@ pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The socket every macOS resolver call goes through. `getaddrinfo` does not
+/// send DNS itself; it asks mDNSResponder over this path, and that daemon —
+/// outside the sandbox — does the lookup.
+const RESOLVER_SOCKET: &str = "/private/var/run/mDNSResponder";
+
 /// The network is open like Docker's until `--allow-net` names a port, which
 /// then closes everything else. Only the port is filtered, not the host.
-fn network_rules(allowed_net: &[String]) -> String {
+///
+/// Closing everything else also closes the resolver socket, and a command
+/// that cannot resolve a name cannot use the port it was granted: `curl
+/// --allow-net '*:443' https://example.com` failed with "Could not resolve
+/// host" for exactly as long as this rule was missing. Reopening it gives up
+/// nothing the port grant did not already give — the host part of
+/// `--allow-net` is not enforced, so any address on that port was already
+/// reachable, by number. Proxy mode is different: there the child needs no
+/// name lookups of its own, because the proxy resolves the CONNECT target,
+/// and the invariant is that the proxy is the only egress. So the socket stays
+/// closed there.
+fn network_rules(allowed_net: &[String], proxy: bool) -> String {
     if allowed_net.is_empty() { return String::new(); }
     let mut rules = String::from("(deny network-outbound)\n");
+    if !proxy {
+        rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", RESOLVER_SOCKET));
+    }
     for host in allowed_net {
         let Some((address, port)) = host.rsplit_once(':') else { continue };
         if port != "*" && !port.parse::<u16>().is_ok_and(|port| port > 0) { continue; }
@@ -125,7 +145,7 @@ pub fn wt_sandbox_profile(
     let dirs = serde_json::from_str::<Vec<String>>(dirs_json.as_ref());
     let net = serde_json::from_str::<Vec<String>>(net_json.as_ref());
     match (dirs, net) {
-        (Ok(dirs), Ok(net)) => build_sandbox_profile_rs(&dirs, &net, read_policy.as_ref()),
+        (Ok(dirs), Ok(net)) => build_sandbox_profile_rs(&dirs, &net, read_policy.as_ref(), false),
         _ => "(version 1)\n(deny default)\n".to_string(),
     }
 }

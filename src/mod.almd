@@ -15,12 +15,12 @@ fn has_help_flag(args: List[String]) -> Bool =
 
 // A command that acts on a target. `--help`, or no target at all, prints that
 // command's help and returns nothing to act on.
-effect fn target_options(args: List[String], topic: String) -> Option[cli.Options] =
-  if has_help_flag(args) then { help.print_help(topic); none }
+effect fn target_options(args: List[String], topic: String) -> Result[Option[cli.Options], String] =
+  if has_help_flag(args) then { help.print_help(topic); ok(none) }
   else {
-    let opts = cli.parse_options(args, 2, cli.default_options())
-    if opts.path == "" then { help.print_help(topic); none }
-    else some(opts)
+    let opts = cli.parse_options(args, 2, cli.default_options())!
+    if opts.path == "" then { help.print_help(topic); ok(none) }
+    else ok(some(opts))
   }
 
 // porta ps/stop/kill/logs/rm all name one instance and say the same thing
@@ -115,10 +115,6 @@ effect fn main() -> Result[Unit, String] = {
       println("porta ${util.version()}")
       ok(())
     },
-    _ => {
-      println("unknown command: ${cmd}")
-      println("run 'porta help' for usage")
-      ok(())
-    },
+    _ => err("unknown command: ${cmd}; run 'porta help' for usage"),
   }
 }
