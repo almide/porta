@@ -94,6 +94,14 @@ test "build_sandbox_profile: allow_net restricts to listed ports" {
   let profile = wasm_rt.build_sandbox_profile(["."], ["*:443"], "open")
   assert(string.contains(profile, "(deny network-outbound)"))
   assert(not string.contains(profile, "(allow network-outbound (local udp))"))
+  // Closing everything else must not close name resolution, or the granted
+  // port is unusable by name.
+  assert(string.contains(profile, "(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))"))
+}
+
+test "build_sandbox_profile: no allow_net leaves the network open, resolver included" {
+  let profile = wasm_rt.build_sandbox_profile(["."], [], "open")
+  assert(not string.contains(profile, "network-outbound"))
 }
 
 test "build_sandbox_profile: allowed_net adds port-based TCP rules" {
@@ -150,7 +158,8 @@ test "proxy profile restricts egress to loopback without UDP or unix sockets" {
 test "malformed network rules never grant unrestricted TCP" {
   let profile = wasm_rt.build_sandbox_profile([], ["example.com", "*:oops", "*:0"], "open")
   assert(string.contains(profile, "(deny network-outbound)"))
-  assert(not string.contains(profile, "(allow network-outbound"))
+  // The resolver socket is reopened; no TCP destination is.
+  assert(not string.contains(profile, "remote tcp"))
 }
 
 test "sandbox escapes injected profile expressions in mount paths" {

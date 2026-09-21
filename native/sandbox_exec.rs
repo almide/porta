@@ -47,12 +47,34 @@ const READ_POLICIES: [&str; 2] = ["open", "strict"];
 /// resolved, so an absolute mount reached through a symlink — `/var/folders/…`,
 /// which is really `/private/var/folders/…` on macOS — has to be named as the
 /// kernel will see it, or the rule is written for a path nothing ever has.
-fn resolve_mount(mount: &str) -> String {
+///
+/// A mount that does not exist is refused rather than passed through as
+/// written. Passed through, it reached the kernel as a relative path and the
+/// run failed later with an exec error that named nothing the caller typed.
+fn resolve_mount(mount: &str) -> Result<String, String> {
     let clean = mount.trim_end_matches(":ro");
     let resolved = std::fs::canonicalize(clean)
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_else(|_| clean.to_string());
-    if mount.ends_with(":ro") { format!("{}:ro", resolved) } else { resolved }
+        .map_err(|error| format!("mount {clean} cannot be used: {error}"))?;
+    if !resolved.is_dir() {
+        return Err(format!("mount {clean} is not a directory; -v takes a directory to grant"));
+    }
+    let resolved = resolved.to_string_lossy().to_string();
+    Ok(if mount.ends_with(":ro") { format!("{}:ro", resolved) } else { resolved })
+}
+
+/// Why this command cannot be started at all, if it cannot: it is not a
+/// path that exists, and not a name on the PATH porta itself was started
+/// with. Found here, before any policy is applied, so the answer names the
+/// command rather than the exec wrapper that failed to find it.
+fn missing_command(cmd: &str, cwd: &str) -> Option<String> {
+    if cmd.contains('/') {
+        let base = if cwd.is_empty() { "." } else { cwd };
+        let program = std::path::Path::new(base).join(cmd);
+        return (!program.exists()).then(|| format!("command not found: {cmd}"));
+    }
+    let path = std::env::var_os("PATH")?;
+    let found = std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file());
+    (!found).then(|| format!("command not found: {cmd} (not on PATH)"))
 }
 
 impl SandboxRequest {
@@ -67,7 +89,11 @@ impl SandboxRequest {
         if let Some(reason) = request.running_as_root() {
             return Err(reason);
         }
-        request.allowed_dirs = request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect();
+        request.allowed_dirs =
+            request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect::<Result<_, _>>()?;
+        if let Some(reason) = missing_command(&request.cmd, &request.cwd) {
+            return Err(reason);
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(reason) = request.unreadable_command() {
             return Err(reason);
@@ -134,7 +160,7 @@ impl SandboxRequest {
     /// here so none of them can apply a policy the other two do not.
     #[cfg(target_os = "macos")]
     fn profile(&self) -> String {
-        build_sandbox_profile_rs(&self.allowed_dirs, &self.allowed_net, &self.read_policy)
+        build_sandbox_profile_rs(&self.allowed_dirs, &self.allowed_net, &self.read_policy, self.proxy)
     }
 
     /// The Landlock ruleset this request asks for, or why this kernel cannot

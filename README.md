@@ -66,7 +66,9 @@ porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME
 
 `claude` runs normally, but it can write only inside `./project` and connect
 only to the host you listed. No Docker daemon, no container image, no change to
-the agent itself.
+the agent itself. Everything before `--` is an option for porta; everything
+after it belongs to the command. An argument in the wrong place is refused with
+the fixed command line, never dropped.
 
 ### 2. See a restriction actually stop something
 

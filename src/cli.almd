@@ -60,20 +60,20 @@ fn default_options() -> Options = {
 // option with a value, one for a flag or a bare word.
 type ParsedOption = { opts: Options, consumed: Int }
 
-fn parse_options(args: List[String], idx: Int, opts: Options) -> Options =
-  if idx >= list.len(args) then opts
+fn parse_options(args: List[String], idx: Int, opts: Options) -> Result[Options, String] =
+  if idx >= list.len(args) then ok(opts)
   else {
     let arg = list.get(args, idx) ?? ""
     // Everything after `--` belongs to the program being run, not to porta.
-    if arg == "--" then {...opts, wasm_args: list.drop(args, idx + 1)}
+    if arg == "--" then ok({...opts, wasm_args: list.drop(args, idx + 1)})
     else {
-      let step = apply_option(opts, arg, list.get(args, idx + 1) ?? "")
+      let step = apply_option(opts, arg, list.get(args, idx + 1) ?? "")!
       parse_options(args, idx + step.consumed, step.opts)
     }
   }
 
-fn apply_option(opts: Options, arg: String, next: String) -> ParsedOption =
-  match arg {
+fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption, String] =
+  ok(match arg {
     "--entry" => valued({...opts, entry: next}),
     "--step-limit" => valued({...opts, step_limit: util.parse_int(next)}),
     "--max-memory" => valued({...opts, max_memory_pages: util.parse_int(next)}),
@@ -95,18 +95,24 @@ fn apply_option(opts: Options, arg: String, next: String) -> ParsedOption =
     "-d" => flag({...opts, detach: true}),
     "--detach" => flag({...opts, detach: true}),
     "--_daemon" => valued({...opts, daemon_id: next}),
-    _ => unrecognized(opts, arg),
-  }
+    _ => unrecognized(opts, arg)!,
+  })
 
 fn valued(opts: Options) -> ParsedOption = {opts: opts, consumed: 2}
 fn flag(opts: Options) -> ParsedOption = {opts: opts, consumed: 1}
 
-// An unknown --option is skipped along with its value. The first bare word is
-// the path; any later one is an argument for the program being run.
-fn unrecognized(opts: Options, arg: String) -> ParsedOption =
-  if string.starts_with(arg, "--") then {opts: opts, consumed: 2}
-  else if opts.path == "" then {opts: {...opts, path: arg}, consumed: 1}
-  else {opts: opts, consumed: 1}
+// The first bare word is the target. Anything else porta does not recognise is
+// an error, never silently dropped: `porta run echo hello` used to run `echo`
+// with no arguments and exit 0, and a user has no way to tell that from a
+// working command that printed nothing. Arguments for the target go after `--`.
+fn unrecognized(opts: Options, arg: String) -> Result[ParsedOption, String] =
+  if string.starts_with(arg, "-") then
+    err("unknown option ${arg}; 'porta help <command>' lists the options porta takes, "
+      + "and an option for the command itself goes after --")
+  else if opts.path == "" then ok({opts: {...opts, path: arg}, consumed: 1})
+  else
+    err("unexpected argument '${arg}': porta takes options here, and the command's own "
+      + "arguments go after --, as in: porta run ${opts.path} [options] -- ${arg}")
 
 // -e, --env and --secret take key=value; a value without '=' adds nothing.
 fn with_env(opts: Options, text: String) -> Options =
