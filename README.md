@@ -339,6 +339,11 @@ Exit codes tell a script what happened:
 
 `porta explain <command> [same options]` prints the policy a run would apply
 without applying it; `porta check` prints what this host can enforce at all.
+Add `--json` to either for a machine-readable form: `explain --json` gives the
+effective policy (command, mounts, reads, network, listen ports, Unix sockets,
+timeout, backend), or `{"refused": "..."}` for a run porta would decline;
+`check --json` gives the host's primitives and whether each is present. Both
+let a CI step gate on the policy without parsing prose.
 
 ## Security Model
 

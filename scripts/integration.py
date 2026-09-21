@@ -264,6 +264,25 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 0 and 'time limit' in result.stdout and '3s' in result.stdout, result
     print('PASS: --timeout kills a hung run (124) with its whole group; a run that finishes keeps its code')
 
+    # --json gives explain and check a machine-readable form. explain reports
+    # the effective policy; a run it would refuse reports the refusal instead.
+    result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
+                 '--timeout', '30', '--json', '--', 'hi')
+    assert result.returncode == 0, result
+    policy = json.loads(result.stdout)
+    assert policy['command'] == '/bin/echo' and policy['args'] == ['hi'], policy
+    assert policy['network'] == {'mode': 'allowlist', 'allow': ['api.example.com:443']}, policy
+    assert policy['timeout_seconds'] == 30 and policy['reads'] == 'open', policy
+    assert str(root) in policy['mounts'][0], policy
+    result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--json', '--', 'x')
+    assert result.returncode == 0 and 'refused' in json.loads(result.stdout), result
+    result = run('check', '--json')
+    assert result.returncode == 0, result
+    host = json.loads(result.stdout)
+    assert host['all_enforced'] is True and host['missing'] == 0, host
+    assert host['primitives'] and all('present' in p for p in host['primitives']), host
+    print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
+
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.
     bind_probe = '''import socket, sys

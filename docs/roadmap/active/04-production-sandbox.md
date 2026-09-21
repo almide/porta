@@ -121,10 +121,12 @@ symlink.
   is there to report. Supervising also bought `--timeout <secs>`: the command
   leads its own process group and porta kills the group at the deadline (exit
   124), so a hung or looping agent is bounded — the one wall-clock limit the
-  native sandbox now has, closing the gap the threat model called out. Still to
-  do: the Linux footer (needs ABI 7 audit records or a `SIGSYS`/exit
-  classifier), `--json`, the post-run save prompt, the `--ldd`-style
-  interpreter hint, and `strict` as the default.
+  native sandbox now has, closing the gap the threat model called out. `explain
+  --json` and `check --json` also landed: the effective policy (or a
+  `{"refused":...}`) and the host's primitives as machine-readable objects, so
+  a CI step can gate on the policy without parsing prose. Still to do: the Linux
+  footer (needs ABI 7 audit records or a `SIGSYS`/exit classifier), the post-run
+  save prompt, the `--ldd`-style interpreter hint, and `strict` as the default.
 - **0.8 started** with the parts that need no TLS termination: a per-run proxy
   credential (a CONNECT without it is 407, so the loopback proxy is not an
   open relay for other processes; `NODE_USE_ENV_PROXY=1` is set so Node's

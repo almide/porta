@@ -4,7 +4,7 @@
 //! right answer at run time and a poor first impression, so `porta check`
 //! asks the same questions the run would and prints the answers: which
 //! primitives are present, what each one covers, and what porta will
-//! therefore refuse here.
+//! therefore refuse here. `--json` gives the same report to a machine.
 
 /// One enforcement primitive and whether this host has it.
 struct Primitive {
@@ -34,8 +34,44 @@ fn render(platform: &str, primitives: &[Primitive]) -> String {
     text
 }
 
-#[cfg(target_os = "macos")]
+fn render_json(platform: &str, primitives: &[Primitive]) -> String {
+    let quoted = |text: &str| format!("\"{}\"", crate::json_text::escape_json_text(text));
+    let items: Vec<String> = primitives
+        .iter()
+        .map(|primitive| {
+            format!(
+                "{{\"name\":{},\"covers\":{},\"present\":{},\"otherwise\":{}}}",
+                quoted(primitive.name),
+                quoted(primitive.covers),
+                primitive.present,
+                quoted(primitive.otherwise),
+            )
+        })
+        .collect();
+    let missing = primitives.iter().filter(|primitive| !primitive.present).count();
+    format!(
+        "{{\"platform\":{},\"all_enforced\":{},\"missing\":{},\"primitives\":[{}]}}",
+        quoted(platform),
+        missing == 0,
+        missing,
+        items.join(","),
+    )
+}
+
+/// The human report: which primitives this host has and what porta refuses.
 pub fn wt_sandbox_check() -> String {
+    let (platform, primitives) = probe();
+    render(&platform, &primitives)
+}
+
+/// The same report as one JSON object.
+pub fn wt_sandbox_check_json() -> String {
+    let (platform, primitives) = probe();
+    render_json(&platform, &primitives)
+}
+
+#[cfg(target_os = "macos")]
+fn probe() -> (String, Vec<Primitive>) {
     let exec = std::path::Path::new("/usr/bin/sandbox-exec").exists();
     let version = std::process::Command::new("/usr/bin/sw_vers")
         .arg("-productVersion")
@@ -43,9 +79,9 @@ pub fn wt_sandbox_check() -> String {
         .ok()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    render(
-        &format!("macOS {version}"),
-        &[
+    (
+        format!("macOS {version}"),
+        vec![
             Primitive {
                 name: "sandbox-exec (Seatbelt)",
                 covers: "writes, reads, TCP ports, Unix sockets, mach services, process info",
@@ -63,14 +99,14 @@ pub fn wt_sandbox_check() -> String {
 }
 
 #[cfg(target_os = "linux")]
-pub fn wt_sandbox_check() -> String {
+fn probe() -> (String, Vec<Primitive>) {
     let abi = crate::landlock::abi_version().unwrap_or(0);
     let seccomp = crate::seccomp::available();
     let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").map(|text| text.trim().to_string()).unwrap_or_default();
     let landlock = |min: i64| abi >= min;
-    render(
-        &format!("Linux {kernel}, Landlock ABI {abi}"),
-        &[
+    (
+        format!("Linux {kernel}, Landlock ABI {abi}"),
+        vec![
             Primitive {
                 name: "Landlock filesystem rules (ABI 1)",
                 covers: "writes outside mounts; reads under --read-policy strict",
@@ -112,10 +148,10 @@ pub fn wt_sandbox_check() -> String {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn wt_sandbox_check() -> String {
-    render(
-        std::env::consts::OS,
-        &[Primitive {
+fn probe() -> (String, Vec<Primitive>) {
+    (
+        std::env::consts::OS.to_string(),
+        vec![Primitive {
             name: "native sandbox",
             covers: "everything",
             present: false,

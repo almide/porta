@@ -42,6 +42,8 @@ type Options = {
   // Seconds the command may run before porta kills it and everything it
   // started. 0 means no limit.
   timeout: Int,
+  // Emit machine-readable JSON instead of prose, for `explain` and `check`.
+  json: Bool,
 }
 
 fn default_options() -> Options = {
@@ -70,6 +72,7 @@ fn default_options() -> Options = {
   allow_unix: [],
   allow_bind: [],
   timeout: 0,
+  json: false,
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -112,6 +115,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--allow-unix" => valued({...opts, allow_unix: opts.allow_unix + [next]}),
     "--allow-bind" => valued({...opts, allow_bind: opts.allow_bind + [next]}),
     "--timeout" => valued({...opts, timeout: util.parse_int(next)}),
+    "--json" => flag({...opts, json: true}),
     "-d" => flag({...opts, detach: true}),
     "--detach" => flag({...opts, detach: true}),
     "--_daemon" => valued({...opts, daemon_id: next}),

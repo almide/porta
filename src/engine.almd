@@ -115,7 +115,8 @@ effect fn explain_native(opts: cli.Options) -> Result[Unit, String] = {
   let proxied = proxy.is_enabled(proxy_config(opts))
   let net = if proxied then ["127.0.0.1:1"] else opts.allow_net
   let request = native_request(opts, net, [], proxied)!
-  println(wasm_rt.wt_sandbox_explain(dispatch.exec_request_json(request)))
+  let request_json = dispatch.exec_request_json(request)
+  println(if opts.json then wasm_rt.wt_sandbox_explain_json(request_json) else wasm_rt.wt_sandbox_explain(request_json))
   ok(())
 }
 

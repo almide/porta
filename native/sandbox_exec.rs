@@ -295,6 +295,57 @@ impl SandboxRequest {
         text
     }
 
+    /// The same policy as `explain`, as one JSON object for tooling and CI. A
+    /// refused request is not reached here: the wrapper reports the refusal.
+    fn explain_json(&self) -> String {
+        let quoted = |text: &str| format!("\"{}\"", crate::json_text::escape_json_text(text));
+        let array = |items: &[String]| -> String {
+            let parts: Vec<String> = items
+                .iter()
+                .map(|item| format!("\"{}\"", crate::json_text::escape_json_text(item)))
+                .collect();
+            format!("[{}]", parts.join(","))
+        };
+        let (net_mode, net_allow): (&str, &[String]) = if self.proxy {
+            ("proxy", &[])
+        } else if self.allowed_net.is_empty() {
+            ("open", &[])
+        } else {
+            ("allowlist", &self.allowed_net)
+        };
+        format!(
+            "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
+\"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
+\"timeout_seconds\":{},\"enforcement\":{}}}",
+            quoted(&self.cmd),
+            array(&self.args),
+            quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
+            array(&self.allowed_dirs),
+            quoted(if self.read_policy == "strict" { "strict" } else { "open" }),
+            quoted(net_mode),
+            array(net_allow),
+            array(&self.allowed_bind),
+            array(&self.allowed_unix),
+            self.timeout,
+            quoted(self.enforcement_backend()),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn enforcement_backend(&self) -> &'static str {
+        "sandbox-exec"
+    }
+
+    #[cfg(target_os = "linux")]
+    fn enforcement_backend(&self) -> &'static str {
+        "landlock+seccomp"
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn enforcement_backend(&self) -> &'static str {
+        "none"
+    }
+
     #[cfg(target_os = "macos")]
     fn explain_enforcement(&self) -> String {
         format!("\nsandbox-exec profile:\n{}", self.profile())
@@ -511,6 +562,15 @@ pub fn wt_sandbox_explain(request_json: impl AsRef<str>) -> String {
     match SandboxRequest::parse(request_json.as_ref()) {
         Ok(request) => request.explain(),
         Err(reason) => format!("porta would refuse this run: {reason}\n"),
+    }
+}
+
+/// The policy as one JSON object, or `{"refused":"..."}` when porta would
+/// refuse the run before it began.
+pub fn wt_sandbox_explain_json(request_json: impl AsRef<str>) -> String {
+    match SandboxRequest::parse(request_json.as_ref()) {
+        Ok(request) => request.explain_json(),
+        Err(reason) => format!("{{\"refused\":\"{}\"}}", crate::json_text::escape_json_text(&reason)),
     }
 }
 

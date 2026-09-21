@@ -65,9 +65,17 @@ fn wt_exec_supervised(request_json: String) -> String
 @extern(rs, "wasmtime_bridge", "wt_sandbox_explain")
 fn wt_sandbox_explain(request_json: String) -> String
 
+// The same policy as one JSON object, for tooling and CI.
+@extern(rs, "wasmtime_bridge", "wt_sandbox_explain_json")
+fn wt_sandbox_explain_json(request_json: String) -> String
+
 // What this host can enforce, and what porta will refuse here.
 @extern(rs, "wasmtime_bridge", "wt_sandbox_check")
 fn wt_sandbox_check() -> String
+
+// The same host report as one JSON object.
+@extern(rs, "wasmtime_bridge", "wt_sandbox_check_json")
+fn wt_sandbox_check_json() -> String
 
 @extern(rs, "wasmtime_bridge", "wt_proxy_start")
 fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String) -> String
