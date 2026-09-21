@@ -101,8 +101,9 @@ const HOST_CONTROL_SERVICES: [&str; 4] = [
 /// agent (launchd's `Listeners`, or a user-placed socket), gpg-agent, and the
 /// container runtimes whose socket is root on the host. Closed to connects
 /// unless `--allow-unix` names one.
-const CREDENTIAL_SOCKET_PATTERNS: [&str; 6] = [
+const CREDENTIAL_SOCKET_PATTERNS: [&str; 7] = [
     r"^/private/tmp/com\.apple\.launchd\.[^/]+/Listeners$",
+    r"/ssh-[^/]+/agent\.[0-9]+$",
     r"/\.ssh/agent[^/]*$",
     r"/\.gnupg/S\.gpg-agent[^/]*$",
     r"/docker\.sock$",
@@ -142,6 +143,10 @@ pub(crate) struct ProfileRequest<'a> {
     /// Unix socket paths reopened for connects after the credential-socket
     /// denies.
     pub allowed_unix: &'a [String],
+    /// This run's tag. Every deny rule carries it as its log message, so the
+    /// kernel's denial records for this run can be told from every other
+    /// process's. Empty for a profile that is only being shown.
+    pub tag: &'a str,
 }
 
 /// The whole profile for one request: everything `sandbox-exec` will apply.
@@ -153,7 +158,33 @@ pub(crate) fn build_sandbox_profile(request: &ProfileRequest) -> String {
     profile.push_str(&network_rules(request.allowed_net, request.proxy, request.bind_ports));
     profile.push_str(&socket_rules(request.allowed_unix));
     profile.push_str(&host_rules());
+    tagged(&profile, request.tag)
+}
+
+/// The tag every deny rule of one run carries, as it appears in the kernel's
+/// denial log. Defined here, beside the rules that carry it, and read by the
+/// denial reader.
+pub(crate) fn message_tag(run_tag: &str) -> String {
+    format!("porta:{run_tag}")
+}
+
+/// Every deny rule with this run's tag as its message. A rule is one line and
+/// ends with its closing parenthesis, so the message goes just before it.
+fn tagged(profile: &str, tag: &str) -> String {
+    if tag.is_empty() {
+        return profile.to_string();
+    }
+    let message = format!(" (with message \"{}\"))\n", message_tag(tag));
     profile
+        .lines()
+        .map(|line| {
+            if line.starts_with("(deny ") && line.ends_with(')') {
+                format!("{}{}", &line[..line.len() - 1], message)
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect()
 }
 
 /// The older calling shape, kept for the profile viewer and its tests.
@@ -170,6 +201,7 @@ pub(crate) fn build_sandbox_profile_rs(
         proxy,
         bind_ports: &[],
         allowed_unix: &[],
+        tag: "",
     })
 }
 

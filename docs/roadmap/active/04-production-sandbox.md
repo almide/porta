@@ -94,6 +94,31 @@ the end.
    enabled) and a support matrix that says exactly which kernels and macOS
    versions are covered.
 
+## Status
+
+- **0.6 shipped** (2026-09-21): everything below under Phase 0.6 except two
+  items withdrawn after measurement. `TMPDIR` was granted and passed, and the
+  suite caught it opening other tools' scratch state to a strict run; it is
+  neither. `/proc/self` was granted by the exec'd command and measured to cover
+  the shell and none of the tools it starts; `/proc` stays closed. The UDP
+  decision under `--allow-net` on Linux went the other way from the draft
+  below: UDP stays open (a TCP port rule says nothing about UDP, and closing it
+  would break name resolution), recorded in SECURITY.md; proxy mode closes it.
+- **0.7 in progress**: the macOS denial footer (per-run tag on every deny rule,
+  read back from the unified log after a failed run), `porta check`, `porta
+  explain`, exit codes 125/126/127 with the child's code passed through in
+  every mode, and `run` now supervising rather than exec-ing in place so porta
+  is there to report. Still to do: the Linux footer (needs ABI 7 audit records
+  or a `SIGSYS`/exit classifier), `--json`, the post-run save prompt, the
+  `--ldd`-style interpreter hint, and `strict` as the default.
+- **0.8 started** with the parts that need no TLS termination: a per-run proxy
+  credential (a CONNECT without it is 407, so the loopback proxy is not an
+  open relay for other processes; `NODE_USE_ENV_PROXY=1` is set so Node's
+  fetch honours the variable), the resolved-address guard (loopback,
+  link-local, metadata, multicast are never reached by name; private ranges
+  stay open), and the audit record synced to disk before a tunnel opens.
+  Placeholder credentials and selective TLS termination remain.
+
 ## Phase 0.6 — Close what was measured
 
 Everything here is a gap found by running porta today. None of it is a new

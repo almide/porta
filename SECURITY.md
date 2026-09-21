@@ -22,7 +22,15 @@ breaks one of them. The short version:
 - Under `--read-policy strict` it cannot read outside those mounts and the
   platform's own directories.
 - Under proxy mode the loopback proxy is its only egress — no UDP, no Unix
-  sockets, no `io_uring`.
+  sockets, no `io_uring` — and the proxy serves only a client presenting this
+  run's credential, never tunnels to loopback, link-local, metadata or
+  multicast addresses, and records every decision before acting on it.
+- The child's environment holds nothing of the caller's shell beyond `PATH`,
+  `HOME`, the locale and the terminal unless `-e` or `--env-pass` named it.
+- On macOS, inside a writable mount, the operator's repository hooks and config
+  and the trusted files at the mount root cannot be written or renamed away;
+  another process's arguments, the Keychain, `open(1)` and the credential
+  agents' sockets are closed.
 - A WASM agent's tool arguments are validated against the declared schema
   before anything executes, and a guest cannot grant itself a capability,
   choose a credential, or bypass a failed completion check.

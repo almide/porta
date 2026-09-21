@@ -256,6 +256,8 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `porta agent-resume <agent.toml> <journal>` | Continue a recorded run |
 | `porta agent-replay <agent.toml> <journal>` | Verify a completed run offline |
 | `porta run <target>` | Execute WASM (.wasm) or native command |
+| `porta explain <command> [options]` | Print the policy `run` would apply with the same options, and run nothing |
+| `porta check` | Say what this host can enforce and what porta will refuse here |
 | `porta run -d <agent.wasm>` | Run WASM as background daemon |
 | `porta serve <agent.wasm>` | Start MCP server on stdio |
 
@@ -302,6 +304,40 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--restart <policy>` | `no`, `on-failure`, `always` |
 | `-d`, `--detach` | Run as background daemon |
 | `--help`, `-h` | Show help for any command |
+
+### When a run is refused
+
+A refusal looks exactly like a broken tool — `Operation not permitted` — until
+someone says which flag it would have needed. After a run that exits non-zero,
+porta reads the kernel's denial records for that run (macOS; each deny rule
+carries a per-run tag, so other processes' denials are not mixed in) and says
+so:
+
+```
+[porta] the sandbox refused this run 2 times; what each would have needed:
+  file-write-create /Users/me/notes/out.txt
+    → -v /Users/me/notes
+  network-outbound remote:*:443
+    → --allow-net '*:443'
+```
+
+Some refusals have no flag — a credential store, another process's arguments,
+`open(1)` — and the footer says that instead. `PORTA_DENIALS=always` asks after
+every run, including ones that exited 0; `PORTA_DENIALS=never` keeps the footer
+away. On Linux the footer is not available yet: it needs Landlock ABI 7's audit
+records.
+
+Exit codes tell a script what happened:
+
+| Exit | Meaning |
+|---|---|
+| the command's own | the command ran; this is what it returned (128 + signal if a signal ended it) |
+| 125 | porta refused the run before it began — a rule this kernel cannot express, a missing mount, root without `--allow-root` |
+| 126 | the command exists but the policy leaves it unrunnable (an interpreter outside the strict read set, say) |
+| 127 | the command was not found |
+
+`porta explain <command> [same options]` prints the policy a run would apply
+without applying it; `porta check` prints what this host can enforce at all.
 
 ## Security Model
 
@@ -355,8 +391,16 @@ filter that also refuses `io_uring`, because a ring can open a socket without
 ever asking for one.
 
 Only HTTPS CONNECT on port 443 is supported, and clients must respect
-`HTTPS_PROXY`. Deny lists are weaker than explicit allow lists, and this is not
-a credential broker or a private-address filter. See [Limits](#limits).
+`HTTPS_PROXY` (Node's `fetch` does once `NODE_USE_ENV_PROXY=1` is set, which
+porta sets). The proxy serves this run's client alone: `HTTPS_PROXY` carries a
+per-run credential, and a CONNECT without it is answered 407, so another
+process on the machine cannot use porta's proxy as a relay carrying this run's
+allow-list. An allowed name that resolves to loopback, a link-local or cloud
+metadata address, or a multicast group is refused: a hostname on the list is a
+promise about a public service, not a route to this machine. Private ranges
+stay reachable. Every decision is written and synced to the audit file before
+the connection proceeds. Deny lists are weaker than explicit allow lists, and
+this is not a credential broker. See [Limits](#limits).
 
 ### WASM Sandbox
 

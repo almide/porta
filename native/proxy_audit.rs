@@ -37,8 +37,11 @@ pub(crate) fn audit_log(audit_path: &Option<String>, decision: &Decision) {
             serde_json::to_string(decision.verdict).unwrap_or_else(|_| "\"\"".into()),
             serde_json::to_string(&decision.reason).unwrap_or_else(|_| "\"\"".into()),
         );
+        // Written and synced before the connection proceeds: a record that a
+        // crash can lose is a trail with a gap exactly where it mattered.
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
             let _ = f.write_all(line.as_bytes());
+            let _ = f.sync_data();
         }
     }
 }

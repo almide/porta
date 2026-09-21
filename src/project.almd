@@ -5,7 +5,9 @@ import self.cli
 import self.config
 import self.engine
 
-effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
+// Runs the project's command and returns its exit code; a WASM run that
+// finishes is exit 0.
+effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
   let config_path = if fs.exists("porta.toml") then "porta.toml" else ".porta.toml"
   if not fs.exists(config_path) then
     err("no porta.toml in this directory; run 'porta init native <command>' to create one")
@@ -49,7 +51,8 @@ effect fn porta_up(extra_args: List[String]) -> Result[Unit, String] = {
         preopen_dirs: cfg.mounts,
         wasm_args: all_args,
       }
-      engine.run_wasm(opts)
+      engine.run_wasm(opts)!
+      ok(0)
     }
   }
 }

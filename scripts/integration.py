@@ -125,11 +125,21 @@ with tempfile.TemporaryDirectory(prefix='porta-integration-') as directory:
         assert reply['result']['content'][0]['text'] == 'redirect not followed', reply
         assert paths == ['/redirect'], paths
         if platform.system() == 'Darwin':
-            probe = r'''import errno, os, socket, sys, urllib.parse
+            probe = r'''import base64, errno, os, socket, sys, urllib.parse
 proxy = urllib.parse.urlsplit(os.environ['HTTPS_PROXY'])
-with socket.create_connection((proxy.hostname, proxy.port), 2) as stream:
-    stream.sendall(b'CONNECT blocked.example:443 HTTP/1.1\r\n\r\n')
-    assert b'403 Forbidden' in stream.recv(4096)
+credential = base64.b64encode(f'{proxy.username}:{proxy.password}'.encode()).decode()
+def connect(target, authorised=True):
+    with socket.create_connection((proxy.hostname, proxy.port), 2) as stream:
+        auth = f'Proxy-Authorization: Basic {credential}\r\n' if authorised else ''
+        stream.sendall(f'CONNECT {target} HTTP/1.1\r\n{auth}\r\n'.encode())
+        return stream.recv(4096)
+# The proxy serves this run's client alone: without the run's credential it
+# answers 407, and no policy question is even asked.
+assert b'407 Proxy Authentication Required' in connect('blocked.example:443', authorised=False)
+assert b'403 Forbidden' in connect('blocked.example:443')
+# An allowed name that resolves to this machine is refused: a hostname on the
+# allow-list is a promise about a public service, not a route to loopback.
+assert b'403 Forbidden' in connect('localhost:443')
 def denied(attempt):
     """Whether an egress attempt was refused by the sandbox rather than served."""
     try:
@@ -145,10 +155,11 @@ assert denied(lambda: socket.create_connection(('127.0.0.1', int(sys.argv[1])), 
 assert denied(lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('8.8.8.8', 53)))
 assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect('/var/run/syslog'))
 '''
-            result = run('run', sys.executable, '--proxy-allow', 'api.example.com',
+            result = run('run', sys.executable, '--proxy-allow', 'api.example.com,localhost',
                          '--', '-c', probe, str(port))
             assert result.returncode == 0, result.stderr
-            print('PASS: CONNECT policy denial; direct TCP, UDP and Unix-socket egress blocked')
+            assert 'no proxy credential' in result.stderr and 'blocked addresses' in result.stderr, result.stderr
+            print('PASS: CONNECT needs the run credential; policy and loopback denials; direct TCP, UDP and Unix-socket egress blocked')
     finally:
         server.shutdown()
         server.server_close()
@@ -205,6 +216,26 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
     assert '--allow-net' in result.stderr, result.stderr
     print('PASS: the host environment stays outside unless named; --allow-bind needs --allow-net')
+
+    # What a shell sees. The command's own exit code passes through in every
+    # mode; a run porta refused exits with porta's own code, so a script can
+    # tell "the command failed" from "the command never ran".
+    result = run('run', '/bin/sh', '--proxy-allow', 'api.example.com', '--', '-c', 'exit 9')
+    assert result.returncode == 9, result
+    result = run('run', 'no-such-command-porta-test', '--', 'x')
+    assert result.returncode == 127, result
+    result = run('run', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
+    assert result.returncode == 125, result
+    # `check` says what this host enforces and exits 0 wherever porta runs;
+    # `explain` shows the policy and runs nothing.
+    result = run('check')
+    assert result.returncode == 0 and result.stdout.startswith('porta on '), result
+    result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', '*:443', '--', 'must-not-execute')
+    assert result.returncode == 0 and 'must-not-execute' in result.stdout.splitlines()[0], result
+    assert 'mounts' in result.stdout and '*:443' in result.stdout and result.stdout.count('must-not-execute') == 1, result
+    result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
+    assert result.returncode == 0 and 'would refuse' in result.stdout, result
+    print('PASS: exit codes pass through; refusals exit 125/126/127; check and explain run nothing')
 
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.
@@ -354,6 +385,18 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
             print('PASS: listening needs --allow-bind; the SSH agent needs --allow-unix')
         else:
             print('PASS: listening needs --allow-bind (no SSH agent on this host; --allow-unix not exercised)')
+
+        # A refusal looks exactly like a broken tool until someone says which
+        # flag it would have needed. After a failed run porta reads the
+        # kernel's denial records for this run and says so.
+        result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
+                     'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
+        assert result.returncode == 3, result
+        assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
+        assert f'-v {ungranted}' in result.stderr, result.stderr
+        result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})
+        assert result.returncode == 3 and '[porta]' not in result.stderr, result
+        print('PASS: a failed run says which flag each refusal would have needed')
     elif platform.system() == 'Linux':
         result = run('run', '/bin/sh', '--', '-c', 'exit 7')
         assert result.returncode == 7, result

@@ -96,6 +96,20 @@ fn print_help(topic: String) -> Unit =
       println("  --manifest <path>       Path to manifest.json")
       println("  --profile <name>        Capability profile: ai-agent, worker, full")
     },
+    "explain" => {
+      println("porta explain <command> [options] [-- args...]")
+      println("")
+      println("Print the policy `porta run` would apply with the same options —")
+      println("mounts as the kernel sees them, the network rule, the environment")
+      println("the command gets, and the profile or ruleset — without running it.")
+      println("A run porta would refuse is explained the same way.")
+    },
+    "check" => {
+      println("porta check")
+      println("")
+      println("Say what this host can enforce: which kernel primitives are present,")
+      println("what each one covers, and what porta will therefore refuse here.")
+    },
     "ps" => {
       println("porta ps")
       println("")
@@ -115,6 +129,8 @@ fn print_help(topic: String) -> Unit =
       println("  agent-resume  Continue a recorded WASM run")
       println("  agent-replay  Verify a completed run without external operations")
       println("  run           Execute WASM or native command")
+      println("  explain       Show the policy a run would apply, without running it")
+      println("  check         Show what this host can enforce")
       println("  serve         Start MCP server")
       println("")
       println("Development:")

@@ -251,6 +251,8 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `porta agent-resume <agent.toml> <journal>` | 記録済みの実行を継続 |
 | `porta agent-replay <agent.toml> <journal>` | 完了した実行をオフラインで検証 |
 | `porta run <target>` | WASM (.wasm) またはネイティブコマンドを実行 |
+| `porta explain <command> [options]` | 同じオプションで `run` が適用するポリシーを表示する。何も実行しない |
+| `porta check` | このホストで強制できるもの、porta がここで拒否するものを表示する |
 | `porta run -d <agent.wasm>` | WASM をバックグラウンドデーモンとして実行 |
 | `porta serve <agent.wasm>` | stdio で MCP サーバを起動 |
 
@@ -297,6 +299,38 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `--restart <policy>` | `no`, `on-failure`, `always` |
 | `-d`, `--detach` | バックグラウンドデーモンとして実行 |
 | `--help`, `-h` | 各コマンドのヘルプを表示 |
+
+### 実行が拒否されたとき
+
+拒否は、誰かが「どのフラグがあれば通ったか」を言うまで、壊れたツールと見分けが
+つきません（`Operation not permitted`）。終了コードが 0 以外だった実行の後、porta は
+そのランのカーネル拒否記録を読み（macOS。deny ルールにランごとのタグが付くので、
+他プロセスの拒否は混ざらない）、こう言います:
+
+```
+[porta] the sandbox refused this run 2 times; what each would have needed:
+  file-write-create /Users/me/notes/out.txt
+    → -v /Users/me/notes
+  network-outbound remote:*:443
+    → --allow-net '*:443'
+```
+
+フラグでは開かないもの（認証情報の置き場、他プロセスの引数、`open(1)`）は、
+そう書かれます。`PORTA_DENIALS=always` で終了コード 0 のランでも問い合わせ、
+`PORTA_DENIALS=never` で出さなくなります。Linux ではまだ出ません。Landlock ABI 7 の
+監査記録が必要です。
+
+終了コードでスクリプトは何が起きたか分かります:
+
+| 終了コード | 意味 |
+|---|---|
+| コマンド自身のもの | コマンドは走った。これがその戻り値（シグナルで終わったら 128 + シグナル番号） |
+| 125 | porta が開始前に拒否した — このカーネルで表現できないルール、無いマウント、`--allow-root` 無しの root |
+| 126 | コマンドは存在するが、ポリシーの下では起動できない（strict の読み取り集合の外にあるインタプリタなど） |
+| 127 | コマンドが見つからない |
+
+`porta explain <command> [同じオプション]` は実行せずにポリシーを表示し、
+`porta check` はこのホストで何が強制できるかを表示します。
 
 ## セキュリティモデル
 
