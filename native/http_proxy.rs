@@ -9,9 +9,10 @@
 //! module owns the listener and the policy matching.
 
 use crate::locking::locked;
+use crate::proxy_egress::{basic_credential, dial, mint_token, Dial};
 use crate::proxy_audit::{audit_log, Decision};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -32,36 +33,6 @@ struct ProxyPolicy {
     /// carrying this run's allow-list. The token is minted per run and handed
     /// to the child in its `HTTPS_PROXY`.
     credential: String,
-}
-
-/// A fresh token for one run: 16 random bytes, as hex.
-fn mint_token() -> String {
-    let mut buffer = [0u8; 16];
-    let _ = std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut buffer));
-    buffer.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// `Basic` credentials for `porta:<token>`, as a client puts them on the wire.
-fn basic_credential(token: &str) -> String {
-    format!("Basic {}", base64(format!("porta:{token}").as_bytes()))
-}
-
-/// Standard base64 with padding. Twenty lines here beat a dependency for one
-/// header.
-fn base64(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
-    for chunk in input.chunks(3) {
-        let bits = chunk.iter().fold(0u32, |acc, byte| (acc << 8) | *byte as u32) << (8 * (3 - chunk.len()));
-        for index in 0..4 {
-            if index <= chunk.len() {
-                out.push(ALPHABET[((bits >> (18 - 6 * index)) & 0x3f) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 struct ProxyInstance {
@@ -207,63 +178,6 @@ fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: 
     let inbound = thread::spawn(move || { let _ = copy_bytes(upstream_side, client); });
     let _ = outbound.join();
     let _ = inbound.join();
-}
-
-/// Why a dial did not happen: the host resolved only to addresses the proxy
-/// refuses to reach, or it could not be reached at all.
-enum Dial {
-    Blocked(String),
-    Failed(String),
-}
-
-/// Whether an address is one an allowed hostname must not be able to smuggle
-/// the client to: this machine, the link, a cloud metadata endpoint, a
-/// multicast group. A name on the allow-list is a promise about a public
-/// service; a name that resolves here is a different thing wearing its label.
-/// Private ranges stay reachable — an internal API is a legitimate target.
-fn blocked_address(address: &std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-    match address {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_unspecified()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.octets()[0] == 0
-        }
-        IpAddr::V6(v6) => {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return blocked_address(&IpAddr::V4(mapped));
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                || v6.segments() == [0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254]
-        }
-    }
-}
-
-/// The first address the host resolves to that the proxy may reach,
-/// connected within ten seconds. Resolved once and dialled by address, so
-/// what was checked is what is connected.
-fn dial(host: &str, port: u16) -> Result<TcpStream, Dial> {
-    let addresses: Vec<std::net::SocketAddr> = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| Dial::Failed(format!("resolve failed: {e}")))?
-        .collect();
-    if addresses.is_empty() {
-        return Err(Dial::Failed("resolve failed: no addr".to_string()));
-    }
-    let Some(address) = addresses.iter().find(|address| !blocked_address(&address.ip())) else {
-        return Err(Dial::Blocked(format!(
-            "resolves only to blocked addresses ({}): loopback, link-local, metadata and multicast are never reached by name",
-            addresses.iter().map(|address| address.ip().to_string()).collect::<Vec<_>>().join(", ")
-        )));
-    };
-    TcpStream::connect_timeout(address, Duration::from_secs(10))
-        .map_err(|e| Dial::Failed(format!("upstream connect failed: {e}")))
 }
 
 /// Start the CONNECT proxy on 127.0.0.1:<random>.

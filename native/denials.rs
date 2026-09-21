@@ -77,47 +77,53 @@ const PROTECTED_NAMES: [&str; 14] = [
     "/.gitconfig", "/.mcp.json", "/.npmrc", "/porta.toml", "/.porta.toml", "/.claude/commands", "/.claude/agents",
 ];
 
-/// The flag that would have allowed one denial, or why none would.
+/// The flag that would have allowed one denial, or why none would. Each
+/// operation class has its own helper; this only routes to them.
 pub fn advice(denial: &Denial) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let target = denial.target.as_str();
     let operation = denial.operation.as_str();
     if operation.starts_with("file-write") || operation.starts_with("file-read") {
-        if NEVER_GRANTED_UNDER_HOME.iter().any(|dir| target.starts_with(&format!("{home}/{dir}"))) {
-            return "a credential store; porta never grants it".to_string();
-        }
-        if PROTECTED_NAMES.iter().any(|name| target.contains(name)) {
-            return "protected inside the mount; porta never grants it".to_string();
-        }
-        let dir = grantable_directory(target);
-        return if operation.starts_with("file-write") { format!("-v {dir}") } else { format!("-v {dir}:ro") };
+        return file_advice(operation, &denial.target);
     }
     if operation == "network-outbound" {
-        return match target.strip_prefix("remote:") {
-            Some(endpoint) => match endpoint.rsplit_once(':') {
-                Some((_, port)) => format!("--allow-net '*:{port}'"),
-                None => format!("--allow-net '{endpoint}'"),
-            },
-            None if target.starts_with('/') => format!("--allow-unix {target}"),
-            None => "the network is closed by --allow-net; name the port to reach".to_string(),
-        };
+        return outbound_advice(&denial.target);
     }
     if operation == "network-bind" || operation == "network-inbound" {
-        return match target.rsplit_once(':') {
+        return match denial.target.rsplit_once(':') {
             Some((_, port)) => format!("--allow-bind {port}"),
             None => "--allow-bind <port>".to_string(),
         };
     }
-    if operation == "mach-lookup" {
-        return "a host service porta closes (Keychain, Launch Services, disks); no flag opens it".to_string();
+    match operation {
+        "mach-lookup" => "a host service porta closes (Keychain, Launch Services, disks); no flag opens it".to_string(),
+        "lsopen" => "open(1) would start a program outside the sandbox; porta never grants it".to_string(),
+        op if op.starts_with("sysctl") || op.starts_with("process-info") => "another process's details; porta never grants them".to_string(),
+        _ => "not something a flag grants".to_string(),
     }
-    if operation.starts_with("sysctl") || operation.starts_with("process-info") {
-        return "another process's details; porta never grants them".to_string();
+}
+
+/// The `-v` grant for a denied read or write, or why none is offered.
+fn file_advice(operation: &str, target: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if NEVER_GRANTED_UNDER_HOME.iter().any(|dir| target.starts_with(&format!("{home}/{dir}"))) {
+        return "a credential store; porta never grants it".to_string();
     }
-    if operation == "lsopen" {
-        return "open(1) would start a program outside the sandbox; porta never grants it".to_string();
+    if PROTECTED_NAMES.iter().any(|name| target.contains(name)) {
+        return "protected inside the mount; porta never grants it".to_string();
     }
-    "not something a flag grants".to_string()
+    let dir = grantable_directory(target);
+    if operation.starts_with("file-write") { format!("-v {dir}") } else { format!("-v {dir}:ro") }
+}
+
+/// The network flag for a denied outbound connection.
+fn outbound_advice(target: &str) -> String {
+    match target.strip_prefix("remote:") {
+        Some(endpoint) => match endpoint.rsplit_once(':') {
+            Some((_, port)) => format!("--allow-net '*:{port}'"),
+            None => format!("--allow-net '{endpoint}'"),
+        },
+        None if target.starts_with('/') => format!("--allow-unix {target}"),
+        None => "the network is closed by --allow-net; name the port to reach".to_string(),
+    }
 }
 
 /// The directory a `-v` grant would name for a denied path: the path itself

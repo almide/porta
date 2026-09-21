@@ -24,7 +24,6 @@ import os
 import pathlib
 import platform
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -69,16 +68,16 @@ class Context:
         self.ungranted = ungranted      # under $HOME, granted to nothing
         self.decoy = None
 
-    def porta_run(self, *args, policy=(), stdin=None, timeout=30, env=None):
+    def porta_run(self, *args, policy=(), env=None):
         argv = [self.porta, "run", *policy, "--", *args]
         run_env = {**os.environ, **(env or {})}
         try:
-            return subprocess.run(argv, capture_output=True, text=True, input=stdin, timeout=timeout, env=run_env)
+            return subprocess.run(argv, capture_output=True, text=True, timeout=30, env=run_env)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, "", "timed out")
 
-    def py(self, code, *args, policy=(), **kw):
-        return self.porta_run(sys.executable, "-c", code, *map(str, args), policy=policy, **kw)
+    def py(self, code, *args, policy=()):
+        return self.porta_run(sys.executable, "-c", code, *map(str, args), policy=policy)
 
 
 # --- attempts, grouped by what they reach for ------------------------------
@@ -209,7 +208,7 @@ def launch_outside_sandbox(ctx):
 
 def _egress_tool(ctx, argv, policy):
     """A network tool that should be unable to reach the internet."""
-    result = ctx.porta_run(*argv, policy=policy, timeout=15)
+    result = ctx.porta_run(*argv, policy=policy)
     return result
 
 

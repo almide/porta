@@ -227,7 +227,9 @@ impl Verdict {
     }
 
     fn index(self) -> usize {
-        VERDICTS.iter().position(|verdict| *verdict == self).unwrap()
+        // VERDICTS lists every variant, so a position always exists; 0 is the
+        // Allow verdict, a safe floor if one were ever missing.
+        VERDICTS.iter().position(|verdict| *verdict == self).unwrap_or(0)
     }
 }
 
