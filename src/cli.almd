@@ -1,6 +1,7 @@
 // CLI types, argument parsing, and shared configuration builders
 
 import fs
+import process
 import self.dispatch
 import self.sandbox
 import self.manifest
@@ -30,6 +31,14 @@ type Options = {
   proxy_audit: String,
   read_policy: String,
   allow_root: Bool,
+  // Host variables copied into the child by name. The child's environment
+  // starts empty apart from the few a command needs to run.
+  env_pass: List[String],
+  // Unix sockets the child may connect to although they hold a credential
+  // agent: the SSH agent, gpg-agent, a container runtime.
+  allow_unix: List[String],
+  // TCP ports the child may listen on once --allow-net closes the network.
+  allow_bind: List[String],
 }
 
 fn default_options() -> Options = {
@@ -54,6 +63,9 @@ fn default_options() -> Options = {
   proxy_audit: "",
   read_policy: "open",
   allow_root: false,
+  env_pass: [],
+  allow_unix: [],
+  allow_bind: [],
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -92,6 +104,9 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--proxy-audit" => valued({...opts, proxy_audit: next}),
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
+    "--env-pass" => valued({...opts, env_pass: opts.env_pass + string.split(next, ",")}),
+    "--allow-unix" => valued({...opts, allow_unix: opts.allow_unix + [next]}),
+    "--allow-bind" => valued({...opts, allow_bind: opts.allow_bind + [next]}),
     "-d" => flag({...opts, detach: true}),
     "--detach" => flag({...opts, detach: true}),
     "--_daemon" => valued({...opts, daemon_id: next}),
@@ -140,8 +155,15 @@ effect fn load_env_file(path: String) -> Result[List[dispatch.EnvVar], String] =
 effect fn resolve_env(opts: Options) -> Result[List[dispatch.EnvVar], String] = {
   let file_env = if opts.env_file != "" then load_env_file(opts.env_file)!
     else []
+  // --env-pass copies a host variable by name; one the host does not have
+  // adds nothing rather than an empty value.
+  let passed = opts.env_pass |> list.filter_map((name) =>
+    match process.env(name) {
+      some(val) => some({key: name, val: val}),
+      none => none,
+    })
   // CLI --env overrides file values (dedup: keep last occurrence per key)
-  let combined = file_env + opts.env_vars
+  let combined = passed + file_env + opts.env_vars
   ok(dedup_env(combined, 0, []))
 }
 

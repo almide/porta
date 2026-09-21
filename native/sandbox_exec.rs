@@ -8,7 +8,7 @@ use crate::json_text::escape_json_text;
 #[cfg(target_os = "linux")]
 use crate::landlock_policy::readable_roots;
 #[cfg(target_os = "macos")]
-use crate::sandbox_profile::{build_sandbox_profile_rs, readable_roots};
+use crate::sandbox_profile::{build_sandbox_profile, readable_roots, ProfileRequest};
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
 
@@ -35,6 +35,44 @@ struct SandboxRequest {
     /// Whether the caller has said, in so many words, that running as root is
     /// what they meant. Nothing infers it.
     #[serde(default)] allow_root: bool,
+    /// TCP ports the command may listen on once a network rule is in force.
+    #[serde(rename = "bind", default)] allowed_bind: Vec<String>,
+    /// Unix socket paths the command may connect to although they hold a
+    /// credential agent. Empty by default: the SSH agent, gpg-agent and the
+    /// container runtimes are closed unless named.
+    #[serde(rename = "unix", default)] allowed_unix: Vec<String>,
+}
+
+/// Host variables a child keeps. Everything else the caller's shell holds —
+/// API keys, tokens, the SSH agent's socket — stays outside unless `-e` or
+/// `--env-pass` names it. A locale, a terminal and a path are what a command
+/// needs to start; a credential is not. `TMPDIR` is left out on purpose: the
+/// sandbox's temporary directory is `/tmp`, the one it is granted.
+const INHERITED_ENV: [&str; 10] =
+    ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "LANG", "LANGUAGE", "TZ"];
+
+/// The bind ports a request names, or the entry that is not a port.
+fn bind_ports(entries: &[String]) -> Result<Vec<u16>, String> {
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port > 0)
+                .ok_or_else(|| format!("--allow-bind takes a TCP port, not {entry}"))
+        })
+        .collect()
+}
+
+/// What the child applies to itself between fork and exec. Plain data, so the
+/// closure that carries it into `pre_exec` copies and allocates nothing.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct ChildPolicy {
+    ruleset: i32,
+    /// Which seccomp program closes the channels Landlock cannot see.
+    egress: crate::seccomp::Egress,
 }
 
 fn open_reads() -> String { "open".to_string() }
@@ -93,6 +131,12 @@ impl SandboxRequest {
             request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect::<Result<_, _>>()?;
         if let Some(reason) = missing_command(&request.cmd, &request.cwd) {
             return Err(reason);
+        }
+        bind_ports(&request.allowed_bind)?;
+        if !request.allowed_bind.is_empty() && request.allowed_net.is_empty() {
+            return Err("--allow-bind only means something once --allow-net closes the network; \
+                        with the network open every port can already be bound"
+                .into());
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(reason) = request.unreadable_command() {
@@ -160,7 +204,26 @@ impl SandboxRequest {
     /// here so none of them can apply a policy the other two do not.
     #[cfg(target_os = "macos")]
     fn profile(&self) -> String {
-        build_sandbox_profile_rs(&self.allowed_dirs, &self.allowed_net, &self.read_policy, self.proxy)
+        build_sandbox_profile(&ProfileRequest {
+            allowed_dirs: &self.allowed_dirs,
+            allowed_net: &self.allowed_net,
+            read_policy: &self.read_policy,
+            proxy: self.proxy,
+            bind_ports: &bind_ports(&self.allowed_bind).unwrap_or_default(),
+            allowed_unix: &self.allowed_unix,
+        })
+    }
+
+    /// Which seccomp program this request needs beside Landlock.
+    #[cfg(target_os = "linux")]
+    fn egress(&self) -> crate::seccomp::Egress {
+        if self.proxy {
+            crate::seccomp::Egress::ProxyOnly
+        } else if !self.allowed_net.is_empty() {
+            crate::seccomp::Egress::TcpPorts
+        } else {
+            crate::seccomp::Egress::Open
+        }
     }
 
     /// The Landlock ruleset this request asks for, or why this kernel cannot
@@ -168,31 +231,53 @@ impl SandboxRequest {
     /// the macOS ones come through [`Self::profile`].
     #[cfg(target_os = "linux")]
     fn ruleset(&self) -> Result<crate::landlock::Ruleset, String> {
-        if self.proxy && !crate::seccomp::available() {
-            return Err("proxy mode needs seccomp to deny UDP and Unix-socket egress, \
-                        which this kernel will not accept; porta will not run the command \
-                        with the rest of the policy applied".into());
+        if !crate::seccomp::available() {
+            return Err("this kernel will not accept a seccomp filter, and porta closes the \
+                        syscalls Landlock cannot see with one; porta will not run the command \
+                        with the rest of the policy applied"
+                .into());
         }
-        crate::landlock_policy::ruleset(&self.allowed_dirs, &self.allowed_net, &self.read_policy)
+        // Built here, in the parent, so the child has only to point at it.
+        crate::seccomp::prepare(self.egress());
+        crate::landlock_policy::ruleset(
+            &self.allowed_dirs,
+            &self.allowed_net,
+            &bind_ports(&self.allowed_bind)?,
+            &self.read_policy,
+        )
+    }
+
+    /// Everything the child applies to itself, gathered before the fork.
+    #[cfg(target_os = "linux")]
+    fn child_policy(&self, ruleset: &crate::landlock::Ruleset) -> ChildPolicy {
+        ChildPolicy { ruleset: ruleset.descriptor(), egress: self.egress() }
     }
 
     /// Narrow the calling process to this request's policy. Runs after fork and
-    /// before exec: two Landlock syscalls, then one more when the run claims
-    /// the proxy is its only egress. Nothing here allocates.
+    /// before exec: the Landlock syscalls, then the seccomp filter that closes
+    /// what Landlock cannot see. Nothing here allocates.
     #[cfg(target_os = "linux")]
-    fn restrict_current_process(descriptor: i32, proxy: bool) -> std::io::Result<()> {
-        crate::landlock::Ruleset::restrict_current_process(descriptor)?;
-        // Landlock's network rules reach TCP only. Everything else that could
-        // carry bytes out is closed here, or the proxy is not the only egress.
-        if proxy {
-            crate::seccomp::restrict_current_process()?;
-        }
-        Ok(())
+    fn restrict_current_process(policy: ChildPolicy) -> std::io::Result<()> {
+        crate::landlock::Ruleset::restrict_current_process(policy.ruleset)?;
+        crate::seccomp::restrict_current_process(policy.egress)
     }
 
     /// A command carrying this request's arguments, directory and environment.
+    ///
+    /// The environment starts empty. The host variables a command needs to run
+    /// are copied over by name, then the caller's `-e` values; nothing else of
+    /// the caller's shell crosses into the sandbox.
     fn command(&self, program: &str) -> std::process::Command {
         let mut command = std::process::Command::new(program);
+        command.env_clear();
+        for key in INHERITED_ENV {
+            if let Ok(value) = std::env::var(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, value) in std::env::vars().filter(|(key, _)| key.starts_with("LC_")) {
+            command.env(key, value);
+        }
         if !self.cwd.is_empty() && self.cwd != "." {
             command.current_dir(&self.cwd);
         }
@@ -265,12 +350,11 @@ fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
         Ok(ruleset) => ruleset,
         Err(reason) => return json_error(&reason),
     };
-    let ruleset_fd = ruleset.descriptor();
-    let proxy = request.proxy;
+    let policy = request.child_policy(&ruleset);
     let mut command = request.command(&request.cmd);
     command.args(&request.args);
     unsafe {
-        command.pre_exec(move || SandboxRequest::restrict_current_process(ruleset_fd, proxy));
+        command.pre_exec(move || SandboxRequest::restrict_current_process(policy));
     }
     finish_sandboxed(command.output())
 }
@@ -304,7 +388,7 @@ fn replace_with_sandboxed(request: &SandboxRequest) -> String {
         Ok(ruleset) => ruleset,
         Err(reason) => return json_error(&reason),
     };
-    if let Err(error) = SandboxRequest::restrict_current_process(ruleset.descriptor(), request.proxy) {
+    if let Err(error) = SandboxRequest::restrict_current_process(request.child_policy(&ruleset)) {
         return json_error(&format!("cannot apply the sandbox: {}", error));
     }
     let mut command = request.command(&request.cmd);
@@ -354,15 +438,14 @@ fn supervise_sandboxed(request: &SandboxRequest) -> i64 {
             return -1;
         }
     };
-    let descriptor = ruleset.descriptor();
-    let proxy = request.proxy;
+    let policy = request.child_policy(&ruleset);
     let mut command = request.command(&request.cmd);
     command.args(&request.args);
     command.stdin(std::process::Stdio::inherit());
     command.stdout(std::process::Stdio::inherit());
     command.stderr(std::process::Stdio::inherit());
     unsafe {
-        command.pre_exec(move || SandboxRequest::restrict_current_process(descriptor, proxy));
+        command.pre_exec(move || SandboxRequest::restrict_current_process(policy));
     }
     match command.spawn().and_then(|mut child| child.wait()) {
         Ok(status) => status.code().unwrap_or(-1) as i64,

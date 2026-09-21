@@ -20,6 +20,9 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --proxy-audit <path>    Append JSONL proxy decisions to file")
   println("  --read-policy <mode>    open (default) or strict: confine reads to mounts")
   println("  --allow-root            Run as root anyway (file permissions then protect nothing)")
+  println("  --env-pass <NAME,...>   Copy these host variables in (the rest stay outside)")
+  println("  --allow-unix <path>     Let the command reach this credential socket (repeatable)")
+  println("  --allow-bind <port>     Let the command listen on this port under --allow-net")
 }
 
 fn print_help(topic: String) -> Unit =

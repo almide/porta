@@ -192,9 +192,14 @@ What Porta does **not** do, stated here rather than discovered later:
   your kernel. A kernel that can be exploited is a kernel both sides share.
 - **Read access is broader than write access** unless you pass
   `--read-policy strict`, and even then the system directories a command needs
-  to start stay readable. This is not complete secret isolation.
-- **Proxy filtering controls connection targets, not TLS contents**, and it
-  does not stop a child from listening on a port.
+  to start stay readable. Credential stores under your home are closed in every
+  mode; the rest of what your user can read, a command can read too.
+- **Proxy filtering controls connection targets, not TLS contents.** Listening
+  is closed once `--allow-net` is in force and opened per port with
+  `--allow-bind`; with the network open, so is listening.
+- **Linux protects a mount as a whole.** The repository-hooks and trusted-file
+  protections inside a writable mount are macOS only until Landlock can express
+  a directory minus some of its files.
 - **macOS and Linux only**, and not identically — see
   [Native Restrictions](#native-restrictions) for exactly where they differ.
   Anywhere else, native execution fails closed rather than running unrestricted.
@@ -286,7 +291,10 @@ porta up -- --print "hi"   # Pass arguments to the command
 | `--proxy-deny <hosts>` | Same, denying these hosts |
 | `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
 | `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
-| `--allow-root` | Run as root anyway. Refused by default: `/etc` has to be readable and it holds `shadow`, which only permissions were keeping away |
+| `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
+| `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
+| `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
+| `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -311,9 +319,13 @@ does not show you where.
 
 | Control | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
 |---|---|---|
-| **Write** | denied outside `-v` mounts, `/tmp` | denied outside `-v` mounts, `/tmp`, `/dev` |
-| **Read, default** | `~/.ssh` and `~/.gnupg` denied; everything else readable | not confined |
-| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` |
+| **Write** | denied outside `-v` mounts, `/tmp`, `/dev` | denied outside `-v` mounts, `/tmp`, `/dev` |
+| **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the root's shell rc files, `.gitconfig`, `.mcp.json`, `.npmrc`, `.claude/commands`, `.claude/agents`, `.vscode`, `.idea`, `porta.toml` stay unwritable; the mount root and those paths cannot be renamed away | not yet (Landlock grants a directory whole) |
+| **Read, default** | credential stores denied — `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, Keychains, browser profiles; everything else readable | not confined |
+| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass` | same |
+| **Other processes** | their arguments and environment unreadable (`procargs`, `proc_pidinfo`); signals to them not restricted | `/proc` closed under `strict`; signals and abstract sockets scoped to the sandbox on Landlock ABI 6 |
+| **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
+| **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
 | **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
 | **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |

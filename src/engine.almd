@@ -89,6 +89,8 @@ effect fn run_native_direct(opts: cli.Options) -> Result[Unit, String] = {
     read_policy: opts.read_policy,
     proxy: false,
     allow_root: opts.allow_root,
+    bind: opts.allow_bind,
+    unix: opts.allow_unix,
   }
 
   // exec() replaces this process — terminal is inherited, never returns on success
@@ -130,6 +132,8 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
     read_policy: opts.read_policy,
     proxy: true,
     allow_root: opts.allow_root,
+    bind: opts.allow_bind,
+    unix: opts.allow_unix,
   }
 
   let exit_code = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))

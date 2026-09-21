@@ -136,6 +136,8 @@ effect fn run_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value
     proxy: false,
     // MCP exec runs under whatever porta itself was started as.
     allow_root: true,
+    bind: [],
+    unix: [],
   }
   let result_json = wasm_rt.wt_exec_sandboxed(dispatch.exec_request_json(request))!
   ok(match json.parse(result_json) {

@@ -286,7 +286,10 @@ porta up -- --print "hi"   # コマンドに引数を渡す
 | `--proxy-deny <hosts>` | 同様に、これらのホストを拒否 |
 | `--proxy-audit <path>` | プロキシの判断を JSONL に追記 |
 | `--read-policy <open\|strict>` | `strict` で読み取りを mount とシステムディレクトリだけに限定 (既定は `open`) |
-| `--allow-root` | root でも実行する。既定は拒否 — `/etc` は読めなければならず、そこには `shadow` があり、それを隔てていたのはパーミッションだけです |
+| `--allow-root` | root でも実行する。既定は拒否 — root にとって、このポリシーが頼るファイルパーミッションは何も隔てません |
+| `--env-pass <NAME,...>` | ホストの環境変数をコマンドへコピーする。子の環境は空から始まり、`PATH` `HOME` `USER` `SHELL` `TERM` とロケールだけが渡る。それ以外は `-e` かこのオプションで名指ししない限り渡らない |
+| `--allow-unix <path>` | この Unix ソケットへの接続を許す。SSH エージェント、gpg-agent、コンテナランタイムのソケットは既定で閉じている（複数指定可） |
+| `--allow-bind <port>` | この TCP ポートで listen することを許す。`--allow-net` が効いている間、許可したポートは「届く先」であって「待ち受ける先」ではない（複数指定可） |
 | `--allow-exec <cmd,...>` | 特定コマンドを許可 (カンマ区切り) |
 | `--profile <name>` | ケイパビリティプロファイル: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | WASM の最大命令数 |
@@ -313,9 +316,13 @@ Porta は 2 つのレベルで制限を強制します。
 
 | 制御 | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
 |---|---|---|
-| **書き込み** | `-v` マウントと `/tmp` 以外は拒否 | `-v` マウントと `/tmp`、`/dev` 以外は拒否 |
-| **読み取り、既定** | `~/.ssh` と `~/.gnupg` を拒否、それ以外は読める | 制限なし |
-| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/etc` `/tmp` `/dev` |
+| **書き込み** | `-v` マウントと `/tmp`、`/dev` 以外は拒否 | `-v` マウントと `/tmp`、`/dev` 以外は拒否 |
+| **書き込み可能マウントの内側** | 既存リポジトリの `.git/hooks` と `.git/config`、ルート直下のシェル rc・`.gitconfig`・`.mcp.json`・`.npmrc`・`.claude/commands`・`.claude/agents`・`.vscode`・`.idea`・`porta.toml` は書けない。マウントルートとこれらは rename で退避できない | まだ無い（Landlock はディレクトリを丸ごと許可する） |
+| **読み取り、既定** | 認証情報の置き場を拒否 — `~/.ssh` `~/.gnupg` `~/.aws` `~/.config/gcloud` `~/.docker` `~/.kube` `~/.netrc` `~/.npmrc` `~/.pypirc`、Keychain、ブラウザのプロファイル。それ以外は読める | 制限なし |
+| **読み取り、`--read-policy strict`** | mount ＋ `/usr` `/System` `/bin` `/sbin` `/etc` `/tmp` `/dev` | mount ＋ `/usr` `/lib` `/bin` `/sbin` `/tmp` `/dev`、`/etc` はコマンドの起動に要るファイルだけ（ローダキャッシュ、リゾルバ、トラストストア、`passwd`、`localtime`…）。`shadow`・`sudoers`・ホスト鍵は決して含まず、一覧も取れない |
+| **環境変数** | 空 ＋ `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`、`-e` と `--env-pass` | 同じ |
+| **他プロセス** | 引数と環境は読めない（`procargs`、`proc_pidinfo`）。シグナルは制限なし | `strict` で `/proc` は閉じる。Landlock ABI 6 ではシグナルと抽象ソケットがサンドボックス内に限定される |
+| **ホストの機能** | Keychain、`open(1)`/Launch Services、マウント、ディスクとパケットデバイス、Apple Events、ネットワーク共有エージェントを閉じる | `ptrace` `process_vm_*` `pidfd_getfd` `mount*` `unshare`/`setns`/`clone(CLONE_NEW*)` `bpf` `perf_event_open` `userfaultfd` `keyctl` `io_uring` `clone3` `execveat(AT_EMPTY_PATH)` カーネルモジュール `TIOCSTI` を全モードで seccomp が拒否 |
 | **読み取り専用マウント** | `-v ./data:ro` → 読める、書けない | 同じ |
 | **ポート単位のネットワーク** | `--allow-net '*:443'` | 同じ。Landlock ABI 4 以上が必要 |
 | **ホスト単位のネットワーク** | `--proxy-allow` のみ。`--allow-net` では不可 | 同じ |

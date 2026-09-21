@@ -89,6 +89,20 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
   Linux, proxy mode needs a seccomp filter as well, because Landlock's rules
   reach TCP only; a kernel that will not take the filter refuses the run.
 - A policy rule names the path the kernel resolved, never a symlink to it.
+- The child's environment starts empty. `PATH`, `HOME`, the locale and the
+  terminal cross by name; nothing else of the caller's shell does unless `-e`
+  or `--env-pass` names it. `TMPDIR` is not among them: the sandbox's
+  temporary directory is `/tmp`.
+- A seccomp baseline runs in every mode on Linux, not only proxy mode: the
+  syscalls that reach around a file policy (`ptrace`, `process_vm_*`,
+  `execveat` of a pathless descriptor, `io_uring`, mounts, namespaces) and
+  the socket families a TCP rule cannot see. A kernel that will not take the
+  filter refuses the run.
+- Inside a writable mount on macOS, the operator's repository hooks and
+  config and the files at the root a host tool trusts stay unwritable, and
+  neither they nor the mount root can be renamed away.
+- Credential stores under the home are closed to reads in every mode on macOS,
+  and the Keychain is closed by its mach services as well as its files.
 - `run`, `up`, and MCP execution must share native policy generation.
 - Proxy mode permits only the loopback proxy endpoint, without UDP, Unix
   sockets or any other egress channel — including a ring that would open a
