@@ -102,10 +102,12 @@ const HOST_CONTROL_SERVICES: [&str; 4] = [
 /// container runtimes whose socket is root on the host. Closed to connects
 /// unless `--allow-unix` names one.
 const CREDENTIAL_SOCKET_PATTERNS: [&str; 7] = [
-    // The launchd-managed SSH agent. macOS spells /tmp both bare and under
-    // /private (a symlink), and the connecting process may use either, so the
-    // deny matches both rather than the resolved form alone.
-    r"(^|/)(private/)?tmp/com\.apple\.launchd\.[^/]+/Listeners$",
+    // The launchd-managed SSH agent's socket. launchd puts its per-session
+    // `Listeners` socket under whichever directory it bootstrapped in —
+    // `/tmp`, `/private/tmp`, `/var/run` have all been seen — so the deny keys
+    // on the distinctive `com.apple.launchd.<id>/Listeners` tail, not the
+    // parent, rather than chase each root.
+    r"/com\.apple\.launchd\.[^/]+/Listeners$",
     // A user- or CI-started ssh-agent: $TMPDIR/ssh-XXXX/agent.PID, wherever
     // $TMPDIR points.
     r"/ssh-[^/]+/agent\.[0-9]+$",
