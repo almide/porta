@@ -19,6 +19,26 @@
 
 ---
 
+## What Porta is
+
+Letting an AI agent run commands on your machine puts your keys, tokens and
+network within its reach. Porta runs the command and lets the OS kernel stop
+it — writes, reads, network and sockets enforced by Seatbelt on macOS or
+Landlock + seccomp on Linux, not by a wrapper or a prompt. A restriction the
+kernel cannot express refuses the run rather than weakening it (**fail-closed**).
+
+Shown, not claimed: a published jailbreak
+[corpus](docs/benchmarks/escapes.md) holds 12/12 on macOS and 15/15 on Linux,
+zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
+
+```text
+$ porta run sh -v ./work --read-policy strict --timeout 5 -- …
+  wrote ./work/out.txt              legitimate work goes through
+  read the SSH key       → refused
+  write outside ./work   → refused
+  # a hung command is killed at the deadline → exit 124
+```
+
 ## Who this is for
 
 - **You run a CLI agent** and want it unable to write outside one directory or
