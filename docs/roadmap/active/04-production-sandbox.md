@@ -96,6 +96,16 @@ the end.
 
 ## Status
 
+**v0.6.0 released 2026-09-21** — the closures below, the denial footer,
+`check`/`explain`, exit codes, the escape corpus (published, green on both
+platforms) and the threat model. It shipped through the self-verifying
+release pipeline: built and tested on each platform, published as a
+prerelease, installed and attacked from outside the repository, and only
+then promoted. Three real bugs surfaced on CI's macOS runner and were fixed
+before merge — the credential-socket deny had missed the runner's `/var/run`
+agent path, and `--allow-unix` had not reopened a socket reached through a
+symlink.
+
 - **0.6 shipped** (2026-09-21): everything below under Phase 0.6 except two
   items withdrawn after measurement. `TMPDIR` was granted and passed, and the
   suite caught it opening other tools' scratch state to a strict run; it is
