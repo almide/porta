@@ -118,9 +118,13 @@ symlink.
   read back from the unified log after a failed run), `porta check`, `porta
   explain`, exit codes 125/126/127 with the child's code passed through in
   every mode, and `run` now supervising rather than exec-ing in place so porta
-  is there to report. Still to do: the Linux footer (needs ABI 7 audit records
-  or a `SIGSYS`/exit classifier), `--json`, the post-run save prompt, the
-  `--ldd`-style interpreter hint, and `strict` as the default.
+  is there to report. Supervising also bought `--timeout <secs>`: the command
+  leads its own process group and porta kills the group at the deadline (exit
+  124), so a hung or looping agent is bounded — the one wall-clock limit the
+  native sandbox now has, closing the gap the threat model called out. Still to
+  do: the Linux footer (needs ABI 7 audit records or a `SIGSYS`/exit
+  classifier), `--json`, the post-run save prompt, the `--ldd`-style
+  interpreter hint, and `strict` as the default.
 - **0.8 started** with the parts that need no TLS termination: a per-run proxy
   credential (a CONNECT without it is 407, so the loopback proxy is not an
   open relay for other processes; `NODE_USE_ENV_PROXY=1` is set so Node's

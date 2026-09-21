@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 porta = str(pathlib.Path(sys.argv[1]).resolve())
 
@@ -236,6 +237,32 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('explain', '/bin/echo', '-v', str(root / 'no-such-mount'), '--', 'x')
     assert result.returncode == 0 and 'would refuse' in result.stdout, result
     print('PASS: exit codes pass through; refusals exit 125/126/127; check and explain run nothing')
+
+    # --timeout bounds a native run's wall-clock: a hung command is killed and
+    # reports 124, the code timeout(1) uses. A run that finishes first keeps
+    # its own exit code, and 0 (the default) never kills.
+    started = time.monotonic()
+    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 30')
+    elapsed = time.monotonic() - started
+    assert result.returncode == 124, result
+    assert elapsed < 10, f'timeout did not stop the run promptly: {elapsed:.1f}s'
+    # The command leads its own process group, so a backgrounded child is
+    # killed with it rather than orphaned to run out its sleep. The run prints
+    # the child's pid; after the deadline that pid must be gone.
+    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 300 & echo $!; wait')
+    assert result.returncode == 124, result
+    child = int(result.stdout.split()[0])
+    time.sleep(1)
+    try:
+        os.kill(child, 0)
+        raise AssertionError(f'a backgrounded child ({child}) outlived the timeout')
+    except ProcessLookupError:
+        pass
+    result = run('run', '/bin/sh', '--timeout', '5', '--', '-c', 'exit 7')
+    assert result.returncode == 7, result
+    result = run('explain', '/bin/sh', '--timeout', '3', '--', '-c', 'x')
+    assert result.returncode == 0 and 'time limit' in result.stdout and '3s' in result.stdout, result
+    print('PASS: --timeout kills a hung run (124) with its whole group; a run that finishes keeps its code')
 
     # A listener the tests below try to reach or to bind, and a helper that
     # says whether a bind attempt was refused by policy.

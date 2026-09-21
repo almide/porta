@@ -27,6 +27,7 @@ type PortaConfig = {
   env_pass: List[String],
   allow_unix: List[String],
   allow_bind: List[String],
+  timeout: Int,
 }
 
 fn default_porta_config() -> PortaConfig = {
@@ -49,6 +50,7 @@ fn default_porta_config() -> PortaConfig = {
   env_pass: [],
   allow_unix: [],
   allow_bind: [],
+  timeout: 0,
 }
 
 effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
@@ -80,6 +82,7 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
       env_pass: strings_at(sb, "env-pass", []),
       allow_unix: strings_at(sb, "unix", []),
       allow_bind: strings_at(sb, "bind", []),
+      timeout: json.get_int(sb, "timeout") ?? 0,
     })
   }
 }

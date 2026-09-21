@@ -39,6 +39,9 @@ type Options = {
   allow_unix: List[String],
   // TCP ports the child may listen on once --allow-net closes the network.
   allow_bind: List[String],
+  // Seconds the command may run before porta kills it and everything it
+  // started. 0 means no limit.
+  timeout: Int,
 }
 
 fn default_options() -> Options = {
@@ -66,6 +69,7 @@ fn default_options() -> Options = {
   env_pass: [],
   allow_unix: [],
   allow_bind: [],
+  timeout: 0,
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -107,6 +111,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--env-pass" => valued({...opts, env_pass: opts.env_pass + string.split(next, ",")}),
     "--allow-unix" => valued({...opts, allow_unix: opts.allow_unix + [next]}),
     "--allow-bind" => valued({...opts, allow_bind: opts.allow_bind + [next]}),
+    "--timeout" => valued({...opts, timeout: util.parse_int(next)}),
     "-d" => flag({...opts, detach: true}),
     "--detach" => flag({...opts, detach: true}),
     "--_daemon" => valued({...opts, daemon_id: next}),

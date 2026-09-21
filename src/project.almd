@@ -31,6 +31,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
         env_pass: cfg.env_pass,
         allow_unix: cfg.allow_unix,
         allow_bind: cfg.allow_bind,
+        timeout: cfg.timeout,
         wasm_args: all_args,
       }
       engine.run_native(opts)

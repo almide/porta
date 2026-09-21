@@ -95,6 +95,7 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
     allow_root: opts.allow_root,
     bind: opts.allow_bind,
     unix: opts.allow_unix,
+    timeout: opts.timeout,
   }
   ok(request)
 }

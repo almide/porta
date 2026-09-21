@@ -41,9 +41,45 @@ struct SandboxRequest {
     /// credential agent. Empty by default: the SSH agent, gpg-agent and the
     /// container runtimes are closed unless named.
     #[serde(rename = "unix", default)] allowed_unix: Vec<String>,
+    /// Seconds the command may run before porta kills it and everything it
+    /// started. 0 means no limit. A native command is a process on the host,
+    /// so nothing else bounds its wall-clock; an agent that hangs or loops
+    /// runs forever without this.
+    #[serde(default)] timeout: u64,
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
+}
+
+/// The exit code porta reports when a run hit its `--timeout`, the same code
+/// `timeout(1)` uses.
+const TIMED_OUT: i64 = 124;
+
+/// Waits for a supervised child, killing it and everything it started once the
+/// deadline passes. The child leads its own process group (the caller set
+/// that before spawning), so one signal to the negated pid reaches the whole
+/// tree, not just the shell porta launched. `timeout` of 0 waits without a
+/// limit.
+fn wait_within(mut child: std::process::Child, timeout: u64) -> std::io::Result<i64> {
+    if timeout == 0 {
+        return child.wait().map(exit_code);
+    }
+    let group = child.id() as libc::pid_t;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(exit_code(status));
+        }
+        if std::time::Instant::now() >= deadline {
+            // Negated pid: the whole process group, so a shell's children die
+            // with it. SIGKILL because a run past its deadline has already had
+            // its time; then reap so no zombie is left.
+            unsafe { libc::kill(-group, libc::SIGKILL) };
+            let _ = child.wait();
+            return Ok(TIMED_OUT);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// A tag for one run: the pid and the clock, which no two runs on one host
@@ -247,6 +283,10 @@ impl SandboxRequest {
         if !self.allowed_unix.is_empty() {
             text.push_str(&format!("unix sockets {}\n", self.allowed_unix.join(", ")));
         }
+        text.push_str(&format!(
+            "time limit   {}\n",
+            if self.timeout == 0 { "none".to_string() } else { format!("{}s, then killed with its process group", self.timeout) }
+        ));
         let mut inherited: Vec<&str> = INHERITED_ENV.iter().copied().filter(|key| std::env::var_os(key).is_some()).collect();
         let named: Vec<&str> = self.env_vars.iter().map(|(key, _)| key.as_str()).collect();
         inherited.extend(named.iter().copied());
@@ -498,11 +538,16 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     command.stdin(std::process::Stdio::inherit());
     command.stdout(std::process::Stdio::inherit());
     command.stderr(std::process::Stdio::inherit());
-    let status = command
+    // The child leads its own process group so `--timeout` can signal the
+    // whole tree, not just the sandbox-exec shell in front of the command.
+    command.process_group(0);
+    let code = command
         .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|error| format!("cannot start the command: {error}"))?;
-    let code = exit_code(status);
+        .map_err(|error| format!("cannot start the command: {error}"))
+        .and_then(|child| {
+            wait_within(child, request.timeout)
+                .map_err(|error| format!("waiting for the command failed: {error}"))
+        })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
     Ok(code)
 }
@@ -590,11 +635,17 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     unsafe {
         command.pre_exec(move || SandboxRequest::restrict_current_process(policy));
     }
-    let status = command
+    // Its own process group, so `--timeout` reaches everything the command
+    // starts, not only the command itself.
+    command.process_group(0);
+    let code = command
         .spawn()
-        .and_then(|mut child| child.wait())
-        .map_err(|error| format!("cannot start the command under the sandbox: {error}"))?;
-    Ok(exit_code(status))
+        .map_err(|error| format!("cannot start the command under the sandbox: {error}"))
+        .and_then(|child| {
+            wait_within(child, request.timeout)
+                .map_err(|error| format!("waiting for the command failed: {error}"))
+        })?;
+    Ok(code)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
