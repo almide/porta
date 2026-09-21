@@ -393,7 +393,19 @@ fn socket_rules(allowed_unix: &[String]) -> String {
         rules.push_str(&format!("(deny network-outbound (regex #\"{}\"))\n", pattern));
     }
     for path in allowed_unix {
+        // The kernel matches against the path it resolved, so a socket reached
+        // through a symlinked directory — `/var/run` is `/private/var/run` —
+        // must be allowed by its resolved name, or the allow never fires and
+        // the credential-socket deny above stands. Both spellings are emitted:
+        // the resolved one for the match, the given one in case the socket
+        // does not exist yet at profile-build time.
         rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", sandbox_literal(path)));
+        if let Ok(resolved) = std::fs::canonicalize(path) {
+            let resolved = resolved.to_string_lossy();
+            if resolved != *path {
+                rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", sandbox_literal(&resolved)));
+            }
+        }
     }
     rules
 }
