@@ -2,8 +2,8 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-21 on the develop branch ahead of the next release,
-macOS arm64 locally and Linux aarch64 in a container. A row is **held** when
+this run is 2026-09-21, porta 0.6.1, macOS arm64 locally and Linux aarch64 in a
+container. A row is **held** when
 the escape was stopped, **ESCAPED** when it got through (a finding, and a red
 build), and — when the platform cannot host the attempt. Published whatever
 the result: a corpus that hid its losses would not be evidence.
