@@ -1,21 +1,23 @@
 <!-- description: Escape attempts run against the porta binary, with results -->
 # Escape corpus results
 
-`scripts/escapes.py` run against the release binary. Regenerated per
-release; this run is 2026-09-21, porta 0.6.0, on GitHub's arm64 runners.
-A row is **held** when the escape was stopped, **ESCAPED** when it got
-through (a finding, and a red build), and — when the platform cannot host
-the attempt. Published whatever the result: a corpus that hid its losses
-would not be evidence.
+`scripts/escapes.py` run against the built binary. Regenerated per release;
+this run is 2026-09-21 on the develop branch ahead of the next release,
+macOS arm64 locally and Linux aarch64 in a container. A row is **held** when
+the escape was stopped, **ESCAPED** when it got through (a finding, and a red
+build), and — when the platform cannot host the attempt. Published whatever
+the result: a corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 9 tried, 0 escaped
-- **Linux arm64**: 12 tried, 0 escaped
+- **macOS arm64**: 11 tried, 0 escaped
+- **Linux arm64**: 14 tried, 0 escaped
 
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
 | write outside every mount | filesystem | held | held |
 | rename the mount root away | filesystem | held | — |
 | write a git hook inside a mount | filesystem | held | — |
+| write through a symlink pointing outside the mount | filesystem | held | held |
+| read a secret through a symlink under strict | credentials | held | held |
 | read an SSH private key | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
