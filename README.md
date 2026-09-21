@@ -36,9 +36,13 @@ runtime and a set of restrictions, not an agent.
 curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-A single binary for macOS (Apple silicon) and Linux (x86-64), checked against
-its published SHA-256 before it is installed. `PORTA_RELEASE_TAG` picks a
-version; the first argument picks the directory.
+A single binary for macOS on Apple silicon and Linux on x86-64 and arm64,
+checked against its published SHA-256 before it is installed.
+`PORTA_RELEASE_TAG` picks a version; the first argument picks the directory.
+
+**An Intel Mac builds from source.** porta does not publish a binary no
+machine has executed, and GitHub's Intel macOS runner could not be obtained to
+build and test one.
 
 Every released binary is the one that passed the integration suite on the
 machine that built it — the release workflow runs the suite against the file it

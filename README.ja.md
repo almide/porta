@@ -37,9 +37,13 @@
 curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-macOS (Apple silicon) と Linux (x86-64) 向けの単一バイナリです。公開された
-SHA-256 と照合してからインストールします。バージョンは `PORTA_RELEASE_TAG`、
-インストール先は第1引数で指定できます。
+macOS (Apple silicon) と Linux (x86-64 / arm64) 向けの単一バイナリです。
+公開された SHA-256 と照合してからインストールします。バージョンは
+`PORTA_RELEASE_TAG`、インストール先は第1引数で指定できます。
+
+**Intel Mac はソースからビルドしてください。** porta は、どのマシンでも実行
+されていないバイナリを公開しません。GitHub の Intel macOS ランナーが確保
+できず、ビルドして検証することができませんでした。
 
 公開されるバイナリは、**それをビルドしたマシン上で integration スイートを
 通過したそのファイル**です。リリースワークフローは、これから公開するファイル
