@@ -13,8 +13,18 @@ tag="${1:?usage: verify_release.sh <tag>}"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
+# Listed over the same HTTP a user's install would use, not through gh: this
+# has to work for somebody who has the script and nothing else — no checkout,
+# no gh, no token. It failed exactly that way the first time it ran outside a
+# repository.
 echo "== assets published under $tag"
-gh release view "$tag" --json assets -q '.assets[].name' | sed 's/^/   /'
+curl -fsSL "https://api.github.com/repos/almide/porta/releases/tags/$tag" \
+  | python3 -c 'import json,sys
+assets = json.load(sys.stdin).get("assets", [])
+if not assets:
+    raise SystemExit("no assets published under this tag")
+for a in assets:
+    print("   " + a["name"] + "  " + str(a["size"]) + " bytes")' 
 
 echo "== installing from the published release, as a user would"
 PORTA_RELEASE_TAG="$tag" bash "$(dirname "$0")/install.sh" "$scratch/bin"
@@ -31,11 +41,22 @@ echo "== it enforces, and still does the job"
 work="$scratch/work"
 mkdir -p "$work"
 
+# The target for the write that must fail cannot be under /tmp or /dev: porta
+# makes those writable on every run by design, so a write landing there proves
+# nothing about the binary. `mktemp -d` returns /tmp/... on Linux, which is how
+# this check passed on macOS — where it returns /var/folders/... — and failed a
+# working Linux build. A home directory is granted to nothing unless mounted.
+ungranted=$(mktemp -d "${HOME:-/nonexistent}/porta-verify-XXXXXX") || {
+  echo "   cannot create a directory outside the always-writable roots" >&2
+  exit 1
+}
+trap 'rm -rf "$scratch" "$ungranted"' EXIT
+
 # Both halves, because either alone passes a binary that is useless. A refusal
 # on its own is what a porta that cannot run anything looks like; a successful
 # write on its own is what a porta that enforces nothing looks like.
-"$scratch/bin/porta" run /bin/sh -v "$work" -- -c 'echo x > "$1"' sh "$scratch/escape" 2>/dev/null || true
-if [ -e "$scratch/escape" ]; then
+"$scratch/bin/porta" run /bin/sh -v "$work" -- -c 'echo x > "$1"' sh "$ungranted/escape" 2>/dev/null || true
+if [ -e "$ungranted/escape" ]; then
   echo "   a write outside every mount landed; this binary enforces nothing" >&2
   exit 1
 fi
