@@ -32,6 +32,9 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
         allow_unix: cfg.allow_unix,
         allow_bind: cfg.allow_bind,
         timeout: cfg.timeout,
+        max_cpu: cfg.max_cpu,
+        max_procs: cfg.max_procs,
+        max_file_size: cfg.max_file_size,
         wasm_args: all_args,
       }
       engine.run_native(opts)

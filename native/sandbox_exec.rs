@@ -4,6 +4,7 @@
 //! this process, or supervise a child — and each platform applies what it can
 //! express, refusing the run when it cannot express a requested rule.
 
+use crate::ceilings::{apply_ceilings, unsettable_ceiling, wait_within, Ceiling, MIB};
 use crate::json_text::escape_json_text;
 #[cfg(target_os = "linux")]
 use crate::landlock_policy::readable_roots;
@@ -46,40 +47,17 @@ struct SandboxRequest {
     /// so nothing else bounds its wall-clock; an agent that hangs or loops
     /// runs forever without this.
     #[serde(default)] timeout: u64,
+    /// Resource ceilings set with `setrlimit` before exec and inherited by
+    /// everything the command starts. Each is per process, not per run: a tree
+    /// of processes gets the budget once each, and `timeout` bounds the whole.
+    /// 0 leaves one unset. CPU is in seconds; the file size is in MiB; the
+    /// process count is the kernel's, which counts every process of this user.
+    #[serde(default)] max_cpu: u64,
+    #[serde(default)] max_procs: u64,
+    #[serde(default)] max_file_size: u64,
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
-}
-
-/// The exit code porta reports when a run hit its `--timeout`, the same code
-/// `timeout(1)` uses.
-const TIMED_OUT: i64 = 124;
-
-/// Waits for a supervised child, killing it and everything it started once the
-/// deadline passes. The child leads its own process group (the caller set
-/// that before spawning), so one signal to the negated pid reaches the whole
-/// tree, not just the shell porta launched. `timeout` of 0 waits without a
-/// limit.
-fn wait_within(mut child: std::process::Child, timeout: u64) -> std::io::Result<i64> {
-    if timeout == 0 {
-        return child.wait().map(exit_code);
-    }
-    let group = child.id() as libc::pid_t;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(exit_code(status));
-        }
-        if std::time::Instant::now() >= deadline {
-            // Negated pid: the whole process group, so a shell's children die
-            // with it. SIGKILL because a run past its deadline has already had
-            // its time; then reap so no zombie is left.
-            unsafe { libc::kill(-group, libc::SIGKILL) };
-            let _ = child.wait();
-            return Ok(TIMED_OUT);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
 }
 
 /// A tag for one run: the pid and the clock, which no two runs on one host
@@ -190,7 +168,39 @@ impl SandboxRequest {
         if let Some(reason) = request.unreadable_command() {
             return Err(reason);
         }
+        if let Some(reason) = unsettable_ceiling(&request.ceilings()) {
+            return Err(reason);
+        }
         Ok(request)
+    }
+
+    /// The ceilings this request sets, in the kernel's units. The file size
+    /// is taken in MiB because a byte count is not a number anyone types.
+    fn ceilings(&self) -> Vec<Ceiling> {
+        [
+            (libc::RLIMIT_CPU as libc::c_int, self.max_cpu, "--max-cpu"),
+            (libc::RLIMIT_NPROC as libc::c_int, self.max_procs, "--max-procs"),
+            (libc::RLIMIT_FSIZE as libc::c_int, self.max_file_size.saturating_mul(MIB), "--max-file-size"),
+        ]
+        .into_iter()
+        .filter(|(_, value, _)| *value > 0)
+        .map(|(resource, value, flag)| Ceiling { resource, value, flag })
+        .collect()
+    }
+
+    /// The ceilings in words, for `explain`.
+    fn explain_ceilings(&self) -> String {
+        let mut parts = Vec::new();
+        if self.max_cpu > 0 {
+            parts.push(format!("{}s CPU per process", self.max_cpu));
+        }
+        if self.max_procs > 0 {
+            parts.push(format!("{} processes for this user", self.max_procs));
+        }
+        if self.max_file_size > 0 {
+            parts.push(format!("files up to {} MiB", self.max_file_size));
+        }
+        if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
     }
 
     /// Why this run is refused for being root, if it is.
@@ -287,6 +297,7 @@ impl SandboxRequest {
             "time limit   {}\n",
             if self.timeout == 0 { "none".to_string() } else { format!("{}s, then killed with its process group", self.timeout) }
         ));
+        text.push_str(&format!("resources    {}\n", self.explain_ceilings()));
         let mut inherited: Vec<&str> = INHERITED_ENV.iter().copied().filter(|key| std::env::var_os(key).is_some()).collect();
         let named: Vec<&str> = self.env_vars.iter().map(|(key, _)| key.as_str()).collect();
         inherited.extend(named.iter().copied());
@@ -316,7 +327,8 @@ impl SandboxRequest {
         format!(
             "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
 \"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
-\"timeout_seconds\":{},\"enforcement\":{}}}",
+\"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{}}},\
+\"enforcement\":{}}}",
             quoted(&self.cmd),
             array(&self.args),
             quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
@@ -327,6 +339,9 @@ impl SandboxRequest {
             array(&self.allowed_bind),
             array(&self.allowed_unix),
             self.timeout,
+            self.max_cpu,
+            self.max_procs,
+            self.max_file_size,
             quoted(self.enforcement_backend()),
         )
     }
@@ -422,9 +437,20 @@ impl SandboxRequest {
     /// The environment starts empty. The host variables a command needs to run
     /// are copied over by name, then the caller's `-e` values; nothing else of
     /// the caller's shell crosses into the sandbox.
+    ///
+    /// The resource ceilings are set here too, after the fork and before the
+    /// exec, so every path that runs a command — spawned, supervised or
+    /// replacing porta itself — applies them the same way.
     fn command(&self, program: &str) -> std::process::Command {
+        use std::os::unix::process::CommandExt;
         let mut command = std::process::Command::new(program);
         command.env_clear();
+        let ceilings = self.ceilings();
+        if !ceilings.is_empty() {
+            unsafe {
+                command.pre_exec(move || apply_ceilings(&ceilings));
+            }
+        }
         for key in INHERITED_ENV {
             if let Ok(value) = std::env::var(key) {
                 command.env(key, value);
@@ -605,21 +631,11 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout)
+            wait_within(child, request.timeout, request.max_cpu)
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
     Ok(code)
-}
-
-/// A child's exit code, or 128 plus the signal that ended it, as a shell
-/// would report.
-fn exit_code(status: std::process::ExitStatus) -> i64 {
-    use std::os::unix::process::ExitStatusExt;
-    match status.code() {
-        Some(code) => code as i64,
-        None => 128 + status.signal().unwrap_or(0) as i64,
-    }
 }
 
 /// After a run, say what the sandbox refused and what would have allowed it.
@@ -702,7 +718,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command under the sandbox: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout)
+            wait_within(child, request.timeout, request.max_cpu)
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     Ok(code)

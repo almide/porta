@@ -28,6 +28,9 @@ type PortaConfig = {
   allow_unix: List[String],
   allow_bind: List[String],
   timeout: Int,
+  max_cpu: Int,
+  max_procs: Int,
+  max_file_size: Int,
 }
 
 fn default_porta_config() -> PortaConfig = {
@@ -51,6 +54,9 @@ fn default_porta_config() -> PortaConfig = {
   allow_unix: [],
   allow_bind: [],
   timeout: 0,
+  max_cpu: 0,
+  max_procs: 0,
+  max_file_size: 0,
 }
 
 effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
@@ -83,6 +89,9 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
       allow_unix: strings_at(sb, "unix", []),
       allow_bind: strings_at(sb, "bind", []),
       timeout: json.get_int(sb, "timeout") ?? 0,
+      max_cpu: json.get_int(sb, "max-cpu") ?? 0,
+      max_procs: json.get_int(sb, "max-procs") ?? 0,
+      max_file_size: json.get_int(sb, "max-file-size") ?? 0,
     })
   }
 }

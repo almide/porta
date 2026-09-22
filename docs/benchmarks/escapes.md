@@ -2,14 +2,27 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-21, porta 0.6.1, macOS arm64 locally and Linux aarch64 in a
-container. A row is **held** when
-the escape was stopped, **ESCAPED** when it got through (a finding, and a red
-build), and — when the platform cannot host the attempt. Published whatever
-the result: a corpus that hid its losses would not be evidence.
+this run is 2026-09-22, porta 0.6.1 plus the resource ceilings, macOS arm64
+locally and Linux x86_64 on the CI runner (run 35703962916). A row is **held** when the escape was
+stopped, **ESCAPED** when it got through (a finding, and a red build), and —
+when the platform cannot host the attempt. Published whatever the result: a
+corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 13 tried, 0 escaped
-- **Linux arm64**: 16 tried, 0 escaped
+- **macOS arm64**: 17 tried, 0 escaped
+- **Linux x86_64**: 20 tried, 0 escaped
+
+## A correction to earlier runs
+
+The runs published before this one (13/13 and 16/16, 2026-09-21) were not
+evidence. The harness passed the target after `--`, porta answered with its
+usage text and exit 0, and nothing ran; every row judged an escape by its
+absence therefore passed. Found while adding the resource rows, whose positive
+signals did not appear. The harness now puts the target where porta reads it,
+treats a usage reply as a fatal harness error rather than a verdict, and
+begins with a canary run that must write into the granted workspace and say
+so before any row is scored. The numbers above are from that harness; the
+earlier ones happened to match, which is luck, not proof, and is recorded here
+so the claim and its evidence are not confused again.
 
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
@@ -33,15 +46,24 @@ the result: a corpus that hid its losses would not be evidence.
 | enter a new user namespace | processes | — | held |
 | reach the network over MPTCP | network | — | held |
 | open a raw socket | network | held | held |
+| fork past `--max-procs` | resources | held | held |
+| grow a file past `--max-file-size` | resources | held | held |
+| burn CPU past `--max-cpu` | resources | held | held |
+| ignore SIGXCPU and keep burning | resources | held | held |
 
 Where a row is — on one platform, the escape is not expressible there:
 the mount-internal and Keychain protections are macOS-only (Landlock grants
 a directory whole), and the syscall-level attempts are Linux-only (the macOS
 profile closes those channels differently, tested in the integration suite).
+The resource rows are kernel rlimits and hold on both; on Linux the one that
+ignores SIGXCPU ends in the kernel's SIGKILL at the hard limit (exit 137), on
+macOS in porta's own kill (exit 152). The SIGXCPU row exists because
+the first macOS run of the CPU ceiling showed a program that ignores the signal
+running on: macOS never follows SIGXCPU with SIGKILL as Linux does, so porta's
+supervisor now measures the process group's CPU and kills it at the ceiling.
 
 Run it yourself against any build:
 
 ```bash
 python3 scripts/escapes.py "$(command -v porta)"
 ```
-

@@ -28,12 +28,26 @@ use crate::sandbox_profile::message_tag;
 /// Reads the unified log through `log show`, the only interface it has; the
 /// query takes under a second, and a run that produced no denial pays it
 /// only when it failed.
+///
+/// The log is written asynchronously, so a run that failed at once can exit
+/// before its own denial is queryable. An empty answer is asked again, twice,
+/// a little later; a run with nothing to report pays about a second more.
 pub fn collect(run_tag: &str, since: &str) -> Vec<Denial> {
-    let output = std::process::Command::new("/usr/bin/log")
-        .args(["show", "--start", since, "--style", "compact", "--predicate", "senderImagePath CONTAINS \"Sandbox\""])
-        .output();
-    let Ok(output) = output else { return Vec::new() };
-    parse(&String::from_utf8_lossy(&output.stdout), &message_tag(run_tag))
+    let tag = message_tag(run_tag);
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        let output = std::process::Command::new("/usr/bin/log")
+            .args(["show", "--start", since, "--style", "compact", "--predicate", "senderImagePath CONTAINS \"Sandbox\""])
+            .output();
+        let Ok(output) = output else { return Vec::new() };
+        let denials = parse(&String::from_utf8_lossy(&output.stdout), &tag);
+        if !denials.is_empty() {
+            return denials;
+        }
+    }
+    Vec::new()
 }
 
 /// Picks this run's denials out of the log text. A denial line reads

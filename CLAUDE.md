@@ -17,6 +17,7 @@ as a definition does.
 |---|---|
 | `wasmtime_bridge.rs` + `wasmtime_bridge/run.rs` | WASM instance lifecycle and the FFI surface |
 | `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
+| `ceilings.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU ceiling |
 | `denials.rs`, `sandbox_check.rs` | what the kernel refused during a run and which flag would have allowed it (macOS, from the unified log via a per-run tag on every deny rule); what this host can enforce, for `porta check` |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
