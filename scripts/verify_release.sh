@@ -16,9 +16,14 @@ trap 'rm -rf "$scratch"' EXIT
 # Listed over the same HTTP a user's install would use, not through gh: this
 # has to work for somebody who has the script and nothing else — no checkout,
 # no gh, no token. It failed exactly that way the first time it ran outside a
-# repository.
+# repository. A token is used only when one is already in the environment:
+# from a CI runner the unauthenticated API answers 403 once its shared address
+# has spent the hour's quota, which is what failed the v0.6.2 macOS verify.
 echo "== assets published under $tag"
-curl -fsSL "https://api.github.com/repos/almide/porta/releases/tags/$tag" \
+auth=()
+if [ -n "${GH_TOKEN:-}" ]; then auth=(-H "Authorization: Bearer $GH_TOKEN"); fi
+curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors "${auth[@]}" \
+  "https://api.github.com/repos/almide/porta/releases/tags/$tag" \
   | python3 -c 'import json,sys
 assets = json.load(sys.stdin).get("assets", [])
 if not assets:
