@@ -8,7 +8,7 @@ stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 17 tried, 0 escaped
+- **macOS arm64**: 18 tried, 0 escaped
 - **Linux aarch64** (a systemd container with a user manager, 2026-09-23): 21 tried, 0 escaped
 - **Linux x86_64** (the CI runner, no user manager, so the memory row is not
   hosted there): 20 tried, 0 escaped
@@ -61,15 +61,16 @@ on anything porta prints.
 | grow a file past `--max-file-size` | resources | held | held |
 | burn CPU past `--max-cpu` | resources | held | held |
 | ignore SIGXCPU and keep burning | resources | held | held |
-| allocate past `--max-memory-mb` | resources | — | held |
+| allocate past `--max-memory-mb` | resources | held | held |
 
 Where a row is — on one platform, the escape is not expressible there:
 the mount-internal and Keychain protections are macOS-only (Landlock grants
 a directory whole), and the syscall-level attempts are Linux-only (the macOS
 profile closes those channels differently, tested in the integration suite).
-The memory row is a cgroup v2 ceiling placed through the systemd user
-manager, so it is Linux-only and needs a user manager; where there is none the
-row is not hosted and the flag is refused. The other resource rows are kernel
+The memory row is a cgroup v2 ceiling placed through the systemd user manager
+on Linux, which needs a user manager (where there is none the row is not
+hosted and the flag is refused), and on macOS porta's own supervisor ending
+the group at its footprint. The other resource rows are kernel
 rlimits and hold on both; on Linux the one that
 ignores SIGXCPU ends in the kernel's SIGKILL at the hard limit (exit 137), on
 macOS in porta's own kill (exit 152). The SIGXCPU row exists because
