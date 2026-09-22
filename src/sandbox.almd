@@ -105,6 +105,48 @@ fn required_capability(wasi_name: String) -> Option[Capability] =
     _ => none,
   }
 
+// --- WASI 0.2 interface → required capability ---
+//
+// A component imports interfaces, not functions: `wasi:cli/stdout@0.2.3` is
+// one import. The version is dropped before matching, and an interface this
+// table does not know is refused rather than waved through. Filesystem
+// interfaces carry reads and writes in one, so they ask for `fs` and
+// `fs.write` both.
+
+fn interface_name(imported: String) -> String =
+  list.get(string.split(imported, "@"), 0) ?? imported
+
+fn required_interface_capabilities(iface: String) -> Option[List[Capability]] =
+  if string.starts_with(iface, "wasi:sockets/") or string.starts_with(iface, "wasi:http/") then some([CapNet])
+  else if string.starts_with(iface, "wasi:filesystem/") then some([CapFS, CapFSWrite])
+  else if string.starts_with(iface, "wasi:clocks/") then some([CapClock])
+  else if string.starts_with(iface, "wasi:random/") then some([CapRandom])
+  else if string.starts_with(iface, "wasi:io/") then some([CapIO])
+  else match iface {
+    "wasi:cli/stdin" => some([CapIO]),
+    "wasi:cli/stdout" => some([CapIO]),
+    "wasi:cli/stderr" => some([CapIO]),
+    "wasi:cli/types" => some([CapIO]),
+    "wasi:cli/terminal-input" => some([CapIO]),
+    "wasi:cli/terminal-output" => some([CapIO]),
+    "wasi:cli/terminal-stdin" => some([CapIO]),
+    "wasi:cli/terminal-stdout" => some([CapIO]),
+    "wasi:cli/terminal-stderr" => some([CapIO]),
+    "wasi:cli/exit" => some([CapProcess]),
+    "wasi:cli/environment" => some([CapProcess, CapEnv]),
+    _ => none,
+  }
+
+fn check_interface(set: CapabilitySet, imported: String) -> Result[Unit, String] =
+  match required_interface_capabilities(interface_name(imported)) {
+    none => err("unsupported host import: ${imported}; porta knows the wasi:* interfaces only"),
+    some(caps) =>
+      match caps |> list.find((cap) => not has_capability(set, cap)) {
+        none => ok(()),
+        some(cap) => err("import validation failed: ${imported} — capability denied: requires '${cap_name(cap)}'"),
+      }
+  }
+
 // --- Runtime check ---
 
 fn check_wasi_call(set: CapabilitySet, wasi_name: String) -> Result[Unit, String] =
@@ -129,6 +171,11 @@ fn validate_imports_acc(imports: List[wasm_imports.Import], set: CapabilitySet, 
         match check_wasi_call(set, imp.name) {
           ok(_) => validate_imports_acc(imports, set, idx + 1),
           err(msg) => err("import validation failed: ${imp.name} — ${msg}"),
+        }
+      else if string.starts_with(imp.mod_name, "wasi:") then
+        match check_interface(set, imp.mod_name) {
+          ok(_) => validate_imports_acc(imports, set, idx + 1),
+          err(msg) => err(msg),
         }
       else err("unsupported host import: ${imp.mod_name}.${imp.name}; use MCP tools"),
   }

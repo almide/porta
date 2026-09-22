@@ -262,7 +262,9 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
     let exports = json.get_array(info, "exports") ?? []
     let memories = json.get_array(info, "memories") ?? []
 
-    println("Module: ${path}")
+    let component = json.get_bool(info, "component") ?? false
+    let wasi = json.get_string(info, "wasi") ?? "0.2"
+    println((if component then "Component (WASI ${wasi}): " else "Module: ") + path)
     println("  Imports:   ${int.to_string(list.len(imports))}")
     println("  Exports:   ${int.to_string(list.len(exports))}")
     println("  Memories:  ${int.to_string(list.len(memories))}")
@@ -274,7 +276,9 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
       let mod_name = json.get_string(imp, "module") ?? ""
       let name = json.get_string(imp, "name") ?? ""
       let kind = json.get_string(imp, "kind") ?? ""
-      println("  [${int.to_string(idx)}] ${mod_name}.${name} (${kind})")
+      // A component's import is a whole interface: no function name follows.
+      let shown = if name == "" then mod_name else "${mod_name}.${name}"
+      println("  [${int.to_string(idx)}] ${shown} (${kind})")
     }
 
     println("")

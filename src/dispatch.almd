@@ -167,6 +167,14 @@ fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
 effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] = {
   let info_json = wasm_rt.wt_inspect(config.wasm_path)
   let info = json.parse(info_json)!
+  // A module the engine could not read has no import list to check. That is
+  // a refusal, not an empty list: an unreadable module ran unchecked once.
+  let error = json.get_string(info, "error") ?? ""
+  if error != "" then err("cannot read the module's imports, so nothing can be granted: ${error}")
+  else validate_import_list(info, config)
+}
+
+effect fn validate_import_list(info: Value, config: InstanceConfig) -> Result[Unit, String] = {
   let all_imports = json.get_array(info, "imports") ?? []
   let imports = all_imports |> list.map((imp) => {
     let i: wasm_imports.Import = {

@@ -24,6 +24,15 @@ so before any row is scored. The numbers above are from that harness; the
 earlier ones happened to match, which is luck, not proof, and is recorded here
 so the claim and its evidence are not confused again.
 
+A second correction followed on the first CI run of the repaired harness: the
+Launch Services row read as an escape on the macOS runner. It was not one. The
+row had judged `open(1)`'s messages and counted porta's own denial footer as
+the held signal; `open` says "Unable to find application" whether or not its
+lookup was denied, and when the footer lagged behind the unified log the row
+misread. It now asks the bootstrap server for the Launch Services mach
+services directly and reads the kernel's answer, and no row's verdict depends
+on anything porta prints.
+
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
 | write outside every mount | filesystem | held | held |

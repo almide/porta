@@ -303,6 +303,49 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0}, result
     print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
 
+    # A WASI 0.2 component runs under the same capability check, budgets and
+    # preopens as a core module. Its imports are interfaces, so the check maps
+    # them: this one needs io, process, clock and random — `worker` has them,
+    # `ai-agent` lacks clock and refuses it by name. Fuel still bounds it, and
+    # inspect says what it is. The component is built here from its source
+    # when the almide toolchain is present, as it is in CI.
+    almide = pathlib.Path(porta).parent.parent / '.tools' / 'almide' / 'almide'
+    if almide.is_file():
+        component = root / 'component-hello.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
+                                '--component', '-o', str(component)], text=True, capture_output=True, timeout=600)
+        assert built.returncode == 0 and component.is_file(), built
+        assert component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the fixture is not a component'
+        result = run('run', str(component), '--profile', 'worker')
+        assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
+        result = run('run', str(component), '--profile', 'ai-agent')
+        assert result.returncode != 0 and 'wasi:clocks/wall-clock' in result.stderr and "'clock'" in result.stderr, result
+        result = run('run', str(component), '--profile', 'worker', '--step-limit', '10')
+        assert result.returncode != 0 and 'hello' not in result.stdout, result
+        result = run('inspect', str(component))
+        assert result.returncode == 0 and 'Component (WASI 0.2)' in result.stdout and 'wasi:cli/run' in result.stdout, result
+        print('PASS: a WASI 0.2 component runs, is capability-checked by interface, is bounded by fuel, and inspects as one')
+        # The same program as a WASI 0.3 component: async-lifted run, stdio
+        # over component-model streams. Almide emits it with
+        # ALMIDE_COMPONENT_P3=1; its world imports the filesystem interfaces
+        # even when unused, so `worker` refuses it by name and `full` runs it.
+        p3 = root / 'component-hello-p3.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
+                                '--component', '-o', str(p3)], text=True, capture_output=True, timeout=600,
+                               env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
+        assert built.returncode == 0 and p3.is_file(), built
+        result = run('run', str(p3), '--profile', 'full')
+        assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
+        result = run('run', str(p3), '--profile', 'worker')
+        assert result.returncode != 0 and 'wasi:filesystem' in result.stderr, result
+        result = run('run', str(p3), '--profile', 'full', '--step-limit', '10')
+        assert result.returncode != 0 and 'hello' not in result.stdout, result
+        result = run('inspect', str(p3))
+        assert result.returncode == 0 and 'wasi:cli/run@0.3' in result.stdout, result
+        print('PASS: a WASI 0.3 component runs through the async linker under the same check and budgets')
+    else:
+        print('SKIP: no almide toolchain at .tools/almide; the WASI 0.2 component test did not run')
+
     # --json gives explain and check a machine-readable form. explain reports
     # the effective policy; a run it would refuse reports the refusal instead.
     result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
@@ -501,9 +544,28 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
         # A refusal looks exactly like a broken tool until someone says which
         # flag it would have needed. After a failed run porta reads the
         # kernel's denial records for this run and says so.
-        result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
-                     'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
-        assert result.returncode == 3, result
+        # The unified log is written asynchronously with no completion signal;
+        # porta already asks it three times over a few seconds, and on a busy
+        # CI runner even that has come back empty. Three runs, not one: a
+        # footer that never appears is a failure, one that lags is the log's.
+        for attempt in range(3):
+            result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
+                         'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
+            assert result.returncode == 3, result
+            if '[porta] the sandbox refused this run' in result.stderr:
+                break
+            time.sleep(2)
+        if '[porta] the sandbox refused this run' not in result.stderr:
+            # Show what the log holds, so a missing footer can be told apart
+            # from a missing record: lag, throttling, or a predicate miss.
+            raw = subprocess.run(['/usr/bin/log', 'show', '--last', '2m', '--style', 'compact',
+                                  '--predicate', 'senderImagePath CONTAINS "Sandbox"'],
+                                 text=True, capture_output=True, timeout=120)
+            lines = raw.stdout.splitlines()
+            hits = [l for l in lines if 'denied.txt' in l or 'porta' in l]
+            print(f'--- unified log: {len(lines)} Sandbox lines in the last 2m, {len(hits)} mentioning this run ---', file=sys.stderr)
+            print('\n'.join(hits[-20:] or lines[-20:]), file=sys.stderr)
+            print(f'--- log show rc={raw.returncode} stderr={raw.stderr.strip()[:300]} ---', file=sys.stderr)
         assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
         assert f'-v {ungranted}' in result.stderr, result.stderr
         result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})

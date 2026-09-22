@@ -13,12 +13,16 @@ use wasmtime::*;
 #[allow(unused_imports)]
 use serde_json;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView, ResourceTable};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+mod load;
+use load::{engine_config, load_code, Code, ComponentCtx};
+pub(crate) use load::is_component;
 
 struct WasmInstance {
     engine: Engine,
-    module: Module,
+    code: Code,
     stdin_data: Vec<u8>,
     wasi_args: Vec<String>,
     env_vars: Vec<(String, String)>,
@@ -61,27 +65,12 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
         Err(_) => return -1,
     };
 
-    let mut config = Config::new();
-    if fuel > 0 {
-        config.consume_fuel(true);
-    }
-    config.wasm_multi_memory(true);
-
-    let engine = match Engine::new(&config) {
-        Ok(e) => e,
-        Err(_) => return -1,
-    };
-
-    // Serialized native modules are executable code, not untrusted WASM.
-    // Never deserialize an attacker-writable sidecar next to an agent.
-    let module = match Module::from_binary(&engine, &bytes) {
-        Ok(module) => module,
-        Err(_) => return -1,
-    };
+    let Ok(engine) = Engine::new(&engine_config(fuel)) else { return -1 };
+    let Some(code) = load_code(&engine, &bytes) else { return -1 };
 
     let inst = WasmInstance {
         engine,
-        module,
+        code,
         stdin_data: Vec::new(),
         wasi_args: Vec::new(),
         env_vars: Vec::new(),

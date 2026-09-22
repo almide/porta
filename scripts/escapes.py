@@ -262,14 +262,31 @@ def read_keychain(ctx):
 def launch_outside_sandbox(ctx):
     if SYSTEM != "Darwin":
         return Result(NA, "open(1)/Launch Services is macOS-only")
-    # `open` with a bogus app fails either way; what matters is whether lsopen
-    # was permitted. A denied lsopen surfaces as a Launch Services error, an
-    # allowed one as "application not found".
-    result = ctx.porta_run("/usr/bin/open", "-a", "PortaNoSuchApp")
-    text = (result.stdout + result.stderr).lower()
-    if "sandbox" in text or "not permitted" in text or "operation not" in text:
-        return Result(HELD, "lsopen refused")
-    return Result(ESCAPED, "Launch Services reachable") if "unable to find" in text or "cannot be found" in text else Result(HELD, "lsopen refused")
+    # `open(1)` starts a handler outside the sandbox through Launch Services'
+    # mach services. Ask the bootstrap server for them directly: a lookup that
+    # succeeds is the escape, one the sandbox refuses answers
+    # BOOTSTRAP_UNKNOWN_SERVICE (1100). Nothing is launched either way.
+    #
+    # An earlier version parsed `open`'s messages and took porta's own denial
+    # footer as the held signal; `open` says "Unable to find application"
+    # whether or not the lookup was denied, so when the footer lagged on a CI
+    # runner the row read as an escape. The verdict now depends on nothing
+    # porta prints.
+    code = (
+        "import ctypes\n"
+        "lib = ctypes.CDLL(None)\n"
+        "bootstrap = ctypes.c_uint.in_dll(lib, 'bootstrap_port')\n"
+        "for name in ('com.apple.lsd.mapdb', 'com.apple.lsd.modifydb'):\n"
+        "    port = ctypes.c_uint(0)\n"
+        "    rc = lib.bootstrap_look_up(bootstrap, name.encode(), ctypes.byref(port))\n"
+        "    print(name, 'REACHABLE' if rc == 0 else 'denied %d' % rc)"
+    )
+    result = ctx.py(code)
+    if "REACHABLE" in result.stdout:
+        return Result(ESCAPED, "Launch Services reachable: " + result.stdout.strip().replace("\n", "; "))
+    if "denied" not in result.stdout:
+        return Result(ESCAPED, f"the probe did not run: {(result.stdout + result.stderr).strip()[:200]}")
+    return Result(HELD, "Launch Services mach lookups refused")
 
 
 def _egress_tool(ctx, argv, policy):

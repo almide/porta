@@ -185,6 +185,31 @@ test "validate_imports: denied import" {
   assert(result.is_err(sandbox.validate_imports(imports, caps)))
 }
 
+test "validate_imports: component interfaces map to capabilities" {
+  let imports: List[wasm_imports.Import] = [
+    {mod_name: "wasi:cli/stdout@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi:io/streams@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi:cli/exit@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi:clocks/wall-clock@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+    {mod_name: "wasi:random/random@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+  ]
+  assert_eq(sandbox.validate_imports(imports, sandbox.profile_worker()), ok(()))
+  // ai-agent has no clock: the same component is refused, naming the capability.
+  assert(result.is_err(sandbox.validate_imports(imports, sandbox.profile_ai_agent())))
+}
+
+test "validate_imports: component sockets need net, unknown interfaces fail closed" {
+  let sockets: List[wasm_imports.Import] = [
+    {mod_name: "wasi:sockets/tcp@0.2.3", name: "", desc: wasm_imports.ImportFunc(0)},
+  ]
+  assert(result.is_err(sandbox.validate_imports(sockets, sandbox.profile_worker())))
+  assert_eq(sandbox.validate_imports(sockets, sandbox.profile_full()), ok(()))
+  let unknown: List[wasm_imports.Import] = [
+    {mod_name: "wasi:keyvalue/store@0.2.0-draft", name: "", desc: wasm_imports.ImportFunc(0)},
+  ]
+  assert(result.is_err(sandbox.validate_imports(unknown, sandbox.profile_full())))
+}
+
 test "validate_imports: non-wasi imports fail closed" {
   let imports: List[wasm_imports.Import] = [
     {mod_name: "env", name: "some_func", desc: wasm_imports.ImportFunc(0)},

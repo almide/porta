@@ -15,7 +15,7 @@ as a definition does.
 
 | Module | Owns |
 |---|---|
-| `wasmtime_bridge.rs` + `wasmtime_bridge/run.rs` | WASM instance lifecycle and the FFI surface |
+| `wasmtime_bridge.rs` + `wasmtime_bridge/{load,run}.rs` | WASM instance lifecycle and the FFI surface; `load` reads a file as a core module or a WASI 0.2 / 0.3 component, `run` executes it |
 | `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
 | `ceilings.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU ceiling |
 | `denials.rs`, `sandbox_check.rs` | what the kernel refused during a run and which flag would have allowed it (macOS, from the unified log via a per-run tag on every deny rule); what this host can enforce, for `porta check` |

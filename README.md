@@ -100,7 +100,8 @@ is memory: that needs cgroup v2, and porta refuses to run as root to get it.
 ### Run untrusted or generated WASM
 
 Code from a user or a model, run with no host filesystem or network and bounded
-fuel, memory and time.
+fuel, memory and time. A core module or a WASI 0.2 or 0.3 component, checked
+the same way: every import it declares needs a capability you granted.
 
 ```bash
 porta run plugin.wasm --profile worker --step-limit 5000000 --max-memory 256

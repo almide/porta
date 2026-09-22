@@ -1,0 +1,6 @@
+// Built with `--target wasm --component`: a WASI 0.2 component whose imports
+// are interfaces (wasi:cli/stdout, wasi:clocks/wall-clock, ...) rather than
+// preview 1 functions. The integration suite runs it under `porta run` to
+// prove a component gets the same capability check, preopens and budgets as
+// a core module.
+fn main() -> Unit = println("hello from a component")
