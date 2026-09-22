@@ -191,13 +191,16 @@ impl SandboxRequest {
         crate::memory_ceiling::unavailable().map(|reason| format!("--max-memory-mb: {reason}"))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// macOS has no cgroup; the supervisor measures the group's footprint and
+    /// ends it at the ceiling, so the flag is honoured, in that sense.
+    #[cfg(target_os = "macos")]
     fn memory_ceiling_unavailable(&self) -> Option<String> {
-        (self.max_memory_mb > 0).then(|| {
-            "--max-memory-mb needs cgroup v2, which this platform does not have; \
-             --timeout and --max-cpu bound a run here, and the WASM runtime caps memory"
-                .to_string()
-        })
+        None
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn memory_ceiling_unavailable(&self) -> Option<String> {
+        (self.max_memory_mb > 0).then(|| "--max-memory-mb has no enforcement on this platform".to_string())
     }
 
     /// The ceilings this request sets, in the kernel's units. The file size
@@ -227,7 +230,8 @@ impl SandboxRequest {
             parts.push(format!("files up to {} MiB", self.max_file_size));
         }
         if self.max_memory_mb > 0 {
-            parts.push(format!("{} MiB resident memory for the whole run, swap closed", self.max_memory_mb));
+            let how = if cfg!(target_os = "linux") { "cgroup, swap closed" } else { "the group is ended when its footprint reaches it" };
+            parts.push(format!("{} MiB resident memory for the whole run ({how})", self.max_memory_mb));
         }
         if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
     }
@@ -679,7 +683,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout, request.max_cpu)
+            wait_within(child, request.timeout, request.max_cpu, request.max_memory_mb.saturating_mul(MIB))
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
@@ -692,8 +696,12 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
 /// carried on chose to. `PORTA_DENIALS=never` keeps the footer away entirely.
 #[cfg(target_os = "macos")]
 fn explain_denials(tag: &str, started: &str, code: i64, rerun: &str) {
+    use crate::ceilings::{CPU_EXCEEDED, MEMORY_EXCEEDED, TIMED_OUT};
     let setting = std::env::var("PORTA_DENIALS").unwrap_or_default();
-    if setting == "never" || (code == 0 && setting != "always") {
+    // A run porta's own supervisor ended has nothing the kernel refused to
+    // explain, and the log query would cost it seconds of retries.
+    let ended_by_porta = matches!(code, TIMED_OUT | CPU_EXCEEDED | MEMORY_EXCEEDED);
+    if setting == "never" || ((code == 0 || ended_by_porta) && setting != "always") {
         return;
     }
     let denials = crate::denials::collect(tag, started);
@@ -767,7 +775,8 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         // under the ceiling, or end it there — never let it run without one.
         crate::memory_ceiling::place(&mut child, &request.tag, request.max_memory_mb.saturating_mul(MIB))?;
     }
-    wait_within(child, request.timeout, request.max_cpu).map_err(|error| format!("waiting for the command failed: {error}"))
+    // The memory ceiling is the cgroup's here, so the supervisor watches none.
+    wait_within(child, request.timeout, request.max_cpu, 0).map_err(|error| format!("waiting for the command failed: {error}"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

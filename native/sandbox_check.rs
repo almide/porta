@@ -94,6 +94,12 @@ fn probe() -> (String, Vec<Primitive>) {
                 present: std::path::Path::new("/usr/bin/log").exists(),
                 otherwise: "runs are enforced but refusals are not explained",
             },
+            Primitive {
+                name: "memory ceiling (supervisor ends the group at its footprint)",
+                covers: "--max-memory-mb; a quarter-second poll, not a kernel limit",
+                present: true,
+                otherwise: "",
+            },
         ],
     )
 }

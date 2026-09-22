@@ -94,10 +94,10 @@ porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
 ```
 
 A hang is killed at the deadline, a CPU burn ends with SIGXCPU, a fork bomb
-cannot fork, and a file stops growing at the ceiling. On Linux with a systemd
-user session, `--max-memory-mb 512` caps resident memory for the whole run
-through cgroup v2; where that cannot be placed, porta refuses the flag rather
-than running without it.
+cannot fork, and a file stops growing at the ceiling. `--max-memory-mb 512`
+bounds resident memory for the whole run: a cgroup v2 ceiling on Linux (a
+systemd user session is needed, and the flag is refused without one), a
+supervisor that ends the run at the ceiling on macOS.
 
 ### Run untrusted or generated WASM
 

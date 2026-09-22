@@ -69,11 +69,12 @@ not stop one of them is accurate and not a vulnerability.
   per run. A program that ignores SIGXCPU is killed anyway: by the kernel at
   the hard limit on Linux, and on macOS, which never follows the signal with a
   kill, by porta's supervisor once the process group's CPU reaches the ceiling.
-  `--max-memory-mb` bounds resident memory for the whole run through cgroup v2,
-  placed by the systemd user manager, since an rlimit caps only address space;
-  it exists on Linux where a user manager runs for the caller and is refused
-  everywhere else, so a run never proceeds with a ceiling it asked for and did
-  not get. (The WASM agent runtime bounds fuel, memory and deadlines outright,
+  `--max-memory-mb` bounds resident memory for the whole run: on Linux through
+  cgroup v2, placed by the systemd user manager, since an rlimit caps only
+  address space, and refused where no user manager runs for the caller, so a
+  run never proceeds with a ceiling it asked for and did not get; on macOS by
+  the supervisor ending the group once its footprint reaches the ceiling,
+  polled, which a burst can pass for up to a quarter second. (The WASM agent runtime bounds fuel, memory and deadlines outright,
   on every platform.)
 - **A malicious operator.** porta enforces the operator's policy against the
   program. It does not protect the program, or a third party, from an operator

@@ -303,22 +303,24 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0, 'memory_mib': 0}, result
     print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
 
-    # --max-memory-mb is a cgroup v2 ceiling placed through the systemd user
-    # manager, so it exists only on Linux and only where a user manager runs
-    # for this user. Where it does, an allocation past the ceiling is
-    # OOM-killed (137) and a run within it keeps its code; anywhere else the
-    # flag is refused before the run, naming the reason — never run without.
+    # --max-memory-mb: on Linux a cgroup v2 ceiling placed through the systemd
+    # user manager, so only where a user manager runs for this user; on macOS
+    # the supervisor polls the group's footprint and ends it at the ceiling.
+    # Either way an allocation past the ceiling is killed (137) and a run
+    # within it keeps its code. A Linux host without a user manager refuses
+    # the flag before the run, naming the reason — never run without.
     user_manager = platform.system() == 'Linux' and os.path.exists(f'/run/user/{os.getuid()}/bus') \
         and (os.path.exists('/usr/bin/busctl') or os.path.exists('/bin/busctl'))
-    hog = "b = bytearray(200 * 1024 * 1024)\nprint('ALLOCATED')"
-    if user_manager:
+    # The hog keeps its allocation alive long enough for a polling supervisor.
+    hog = "import time\nb = bytearray(200 * 1024 * 1024)\ntime.sleep(1)\nprint('ALLOCATED')"
+    if user_manager or platform.system() == 'Darwin':
         result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
         assert result.returncode == 137 and 'ALLOCATED' not in result.stdout, result
         result = run('run', sys.executable, '--max-memory-mb', '512', '--', '-c', hog)
         assert result.returncode == 0 and 'ALLOCATED' in result.stdout, result
         result = run('explain', '/bin/sh', '--max-memory-mb', '64', '--', '-c', 'x')
         assert result.returncode == 0 and '64 MiB resident' in result.stdout, result
-        print('PASS: --max-memory-mb OOM-kills a run past the ceiling and leaves one within it alone')
+        print('PASS: --max-memory-mb kills a run past the ceiling and leaves one within it alone')
     else:
         result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
         assert result.returncode == 125 and 'ALLOCATED' not in result.stdout, result

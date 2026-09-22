@@ -131,12 +131,15 @@ host execution and HTTP requests go through the checked MCP built-in tools.
 - **Resource ceilings are what an unprivileged process can place.**
   `--timeout`, `--max-cpu`, `--max-procs` and `--max-file-size` are a process
   group kill and rlimits the kernel enforces on every descendant, per process.
-  `--max-memory-mb` is the one per-run ceiling: cgroup v2 `memory.max` with
-  swap closed, placed by asking the systemd user manager for a transient scope
-  around the command before it runs its first instruction. That exists only on
-  Linux and only where a user manager runs for you (a logind session, or
-  `loginctl enable-linger`); anywhere else the flag refuses the run rather
-  than running without it. The WASM runtime caps memory on every platform.
+  `--max-memory-mb` is the one per-run ceiling. On Linux it is cgroup v2
+  `memory.max` with swap closed, placed by asking the systemd user manager for
+  a transient scope around the command before it runs its first instruction;
+  it needs a user manager (a logind session, or `loginctl enable-linger`) and
+  the flag refuses the run where there is none. On macOS, which has no
+  cgroup, porta's supervisor reads the group's physical footprint every
+  quarter second and ends the group at the ceiling: a bound, not a kernel
+  limit, so a burst can pass it briefly before the kill. The WASM runtime caps
+  memory on every platform.
 - **macOS and Linux only**, and not identically. Anywhere else, native
   execution fails closed rather than running unrestricted.
 - **Nothing is mounted implicitly.** `porta run` and `porta serve` see no

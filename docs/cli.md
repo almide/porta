@@ -71,7 +71,7 @@ line, never dropped.
 | `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
 | `--max-procs <n>` | Process ceiling while the command runs; a fork past it fails. The kernel counts every process of your user, so set it above what you already have |
 | `--max-file-size <MiB>` | Largest file the command may write; the write past it ends the process with SIGXFSZ (exit 153) and the file stops there |
-| `--max-memory-mb <MiB>` | Resident memory for the command and everything it starts, together, with swap closed: a cgroup v2 ceiling placed through the systemd user manager. Past it the kernel OOM-kills the run (exit 137). Linux only, and only where a user manager runs for you; refused otherwise |
+| `--max-memory-mb <MiB>` | Resident memory for the command and everything it starts, together. Linux: a cgroup v2 ceiling with swap closed, placed through the systemd user manager, and the kernel OOM-kills the run past it (exit 137); needs a user manager, refused otherwise. macOS: porta polls the group's footprint every quarter second and ends it at the ceiling (exit 137), which a burst can pass briefly |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |

@@ -387,14 +387,14 @@ def ignore_sigxcpu(ctx):
 
 
 def allocate_past_memory_ceiling(ctx):
-    # The ceiling is cgroup v2 memory.max, placed through the systemd user
-    # manager; the kernel OOM-kills the group past it. A host without a user
-    # manager cannot host the attempt, and porta refuses the flag there.
-    if SYSTEM != "Linux":
-        return Result(NA, "a cgroup memory ceiling is Linux-only")
-    if not os.path.exists(f"/run/user/{os.getuid()}/bus"):
+    # On Linux the ceiling is cgroup v2 memory.max, placed through the systemd
+    # user manager, and the kernel OOM-kills the group past it; a host without
+    # a user manager cannot host the attempt, and porta refuses the flag there.
+    # On macOS porta's supervisor polls the group's footprint and ends it, so
+    # the allocation is held for a second to give the poll its chance.
+    if SYSTEM == "Linux" and not os.path.exists(f"/run/user/{os.getuid()}/bus"):
         return Result(NA, "no systemd user manager for this user; --max-memory-mb is refused here")
-    result = ctx.py("b = bytearray(200 * 1024 * 1024)\nprint('ALLOCATED')", policy=["--max-memory-mb", "64"])
+    result = ctx.py("import time\nb = bytearray(200 * 1024 * 1024)\ntime.sleep(1)\nprint('ALLOCATED')", policy=["--max-memory-mb", "64"])
     if "ALLOCATED" in result.stdout:
         return Result(ESCAPED, "allocated 200 MiB under a 64 MiB ceiling")
     return Result(HELD, f"allocation past the ceiling was killed (exit {result.returncode})")
@@ -521,7 +521,7 @@ CORPUS = [
     Attempt("grow a file past --max-file-size", "resources", None, grow_file_past_ceiling),
     Attempt("burn CPU past --max-cpu", "resources", None, burn_cpu_past_ceiling),
     Attempt("ignore SIGXCPU and keep burning", "resources", None, ignore_sigxcpu),
-    Attempt("allocate past --max-memory-mb", "resources", ["Linux"], allocate_past_memory_ceiling),
+    Attempt("allocate past --max-memory-mb", "resources", None, allocate_past_memory_ceiling),
 ]
 
 

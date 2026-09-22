@@ -91,9 +91,9 @@ porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
 ```
 
 ハングは締切で強制終了、CPU 焼きは SIGXCPU で終わり、fork 爆弾は fork できず、
-ファイルは上限で止まる。systemd のユーザーセッションがある Linux では
-`--max-memory-mb 512` で実行全体の実メモリを cgroup v2 で縛れます。置けない環境
-では、無しで走らせるのではなくフラグを拒否します。
+ファイルは上限で止まる。`--max-memory-mb 512` は実行全体の実メモリの上限で、
+Linux では cgroup v2（systemd のユーザーセッションが必要、無ければフラグを拒否）、
+macOS では監視側が上限到達時に実行を終わらせます。
 
 ### 信頼できない/生成された WASM を動かす
 
