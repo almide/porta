@@ -9,9 +9,9 @@ when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
 - **macOS arm64**: 18 tried, 0 escaped
-- **Linux aarch64** (a systemd container with a user manager, 2026-09-23): 21 tried, 0 escaped
-- **Linux x86_64** (the CI runner, no user manager, so the memory row is not
-  hosted there): 20 tried, 0 escaped
+- **Linux x86_64** (the CI runner, with a systemd user manager started for
+  the job; run 35756833265): 21 tried, 0 escaped
+- **Linux aarch64** (a systemd container, 2026-09-23): 21 tried, 0 escaped
 
 ## A correction to earlier runs
 
