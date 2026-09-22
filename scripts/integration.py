@@ -501,9 +501,17 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
         # A refusal looks exactly like a broken tool until someone says which
         # flag it would have needed. After a failed run porta reads the
         # kernel's denial records for this run and says so.
-        result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
-                     'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
-        assert result.returncode == 3, result
+        # The unified log is written asynchronously with no completion signal;
+        # porta already asks it three times over a few seconds, and on a busy
+        # CI runner even that has come back empty. Three runs, not one: a
+        # footer that never appears is a failure, one that lags is the log's.
+        for attempt in range(3):
+            result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
+                         'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
+            assert result.returncode == 3, result
+            if '[porta] the sandbox refused this run' in result.stderr:
+                break
+            time.sleep(2)
         assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
         assert f'-v {ungranted}' in result.stderr, result.stderr
         result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})

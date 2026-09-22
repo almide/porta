@@ -144,7 +144,10 @@ so:
 ```
 
 Some refusals have no flag — a credential store, another process's arguments,
-`open(1)` — and the footer says that instead. `PORTA_DENIALS=always` asks after
+`open(1)` — and the footer says that instead. The footer is read from the
+unified log, which macOS writes asynchronously; porta asks it a few times over
+a few seconds, and on a heavily loaded machine a denial can still arrive after
+that, in which case the footer is missing for that run, never wrong. `PORTA_DENIALS=always` asks after
 every run, including ones that exited 0; `PORTA_DENIALS=never` keeps the footer
 away. On Linux the footer is not available yet: it needs Landlock ABI 7's audit
 records.
