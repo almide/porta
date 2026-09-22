@@ -370,6 +370,21 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     else:
         print('SKIP: no almide toolchain at .tools/almide; the WASI 0.2 component test did not run')
 
+    # Under strict reads, a command named bare is found the way the shell finds
+    # it, and one outside the readable roots is refused up front with the
+    # directory to grant — rather than started and left to die on EACCES.
+    tooldir = ungranted / 'tools'
+    tooldir.mkdir()
+    (tooldir / 'porta-tool').write_text('#!/bin/sh\necho ran-anyway\n')
+    (tooldir / 'porta-tool').chmod(0o755)
+    on_path = {**os.environ, 'PATH': f"{tooldir}:{os.environ.get('PATH', '')}"}
+    result = run('run', 'porta-tool', '--read-policy', 'strict', '-v', str(root), env=on_path)
+    assert result.returncode == 126 and 'ran-anyway' not in result.stdout, result
+    assert 'unreadable' in result.stderr and str(tooldir) in result.stderr, result.stderr
+    result = run('run', 'porta-tool', '-v', str(root), env=on_path)
+    assert result.returncode == 0 and result.stdout.strip() == 'ran-anyway', result
+    print('PASS: a bare command outside the strict read roots is refused by name with the -v to grant')
+
     # --json gives explain and check a machine-readable form. explain reports
     # the effective policy; a run it would refuse reports the refusal instead.
     result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',

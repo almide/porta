@@ -133,6 +133,19 @@ fn resolve_mount(mount: &str) -> Result<String, String> {
 /// path that exists, and not a name on the PATH porta itself was started
 /// with. Found here, before any policy is applied, so the answer names the
 /// command rather than the exec wrapper that failed to find it.
+/// The file the kernel will execute for `cmd`, resolved: a path as given
+/// (relative to the run's directory), or the first `PATH` entry holding it,
+/// the way the shell would find it. `None` when nothing resolves.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn resolve_command(cmd: &str, cwd: &str) -> Option<std::path::PathBuf> {
+    if cmd.contains('/') {
+        let base = if cwd.is_empty() { "." } else { cwd };
+        return std::fs::canonicalize(std::path::Path::new(base).join(cmd)).ok();
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join(cmd)).find(|candidate| candidate.is_file()).and_then(|found| std::fs::canonicalize(found).ok())
+}
+
 fn missing_command(cmd: &str, cwd: &str) -> Option<String> {
     if cmd.contains('/') {
         let base = if cwd.is_empty() { "." } else { cwd };
@@ -277,7 +290,7 @@ impl SandboxRequest {
         if self.read_policy != "strict" {
             return None;
         }
-        let program = std::fs::canonicalize(&self.cmd).ok()?;
+        let program = resolve_command(&self.cmd, &self.cwd)?;
         let roots = readable_roots(&self.allowed_dirs);
         if roots.iter().any(|root| program.starts_with(root)) {
             return None;
