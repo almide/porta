@@ -7,7 +7,7 @@ import self.sandbox
 // chances for `porta --version` and the manifest porta generates to disagree
 // about what produced a file. `almide.toml` carries it too, because the build
 // needs it before this module exists; `src/mod_test.almd` asserts they match.
-fn version() -> String = "0.6.1"
+fn version() -> String = "0.6.2"
 
 // --- Int parsing ---
 
