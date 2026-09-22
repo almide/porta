@@ -96,6 +96,9 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
     bind: opts.allow_bind,
     unix: opts.allow_unix,
     timeout: opts.timeout,
+    max_cpu: opts.max_cpu,
+    max_procs: opts.max_procs,
+    max_file_size: opts.max_file_size,
   }
   ok(request)
 }

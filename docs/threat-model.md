@@ -59,14 +59,18 @@ not stop one of them is accurate and not a vulnerability.
 - **Kernel exploits.** porta's boundary is the kernel's. A privilege escalation
   through a kernel bug defeats it — and defeats a container on the same kernel.
   Those belong upstream.
-- **Side channels and resource exhaustion.** porta does not bound CPU, memory
-  or disk for a native command, and does not close timing or cache channels. A
-  program confined by porta can still spin, fill a granted directory, or
-  measure the clock. Wall-clock is the exception: `--timeout <secs>` kills the
-  command and its whole process group at the deadline (exit 124), so a hung or
-  looping run is bounded when the operator sets one; without it there is no
-  time limit. (The WASM agent runtime bounds fuel, memory and deadlines; the
-  native sandbox bounds only wall-clock, and only on request.)
+- **Side channels and resource exhaustion.** porta does not close timing or
+  cache channels, and it bounds a native command's resources only on request
+  and only as far as an unprivileged process can. `--timeout <secs>` kills the
+  command and its whole process group at the deadline (exit 124). `--max-cpu`,
+  `--max-procs` and `--max-file-size` are rlimits set between fork and exec and
+  inherited by every descendant, so a CPU burn ends with SIGXCPU, a fork bomb
+  cannot fork, and a file stops growing at the ceiling — each per process, not
+  per run. What is missing is a memory ceiling: an rlimit caps address space,
+  not resident memory, and a real one needs cgroup v2 with a delegated
+  subtree, which porta, refusing to run as root, cannot assume. Until then a
+  confined program can still allocate. (The WASM agent runtime bounds fuel,
+  memory and deadlines outright.)
 - **A malicious operator.** porta enforces the operator's policy against the
   program. It does not protect the program, or a third party, from an operator
   who writes a policy that grants everything, or who passes `--allow-root`.

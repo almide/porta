@@ -38,6 +38,11 @@ type ExecRequest = {
   // Seconds before porta kills the command and everything it started. 0 means
   // no limit.
   timeout: Int,
+  // Per-process ceilings, set with setrlimit before exec: CPU seconds,
+  // processes of this user, file size in MiB. 0 leaves one unset.
+  max_cpu: Int,
+  max_procs: Int,
+  max_file_size: Int,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -58,6 +63,9 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("bind", strings(req.bind)),
     ("unix", strings(req.unix)),
     ("timeout", value.int(req.timeout)),
+    ("max_cpu", value.int(req.max_cpu)),
+    ("max_procs", value.int(req.max_procs)),
+    ("max_file_size", value.int(req.max_file_size)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

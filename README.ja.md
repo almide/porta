@@ -28,7 +28,7 @@ Landlock＋seccomp で強制。ラッパーでもお願いでもなく、OS の�
 カーネルが表現できない制限は、緩めず実行を拒否します（**fail-closed**）。
 
 主張ではなく証拠で。公開の脱獄[コーパス](docs/benchmarks/escapes.md)は
-**macOS 13/13・Linux 16/16、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
+**macOS 16/16・Linux 16/16、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
@@ -81,12 +81,18 @@ porta run ./agent --proxy-allow 'api.example.com' --proxy-audit egress.jsonl -v 
 
 ### 素性の知れないコマンドを、マシンを預けずに試す
 
-実行前にポリシーを確認してから、隔離して、暴走しないよう締切付きで走らせる。
+実行前にポリシーを確認してから、隔離して、締切と資源上限付きで走らせる。上限は
+カーネルが、起動した子プロセス全部に強制します。
 
 ```bash
 porta explain ./sketchy-installer -v ./sandbox --allow-net github.com:443   # ポリシー確認、実行はしない
-porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 --timeout 60
+porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
+  --timeout 60 --max-cpu 30 --max-procs 500 --max-file-size 200
 ```
+
+ハングは締切で強制終了、CPU 焼きは SIGXCPU で終わり、fork 爆弾は fork できず、
+ファイルは上限で止まる。縛れないのはメモリ —— それには cgroup v2 が要り、porta
+はそのために root で動くことを拒みます。
 
 ### 信頼できない/生成された WASM を動かす
 

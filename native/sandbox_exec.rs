@@ -46,6 +46,14 @@ struct SandboxRequest {
     /// so nothing else bounds its wall-clock; an agent that hangs or loops
     /// runs forever without this.
     #[serde(default)] timeout: u64,
+    /// Resource ceilings set with `setrlimit` before exec and inherited by
+    /// everything the command starts. Each is per process, not per run: a tree
+    /// of processes gets the budget once each, and `timeout` bounds the whole.
+    /// 0 leaves one unset. CPU is in seconds; the file size is in MiB; the
+    /// process count is the kernel's, which counts every process of this user.
+    #[serde(default)] max_cpu: u64,
+    #[serde(default)] max_procs: u64,
+    #[serde(default)] max_file_size: u64,
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
@@ -60,6 +68,50 @@ const TIMED_OUT: i64 = 124;
 /// that before spawning), so one signal to the negated pid reaches the whole
 /// tree, not just the shell porta launched. `timeout` of 0 waits without a
 /// limit.
+/// The rlimits a request asks for: the kernel's resource id, the value in the
+/// kernel's unit, and the flag that asked. `Copy` so the closure that applies
+/// them after the fork can own its own.
+#[derive(Clone, Copy)]
+struct Ceiling {
+    resource: libc::c_int,
+    value: u64,
+    flag: &'static str,
+}
+
+const MIB: u64 = 1024 * 1024;
+
+/// Sets each ceiling as both the soft and the hard limit, so the command
+/// cannot raise it back. Runs in the child between fork and exec, or in this
+/// process right before it replaces itself, and is inherited from there.
+fn apply_ceilings(ceilings: &[Ceiling]) -> std::io::Result<()> {
+    for ceiling in ceilings {
+        let limit = libc::rlimit { rlim_cur: ceiling.value as libc::rlim_t, rlim_max: ceiling.value as libc::rlim_t };
+        if unsafe { libc::setrlimit(ceiling.resource as _, &limit) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Why a ceiling cannot be set, if it cannot. An unprivileged process may only
+/// lower a hard limit, so a ceiling above this user's is one the kernel would
+/// refuse; better to say so here, with the number, than to fail the spawn with
+/// a bare `Operation not permitted`.
+fn unsettable_ceiling(ceilings: &[Ceiling]) -> Option<String> {
+    ceilings.iter().find_map(|ceiling| {
+        let mut current = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        if unsafe { libc::getrlimit(ceiling.resource as _, &mut current) } != 0 {
+            return Some(format!("{} cannot be applied: {}", ceiling.flag, std::io::Error::last_os_error()));
+        }
+        (current.rlim_max != libc::RLIM_INFINITY && ceiling.value > current.rlim_max as u64).then(|| {
+            format!(
+                "{} asks for {} but this user's hard limit is {}; an unprivileged process can only lower it",
+                ceiling.flag, ceiling.value, current.rlim_max
+            )
+        })
+    })
+}
+
 fn wait_within(mut child: std::process::Child, timeout: u64) -> std::io::Result<i64> {
     if timeout == 0 {
         return child.wait().map(exit_code);
@@ -190,7 +242,39 @@ impl SandboxRequest {
         if let Some(reason) = request.unreadable_command() {
             return Err(reason);
         }
+        if let Some(reason) = unsettable_ceiling(&request.ceilings()) {
+            return Err(reason);
+        }
         Ok(request)
+    }
+
+    /// The ceilings this request sets, in the kernel's units. The file size
+    /// is taken in MiB because a byte count is not a number anyone types.
+    fn ceilings(&self) -> Vec<Ceiling> {
+        [
+            (libc::RLIMIT_CPU as libc::c_int, self.max_cpu, "--max-cpu"),
+            (libc::RLIMIT_NPROC as libc::c_int, self.max_procs, "--max-procs"),
+            (libc::RLIMIT_FSIZE as libc::c_int, self.max_file_size.saturating_mul(MIB), "--max-file-size"),
+        ]
+        .into_iter()
+        .filter(|(_, value, _)| *value > 0)
+        .map(|(resource, value, flag)| Ceiling { resource, value, flag })
+        .collect()
+    }
+
+    /// The ceilings in words, for `explain`.
+    fn explain_ceilings(&self) -> String {
+        let mut parts = Vec::new();
+        if self.max_cpu > 0 {
+            parts.push(format!("{}s CPU per process", self.max_cpu));
+        }
+        if self.max_procs > 0 {
+            parts.push(format!("{} processes for this user", self.max_procs));
+        }
+        if self.max_file_size > 0 {
+            parts.push(format!("files up to {} MiB", self.max_file_size));
+        }
+        if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
     }
 
     /// Why this run is refused for being root, if it is.
@@ -287,6 +371,7 @@ impl SandboxRequest {
             "time limit   {}\n",
             if self.timeout == 0 { "none".to_string() } else { format!("{}s, then killed with its process group", self.timeout) }
         ));
+        text.push_str(&format!("resources    {}\n", self.explain_ceilings()));
         let mut inherited: Vec<&str> = INHERITED_ENV.iter().copied().filter(|key| std::env::var_os(key).is_some()).collect();
         let named: Vec<&str> = self.env_vars.iter().map(|(key, _)| key.as_str()).collect();
         inherited.extend(named.iter().copied());
@@ -316,7 +401,8 @@ impl SandboxRequest {
         format!(
             "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
 \"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
-\"timeout_seconds\":{},\"enforcement\":{}}}",
+\"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{}}},\
+\"enforcement\":{}}}",
             quoted(&self.cmd),
             array(&self.args),
             quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
@@ -327,6 +413,9 @@ impl SandboxRequest {
             array(&self.allowed_bind),
             array(&self.allowed_unix),
             self.timeout,
+            self.max_cpu,
+            self.max_procs,
+            self.max_file_size,
             quoted(self.enforcement_backend()),
         )
     }
@@ -422,9 +511,20 @@ impl SandboxRequest {
     /// The environment starts empty. The host variables a command needs to run
     /// are copied over by name, then the caller's `-e` values; nothing else of
     /// the caller's shell crosses into the sandbox.
+    ///
+    /// The resource ceilings are set here too, after the fork and before the
+    /// exec, so every path that runs a command — spawned, supervised or
+    /// replacing porta itself — applies them the same way.
     fn command(&self, program: &str) -> std::process::Command {
+        use std::os::unix::process::CommandExt;
         let mut command = std::process::Command::new(program);
         command.env_clear();
+        let ceilings = self.ceilings();
+        if !ceilings.is_empty() {
+            unsafe {
+                command.pre_exec(move || apply_ceilings(&ceilings));
+            }
+        }
         for key in INHERITED_ENV {
             if let Ok(value) = std::env::var(key) {
                 command.env(key, value);

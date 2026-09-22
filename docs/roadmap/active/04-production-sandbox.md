@@ -121,7 +121,14 @@ symlink.
   is there to report. Supervising also bought `--timeout <secs>`: the command
   leads its own process group and porta kills the group at the deadline (exit
   124), so a hung or looping agent is bounded — the one wall-clock limit the
-  native sandbox now has, closing the gap the threat model called out. `explain
+  native sandbox now has, closing the gap the threat model called out.
+  `--max-cpu`, `--max-procs` and `--max-file-size` followed (2026-09-22):
+  rlimits set between fork and exec on both platforms, so a CPU burn, a fork
+  bomb and a disk fill are each stopped by the kernel, proven by three corpus
+  rows. A memory ceiling is the remaining resource gap: an rlimit caps
+  address space, not residency, and a real one needs cgroup v2 in a delegated
+  subtree, Linux-only and environment-gated — fail-closed when absent, never
+  silent. `explain
   --json` and `check --json` also landed: the effective policy (or a
   `{"refused":...}`) and the host's primitives as machine-readable objects, so
   a CI step can gate on the policy without parsing prose. `explain --save

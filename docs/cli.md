@@ -68,6 +68,9 @@ line, never dropped.
 | `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
+| `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts |
+| `--max-procs <n>` | Process ceiling while the command runs; a fork past it fails. The kernel counts every process of your user, so set it above what you already have |
+| `--max-file-size <MiB>` | Largest file the command may write; the write past it ends the process with SIGXFSZ (exit 153) and the file stops there |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -94,6 +97,9 @@ mounts = ["."]            # Directories the command can write to
 network = ["*:443"]       # Restrict to these ports (empty = all open)
 # read-policy = "strict"  # Confine reads to mounts + system dirs
 # timeout = 300           # Kill the run after N seconds (exit 124)
+# max-cpu = 60            # CPU seconds per process (SIGXCPU past it)
+# max-procs = 500         # Process ceiling for your user; stops fork bombs
+# max-file-size = 100     # Largest file, in MiB (SIGXFSZ past it)
 # env-pass = ["CI"]       # Copy these host variables in by name
 # unix = ["/run/…"]       # Credential sockets the command may reach
 # bind = ["8080"]         # TCP ports the command may listen on
@@ -149,6 +155,7 @@ Exit codes tell a script what happened:
 |---|---|
 | the command's own | the command ran; this is what it returned (128 + signal if a signal ended it) |
 | 124 | the run hit its `--timeout` and was killed |
+| 152, 153 | the kernel ended the command at its `--max-cpu` (SIGXCPU) or `--max-file-size` (SIGXFSZ) ceiling |
 | 125 | porta refused the run before it began — a rule this kernel cannot express, a missing mount, root without `--allow-root` |
 | 126 | the command exists but the policy leaves it unrunnable (an interpreter outside the strict read set, say) |
 | 127 | the command was not found |
@@ -157,7 +164,7 @@ Exit codes tell a script what happened:
 without applying it; `porta check` prints what this host can enforce at all.
 Add `--json` to either for a machine-readable form: `explain --json` gives the
 effective policy (command, mounts, reads, network, listen ports, Unix sockets,
-timeout, backend), or `{"refused": "..."}` for a run porta would decline;
+timeout, resource limits, backend), or `{"refused": "..."}` for a run porta would decline;
 `check --json` gives the host's primitives and whether each is present. Both
 let a CI step gate on the policy without parsing prose.
 

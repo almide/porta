@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 SYSTEM = platform.system()
 MACHINE = platform.machine()
@@ -38,6 +39,15 @@ class Result:
     def __init__(self, verdict, detail=""):
         self.verdict = verdict
         self.detail = detail
+
+
+class HarnessError(Exception):
+    """The harness itself did not run what it meant to. Never a verdict: a
+    corpus whose runs silently did nothing would report every row held."""
+
+
+def usage_returned(result):
+    return "porta run <target>" in result.stdout or "porta run <target>" in result.stderr
 
 
 class Attempt:
@@ -69,12 +79,20 @@ class Context:
         self.decoy = None
 
     def porta_run(self, *args, policy=(), env=None):
-        argv = [self.porta, "run", *policy, "--", *args]
+        # The target is the first bare word before `--`; only its own arguments
+        # go after. A harness that put the target after `--` got porta's usage
+        # text and exit 0 back, ran nothing, and every absence-based row passed
+        # — which is why `usage_returned` below is fatal, not a verdict.
+        target, rest = args[0], args[1:]
+        argv = [self.porta, "run", target, *policy, "--", *rest]
         run_env = {**os.environ, **(env or {})}
         try:
-            return subprocess.run(argv, capture_output=True, text=True, timeout=30, env=run_env)
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=30, env=run_env)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, "", "timed out")
+        if usage_returned(result):
+            raise HarnessError(f"porta printed its usage instead of running: {' '.join(argv)}")
+        return result
 
     def py(self, code, *args, policy=()):
         return self.porta_run(sys.executable, "-c", code, *map(str, args), policy=policy)
@@ -284,6 +302,61 @@ def reach_cloud_metadata(ctx):
     return Result(ESCAPED, f"reached cloud metadata (HTTP {result.stdout.strip()})") if reached else Result(HELD, "cloud metadata refused even when allow-listed")
 
 
+def fork_past_process_ceiling(ctx):
+    # A fork bomb is the cheapest way to take a host down from inside a file
+    # policy. --max-procs is RLIMIT_NPROC, set between fork and exec, so the
+    # kernel refuses the fork itself; a ceiling of one leaves nothing to spawn.
+    # Twenty attempts, each child exiting at once, so a failure is still bounded.
+    code = (
+        "import os\n"
+        "spawned = 0\n"
+        "for _ in range(20):\n"
+        "    try:\n"
+        "        pid = os.fork()\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    if pid == 0:\n"
+        "        os._exit(0)\n"
+        "    os.waitpid(pid, 0); spawned += 1\n"
+        "print('SPAWNED', spawned)"
+    )
+    result = ctx.py(code, policy=["--max-procs", "1"])
+    if "SPAWNED 0" in result.stdout:
+        return Result(HELD, "every fork refused under --max-procs 1")
+    return Result(ESCAPED, f"forked past the process ceiling: {result.stdout.strip() or result.stderr.strip()}")
+
+
+def grow_file_past_ceiling(ctx):
+    # Filling the disk is the other cheap denial of service a writable mount
+    # allows. --max-file-size is RLIMIT_FSIZE: the write past the ceiling ends
+    # the process with SIGXFSZ and the file stops there, measured from the host.
+    target = ctx.workspace / "grow.bin"
+    code = (
+        "import sys\n"
+        "with open(sys.argv[1], 'wb') as f:\n"
+        "    for _ in range(3):\n"
+        "        f.write(b'x' * 1024 * 1024)\n"
+        "print('WROTE')"
+    )
+    ctx.py(code, target, policy=["-v", str(ctx.workspace), "--max-file-size", "1"])
+    size = target.stat().st_size if target.exists() else 0
+    if size <= 1024 * 1024:
+        return Result(HELD, f"file stopped at {size} bytes under a 1 MiB ceiling")
+    return Result(ESCAPED, f"file grew to {size} bytes past a 1 MiB ceiling")
+
+
+def burn_cpu_past_ceiling(ctx):
+    # A looping agent under --max-cpu is ended by the kernel with SIGXCPU once
+    # its CPU seconds are spent, whatever it is doing; the harness's own 30 s
+    # guard is the escape signal.
+    started = time.monotonic()
+    result = ctx.porta_run("/bin/sh", "-c", "while :; do :; done", policy=["--max-cpu", "1"])
+    elapsed = time.monotonic() - started
+    if result.returncode == 124 or elapsed > 10:
+        return Result(ESCAPED, f"CPU burn ran {elapsed:.0f}s past a 1 s ceiling")
+    return Result(HELD, f"CPU burn ended by the kernel after {elapsed:.1f}s (exit {result.returncode})")
+
+
 def udp_under_allow_net(ctx):
     if SYSTEM != "Linux":
         return Result(NA, "UDP under --allow-net is only closed on Linux via seccomp; macOS closes it via the profile, tested elsewhere")
@@ -401,6 +474,9 @@ CORPUS = [
     Attempt("enter a new user namespace", "processes", ["Linux"], new_namespace),
     Attempt("reach the network over MPTCP", "network", ["Linux"], mptcp_socket),
     Attempt("open a raw socket", "network", None, raw_socket),
+    Attempt("fork past --max-procs", "resources", None, fork_past_process_ceiling),
+    Attempt("grow a file past --max-file-size", "resources", None, grow_file_past_ceiling),
+    Attempt("burn CPU past --max-cpu", "resources", None, burn_cpu_past_ceiling),
 ]
 
 
@@ -424,6 +500,14 @@ def main():
 
     rows, findings, tried = [], 0, 0
     try:
+        # Before any verdict: prove the harness runs a command at all. A run
+        # that should succeed writes into the granted workspace and says so;
+        # if it does not, no row below could mean anything.
+        canary = workspace / "canary"
+        result = ctx.porta_run("/bin/sh", "-c", 'echo alive > "$1" && echo RAN', "sh", str(canary),
+                               policy=["-v", str(workspace)])
+        if result.returncode != 0 or "RAN" not in result.stdout or not canary.exists():
+            raise HarnessError(f"the canary run did not run: exit {result.returncode}, {result.stderr.strip()}")
         for attempt in CORPUS:
             if not attempt.applies():
                 rows.append((attempt, Result(NA, f"not applicable on {SYSTEM}")))
@@ -434,6 +518,9 @@ def main():
                 findings += 1
             if result.verdict != NA:
                 tried += 1
+    except HarnessError as error:
+        print(f"HARNESS ERROR: {error}\nno verdicts: the corpus did not run, so nothing was proven", file=sys.stderr)
+        sys.exit(2)
     finally:
         decoy.terminate()
         decoy.wait()

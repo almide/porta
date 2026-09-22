@@ -5,6 +5,7 @@ import http.server
 import threading
 import pathlib
 import platform
+import resource
 import shutil
 import subprocess
 import sys
@@ -264,6 +265,36 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 0 and 'time limit' in result.stdout and '3s' in result.stdout, result
     print('PASS: --timeout kills a hung run (124) with its whole group; a run that finishes keeps its code')
 
+    # The resource ceilings are rlimits set between fork and exec, so the
+    # kernel enforces them and every descendant inherits them. CPU past the
+    # budget ends with SIGXCPU (152), a write past the file ceiling with
+    # SIGXFSZ (153) and the file stops at the ceiling, and a process ceiling
+    # of one leaves a shell unable to fork at all. A ceiling above this user's
+    # hard limit is refused before the run rather than failing the spawn.
+    started = time.monotonic()
+    result = run('run', '/bin/sh', '--max-cpu', '1', '--', '-c', 'while :; do :; done')
+    elapsed = time.monotonic() - started
+    assert result.returncode == 152, result
+    assert elapsed < 10, f'--max-cpu did not stop a CPU burn promptly: {elapsed:.1f}s'
+    big = root / 'big'
+    result = run('run', '/bin/sh', '-v', str(root), '--max-file-size', '1', '--', '-c',
+                 f'head -c 3000000 /dev/zero > {big}')
+    assert result.returncode == 153, result
+    assert big.stat().st_size <= 1024 * 1024, f'--max-file-size let a file grow to {big.stat().st_size}'
+    result = run('run', '/bin/sh', '--max-procs', '1', '--', '-c', '/bin/echo one; /bin/echo two')
+    assert result.returncode != 0 and 'two' not in result.stdout, result
+    result = run('run', '/bin/sh', '--max-cpu', '5', '--max-procs', '500', '--max-file-size', '5', '--', '-c', 'echo fine')
+    assert result.returncode == 0 and result.stdout.strip() == 'fine', result
+    if resource.getrlimit(resource.RLIMIT_NPROC)[1] != resource.RLIM_INFINITY:
+        result = run('run', '/bin/sh', '--max-procs', '99999999', '--', '-c', 'true')
+        assert result.returncode == 125 and 'hard limit' in result.stderr, result
+    result = run('explain', '/bin/sh', '--max-cpu', '2', '--max-procs', '300', '--max-file-size', '1', '--', '-c', 'x')
+    assert result.returncode == 0 and '2s CPU' in result.stdout and '300 processes' in result.stdout \
+        and '1 MiB' in result.stdout, result
+    result = run('explain', '/bin/sh', '--max-cpu', '2', '--json', '--', '-c', 'x')
+    assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0}, result
+    print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
+
     # --json gives explain and check a machine-readable form. explain reports
     # the effective policy; a run it would refuse reports the refusal instead.
     result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
@@ -289,12 +320,12 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     with tempfile.TemporaryDirectory() as save_dir:
         cfg = pathlib.Path(save_dir) / 'porta.toml'
         result = run('explain', '/bin/echo', '-v', save_dir, '--allow-net', 'api.example.com:443',
-                     '--read-policy', 'strict', '--timeout', '20', '--env-pass', 'FOO',
+                     '--read-policy', 'strict', '--timeout', '20', '--max-cpu', '30', '--env-pass', 'FOO',
                      '-e', 'TOKEN=must-not-be-saved', '--save', str(cfg), '--', 'saved')
         assert result.returncode == 0 and cfg.is_file(), result
         text = cfg.read_text()
         assert 'command = "/bin/echo"' in text and 'read-policy = "strict"' in text, text
-        assert 'timeout = 20' in text and 'network = ["api.example.com:443"]' in text, text
+        assert 'timeout = 20' in text and 'max-cpu = 30' in text and 'network = ["api.example.com:443"]' in text, text
         assert 'must-not-be-saved' not in text, 'a -e value leaked into the saved policy'
         result = run('up', '--', 'saved', cwd=save_dir)
         assert result.returncode == 0 and result.stdout.strip() == 'saved', result
