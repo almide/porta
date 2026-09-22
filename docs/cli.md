@@ -68,7 +68,7 @@ line, never dropped.
 | `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
-| `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts |
+| `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
 | `--max-procs <n>` | Process ceiling while the command runs; a fork past it fails. The kernel counts every process of your user, so set it above what you already have |
 | `--max-file-size <MiB>` | Largest file the command may write; the write past it ends the process with SIGXFSZ (exit 153) and the file stops there |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |

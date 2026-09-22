@@ -357,6 +357,18 @@ def burn_cpu_past_ceiling(ctx):
     return Result(HELD, f"CPU burn ended by the kernel after {elapsed:.1f}s (exit {result.returncode})")
 
 
+def ignore_sigxcpu(ctx):
+    # The obvious way around a CPU rlimit is to ignore the signal it sends.
+    # Linux follows with SIGKILL at the hard limit; macOS never does, so there
+    # porta's supervisor measures the process group's CPU and kills it itself.
+    started = time.monotonic()
+    result = ctx.porta_run("/bin/sh", "-c", 'trap "" XCPU; while :; do :; done', policy=["--max-cpu", "1"])
+    elapsed = time.monotonic() - started
+    if result.returncode == 124 or elapsed > 10:
+        return Result(ESCAPED, f"ignoring SIGXCPU kept the CPU burn alive for {elapsed:.0f}s")
+    return Result(HELD, f"killed after {elapsed:.1f}s despite ignoring SIGXCPU (exit {result.returncode})")
+
+
 def udp_under_allow_net(ctx):
     if SYSTEM != "Linux":
         return Result(NA, "UDP under --allow-net is only closed on Linux via seccomp; macOS closes it via the profile, tested elsewhere")
@@ -477,6 +489,7 @@ CORPUS = [
     Attempt("fork past --max-procs", "resources", None, fork_past_process_ceiling),
     Attempt("grow a file past --max-file-size", "resources", None, grow_file_past_ceiling),
     Attempt("burn CPU past --max-cpu", "resources", None, burn_cpu_past_ceiling),
+    Attempt("ignore SIGXCPU and keep burning", "resources", None, ignore_sigxcpu),
 ]
 
 

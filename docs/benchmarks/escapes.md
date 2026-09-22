@@ -8,9 +8,9 @@ stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 16 tried, 0 escaped
+- **macOS arm64**: 17 tried, 0 escaped
 - **Linux**: 16 tried, 0 escaped on the last CI run before the resource rows;
-  the three resource rows below are marked pending until CI has run them
+  the four resource rows below are marked pending until CI has run them
 
 ## A correction to earlier runs
 
@@ -50,13 +50,17 @@ so the claim and its evidence are not confused again.
 | fork past `--max-procs` | resources | held | pending |
 | grow a file past `--max-file-size` | resources | held | pending |
 | burn CPU past `--max-cpu` | resources | held | pending |
+| ignore SIGXCPU and keep burning | resources | held | pending |
 
 Where a row is — on one platform, the escape is not expressible there:
 the mount-internal and Keychain protections are macOS-only (Landlock grants
 a directory whole), and the syscall-level attempts are Linux-only (the macOS
 profile closes those channels differently, tested in the integration suite).
 The resource rows are kernel rlimits and are expected to hold on both; the
-Linux column says so only once CI has run them.
+Linux column says so only once CI has run them. The SIGXCPU row exists because
+the first macOS run of the CPU ceiling showed a program that ignores the signal
+running on: macOS never follows SIGXCPU with SIGKILL as Linux does, so porta's
+supervisor now measures the process group's CPU and kills it at the ceiling.
 
 Run it yourself against any build:
 

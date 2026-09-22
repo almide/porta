@@ -66,7 +66,9 @@ not stop one of them is accurate and not a vulnerability.
   `--max-procs` and `--max-file-size` are rlimits set between fork and exec and
   inherited by every descendant, so a CPU burn ends with SIGXCPU, a fork bomb
   cannot fork, and a file stops growing at the ceiling — each per process, not
-  per run. What is missing is a memory ceiling: an rlimit caps address space,
+  per run. A program that ignores SIGXCPU is killed anyway: by the kernel at
+  the hard limit on Linux, and on macOS, which never follows the signal with a
+  kill, by porta's supervisor once the process group's CPU reaches the ceiling. What is missing is a memory ceiling: an rlimit caps address space,
   not resident memory, and a real one needs cgroup v2 with a delegated
   subtree, which porta, refusing to run as root, cannot assume. Until then a
   confined program can still allocate. (The WASM agent runtime bounds fuel,

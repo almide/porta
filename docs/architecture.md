@@ -25,6 +25,7 @@ Wasmtime, the OS enforcement, and the broker that holds model credentials.
 |---|---|
 | `wasmtime_bridge.rs` | WASM instance lifecycle and the FFI surface |
 | `sandbox_exec.rs`, `sandbox_profile.rs`, `landlock_policy.rs`, `landlock.rs`, `seccomp.rs` | one sandboxed request, the macOS profile, the Linux ruleset and the egress channels Landlock cannot reach |
+| `ceilings.rs` | resource ceilings: the rlimits set between fork and exec, and the supervisor's wait that ends a run at its deadline or CPU ceiling |
 | `sandbox_check.rs`, `denials.rs` | what this host can enforce; what the kernel refused during a run and which flag would have allowed it |
 | `http_proxy.rs`, `proxy_egress.rs`, `proxy_audit.rs` | the loopback CONNECT proxy, its egress guard, and its decision trail |
 | `agent_runtime.rs`, `agent_journal.rs`, `agent_mcp.rs` | the broker, durable run records, granted remote MCP calls |

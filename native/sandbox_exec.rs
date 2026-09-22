@@ -4,6 +4,7 @@
 //! this process, or supervise a child — and each platform applies what it can
 //! express, refusing the run when it cannot express a requested rule.
 
+use crate::ceilings::{apply_ceilings, unsettable_ceiling, wait_within, Ceiling, MIB};
 use crate::json_text::escape_json_text;
 #[cfg(target_os = "linux")]
 use crate::landlock_policy::readable_roots;
@@ -57,81 +58,6 @@ struct SandboxRequest {
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
-}
-
-/// The exit code porta reports when a run hit its `--timeout`, the same code
-/// `timeout(1)` uses.
-const TIMED_OUT: i64 = 124;
-
-/// Waits for a supervised child, killing it and everything it started once the
-/// deadline passes. The child leads its own process group (the caller set
-/// that before spawning), so one signal to the negated pid reaches the whole
-/// tree, not just the shell porta launched. `timeout` of 0 waits without a
-/// limit.
-/// The rlimits a request asks for: the kernel's resource id, the value in the
-/// kernel's unit, and the flag that asked. `Copy` so the closure that applies
-/// them after the fork can own its own.
-#[derive(Clone, Copy)]
-struct Ceiling {
-    resource: libc::c_int,
-    value: u64,
-    flag: &'static str,
-}
-
-const MIB: u64 = 1024 * 1024;
-
-/// Sets each ceiling as both the soft and the hard limit, so the command
-/// cannot raise it back. Runs in the child between fork and exec, or in this
-/// process right before it replaces itself, and is inherited from there.
-fn apply_ceilings(ceilings: &[Ceiling]) -> std::io::Result<()> {
-    for ceiling in ceilings {
-        let limit = libc::rlimit { rlim_cur: ceiling.value as libc::rlim_t, rlim_max: ceiling.value as libc::rlim_t };
-        if unsafe { libc::setrlimit(ceiling.resource as _, &limit) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    Ok(())
-}
-
-/// Why a ceiling cannot be set, if it cannot. An unprivileged process may only
-/// lower a hard limit, so a ceiling above this user's is one the kernel would
-/// refuse; better to say so here, with the number, than to fail the spawn with
-/// a bare `Operation not permitted`.
-fn unsettable_ceiling(ceilings: &[Ceiling]) -> Option<String> {
-    ceilings.iter().find_map(|ceiling| {
-        let mut current = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-        if unsafe { libc::getrlimit(ceiling.resource as _, &mut current) } != 0 {
-            return Some(format!("{} cannot be applied: {}", ceiling.flag, std::io::Error::last_os_error()));
-        }
-        (current.rlim_max != libc::RLIM_INFINITY && ceiling.value > current.rlim_max as u64).then(|| {
-            format!(
-                "{} asks for {} but this user's hard limit is {}; an unprivileged process can only lower it",
-                ceiling.flag, ceiling.value, current.rlim_max
-            )
-        })
-    })
-}
-
-fn wait_within(mut child: std::process::Child, timeout: u64) -> std::io::Result<i64> {
-    if timeout == 0 {
-        return child.wait().map(exit_code);
-    }
-    let group = child.id() as libc::pid_t;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(exit_code(status));
-        }
-        if std::time::Instant::now() >= deadline {
-            // Negated pid: the whole process group, so a shell's children die
-            // with it. SIGKILL because a run past its deadline has already had
-            // its time; then reap so no zombie is left.
-            unsafe { libc::kill(-group, libc::SIGKILL) };
-            let _ = child.wait();
-            return Ok(TIMED_OUT);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
 }
 
 /// A tag for one run: the pid and the clock, which no two runs on one host
@@ -705,21 +631,11 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout)
+            wait_within(child, request.timeout, request.max_cpu)
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
     Ok(code)
-}
-
-/// A child's exit code, or 128 plus the signal that ended it, as a shell
-/// would report.
-fn exit_code(status: std::process::ExitStatus) -> i64 {
-    use std::os::unix::process::ExitStatusExt;
-    match status.code() {
-        Some(code) => code as i64,
-        None => 128 + status.signal().unwrap_or(0) as i64,
-    }
 }
 
 /// After a run, say what the sandbox refused and what would have allowed it.
@@ -802,7 +718,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command under the sandbox: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout)
+            wait_within(child, request.timeout, request.max_cpu)
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     Ok(code)

@@ -276,6 +276,14 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     elapsed = time.monotonic() - started
     assert result.returncode == 152, result
     assert elapsed < 10, f'--max-cpu did not stop a CPU burn promptly: {elapsed:.1f}s'
+    # Ignoring SIGXCPU buys nothing: Linux kills at the hard limit a second
+    # later (137), and on macOS, where the kernel only ever signals, porta's
+    # supervisor measures the group's CPU and kills it at the ceiling (152).
+    started = time.monotonic()
+    result = run('run', '/bin/sh', '--max-cpu', '1', '--', '-c', 'trap "" XCPU; while :; do :; done')
+    elapsed = time.monotonic() - started
+    assert result.returncode in (152, 137), result
+    assert elapsed < 10, f'a process ignoring SIGXCPU outlived --max-cpu: {elapsed:.1f}s'
     big = root / 'big'
     result = run('run', '/bin/sh', '-v', str(root), '--max-file-size', '1', '--', '-c',
                  f'head -c 3000000 /dev/zero > {big}')
