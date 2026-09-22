@@ -2,16 +2,37 @@
 
 use super::*;
 
-/// Run _start. Returns exit code (0 = success, -1 = error/trap).
+/// Run the instance: `_start` of a core module, or `wasi:cli/run` of a
+/// component. Returns exit code (0 = success, -1 = error/trap).
 pub fn wt_run(handle: i64) -> i64 {
     let mut instances = locked(&INSTANCES);
     let Some(inst) = instances.get_mut(handle as usize).and_then(|slot| slot.as_mut()) else { return -1 };
     let stdout_pipe = MemoryOutputPipe::new(1024 * 1024);
     let stderr_pipe = MemoryOutputPipe::new(1024 * 1024);
-    let ctx = PortaCtx {
-        wasi: wasi_context(inst, &stdout_pipe, &stderr_pipe),
-        limits: store_limits(inst.max_memory_bytes),
+    // Both are reference counted, so the clone is a handle, not a copy.
+    let result = match &inst.code {
+        Code::Module(module) => run_module(inst, module.clone(), &stdout_pipe, &stderr_pipe),
+        Code::Component(component) => run_component(inst, component.clone(), &stdout_pipe, &stderr_pipe),
     };
+    let (fuel_left, result) = match result {
+        Ok(outcome) => outcome,
+        Err(reason) => return failed_run(inst, reason),
+    };
+    if inst.fuel > 0 {
+        inst.fuel_consumed = inst.fuel.saturating_sub(fuel_left);
+    }
+    // contents() clones, which avoids fighting the pipes over ref counts.
+    inst.stdout_result = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+    inst.stderr_result = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
+    exit_status(inst, result)
+}
+
+/// What a run reports back: the fuel left in the store, and how the entry
+/// point ended. An `Err` here is a run that never reached its entry point.
+type Outcome = Result<(u64, Result<(), Error>), String>;
+
+fn run_module(inst: &WasmInstance, module: Module, stdout: &MemoryOutputPipe, stderr: &MemoryOutputPipe) -> Outcome {
+    let ctx = PortaCtx { wasi: wasi_builder(inst, stdout, stderr).build_p1(), limits: store_limits(inst.max_memory_bytes) };
     let mut store = Store::new(&inst.engine, ctx);
     store.limiter(|ctx| &mut ctx.limits);
     if inst.fuel > 0 {
@@ -21,26 +42,39 @@ pub fn wt_run(handle: i64) -> i64 {
     // Only WASI is linked. Direct porta.exec_command/http_request imports
     // bypassed MCP capability and allow-list checks; do not expose them.
     let mut linker = Linker::new(&inst.engine);
-    if let Err(e) = p1::add_to_linker_sync(&mut linker, |ctx: &mut PortaCtx| &mut ctx.wasi) {
-        return failed_run(inst, format!("linker setup failed: {}", e));
-    }
-    let instance = match linker.instantiate(&mut store, &inst.module) {
-        Ok(i) => i,
-        Err(e) => return failed_run(inst, format!("instantiation failed: {}", e)),
-    };
+    p1::add_to_linker_sync(&mut linker, |ctx: &mut PortaCtx| &mut ctx.wasi).map_err(|e| format!("linker setup failed: {}", e))?;
+    let instance = linker.instantiate(&mut store, &module).map_err(|e| format!("instantiation failed: {}", e))?;
     let entry = inst.entry_point.clone();
-    let Some(result) = call_entry(&instance, &mut store, &entry) else {
-        return failed_run(inst, format!("{} function not found", entry));
-    };
+    let result = call_entry(&instance, &mut store, &entry).ok_or_else(|| format!("{} function not found", entry))?;
+    Ok((store.get_fuel().unwrap_or(0), result))
+}
 
+/// A WASI 0.2 component: linked against the p2 interfaces only, so the same
+/// rule holds — nothing of porta's own is reachable from the guest — and run
+/// through `wasi:cli/run`, the one entry a command component has. `--entry`
+/// does not apply.
+fn run_component(inst: &WasmInstance, component: component::Component, stdout: &MemoryOutputPipe, stderr: &MemoryOutputPipe) -> Outcome {
+    use wasmtime_wasi::p2::bindings::sync::Command;
+    let ctx = ComponentCtx {
+        wasi: wasi_builder(inst, stdout, stderr).build(),
+        table: ResourceTable::new(),
+        limits: store_limits(inst.max_memory_bytes),
+    };
+    let mut store = Store::new(&inst.engine, ctx);
+    store.limiter(|ctx| &mut ctx.limits);
     if inst.fuel > 0 {
-        inst.fuel_consumed = inst.fuel.saturating_sub(store.get_fuel().unwrap_or(0));
+        let _ = store.set_fuel(inst.fuel);
     }
-    // contents() clones, which avoids fighting the pipes over ref counts.
-    inst.stdout_result = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
-    inst.stderr_result = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
-    drop(store);
-    exit_status(inst, result)
+    let mut linker = component::Linker::new(&inst.engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|e| format!("linker setup failed: {}", e))?;
+    let command = Command::instantiate(&mut store, &component, &linker).map_err(|e| format!("instantiation failed: {}", e))?;
+    // `run` returning its own error is the component's exit 1, not a trap.
+    let result = match command.wasi_cli_run().call_run(&mut store) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(())) => Err(Error::new(wasmtime_wasi::I32Exit(1))),
+        Err(error) => Err(error),
+    };
+    Ok((store.get_fuel().unwrap_or(0), result))
 }
 
 /// Records why a run never reached its entry point, for the caller to read back.
@@ -52,7 +86,8 @@ fn failed_run(inst: &mut WasmInstance, reason: String) -> i64 {
 
 /// The guest's WASI view: its arguments, its explicit environment, a stdin that
 /// is at end of input, and only the directories preopened for this instance.
-fn wasi_context(inst: &WasmInstance, stdout: &MemoryOutputPipe, stderr: &MemoryOutputPipe) -> WasiP1Ctx {
+/// The same builder serves preview 1 and 0.2; the caller picks the build.
+fn wasi_builder(inst: &WasmInstance, stdout: &MemoryOutputPipe, stderr: &MemoryOutputPipe) -> WasiCtxBuilder {
     let mut wasi = WasiCtxBuilder::new();
     if !inst.wasi_args.is_empty() {
         wasi.args(&inst.wasi_args);
@@ -71,7 +106,7 @@ fn wasi_context(inst: &WasmInstance, stdout: &MemoryOutputPipe, stderr: &MemoryO
     }
     wasi.stdout(stdout.clone());
     wasi.stderr(stderr.clone());
-    wasi.build_p1()
+    wasi
 }
 
 fn store_limits(max_memory_bytes: usize) -> StoreLimits {

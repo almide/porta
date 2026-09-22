@@ -93,6 +93,16 @@ capability set before execution.
 
 Built-in profiles: `ai-agent` (IO + Process), `worker` (+Clock +Random), `full`
 (all). Manifest capabilities are respected in both `serve` and `run` modes.
+
+A WASI 0.2 component (`almide build --target wasm --component`, or anything
+that targets `wasi:cli/command`) runs under the same check. Its imports are
+interfaces rather than functions, and each maps to the capabilities above:
+`wasi:cli/std*` and `wasi:io/*` to `io`, `wasi:cli/exit` to `process`,
+`wasi:cli/environment` to `process` and `env`, `wasi:clocks/*` to `clock`,
+`wasi:random/*` to `random`, `wasi:filesystem/*` to `fs` and `fs.write` (one
+interface carries both), `wasi:sockets/*` and `wasi:http/*` to `net`. An
+interface not in that list is refused. Fuel, memory and preopens apply as to a
+module; the entry is `wasi:cli/run`, so `--entry` does not apply.
 Direct `porta.exec_command` / `porta.http_request` WASM imports are rejected;
 host execution and HTTP requests go through the checked MCP built-in tools.
 

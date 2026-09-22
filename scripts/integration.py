@@ -303,6 +303,31 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0}, result
     print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
 
+    # A WASI 0.2 component runs under the same capability check, budgets and
+    # preopens as a core module. Its imports are interfaces, so the check maps
+    # them: this one needs io, process, clock and random — `worker` has them,
+    # `ai-agent` lacks clock and refuses it by name. Fuel still bounds it, and
+    # inspect says what it is. The component is built here from its source
+    # when the almide toolchain is present, as it is in CI.
+    almide = pathlib.Path(porta).parent.parent / '.tools' / 'almide' / 'almide'
+    if almide.is_file():
+        component = root / 'component-hello.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
+                                '--component', '-o', str(component)], text=True, capture_output=True, timeout=600)
+        assert built.returncode == 0 and component.is_file(), built
+        assert component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the fixture is not a component'
+        result = run('run', str(component), '--profile', 'worker')
+        assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
+        result = run('run', str(component), '--profile', 'ai-agent')
+        assert result.returncode != 0 and 'wasi:clocks/wall-clock' in result.stderr and "'clock'" in result.stderr, result
+        result = run('run', str(component), '--profile', 'worker', '--step-limit', '10')
+        assert result.returncode != 0 and 'hello' not in result.stdout, result
+        result = run('inspect', str(component))
+        assert result.returncode == 0 and 'Component (WASI 0.2)' in result.stdout and 'wasi:cli/run' in result.stdout, result
+        print('PASS: a WASI 0.2 component runs, is capability-checked by interface, is bounded by fuel, and inspects as one')
+    else:
+        print('SKIP: no almide toolchain at .tools/almide; the WASI 0.2 component test did not run')
+
     # --json gives explain and check a machine-readable form. explain reports
     # the effective policy; a run it would refuse reports the refusal instead.
     result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
