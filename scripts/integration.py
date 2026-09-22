@@ -512,6 +512,17 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
             if '[porta] the sandbox refused this run' in result.stderr:
                 break
             time.sleep(2)
+        if '[porta] the sandbox refused this run' not in result.stderr:
+            # Show what the log holds, so a missing footer can be told apart
+            # from a missing record: lag, throttling, or a predicate miss.
+            raw = subprocess.run(['/usr/bin/log', 'show', '--last', '2m', '--style', 'compact',
+                                  '--predicate', 'senderImagePath CONTAINS "Sandbox"'],
+                                 text=True, capture_output=True, timeout=120)
+            lines = raw.stdout.splitlines()
+            hits = [l for l in lines if 'denied.txt' in l or 'porta' in l]
+            print(f'--- unified log: {len(lines)} Sandbox lines in the last 2m, {len(hits)} mentioning this run ---', file=sys.stderr)
+            print('\n'.join(hits[-20:] or lines[-20:]), file=sys.stderr)
+            print(f'--- log show rc={raw.returncode} stderr={raw.stderr.strip()[:300]} ---', file=sys.stderr)
         assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
         assert f'-v {ungranted}' in result.stderr, result.stderr
         result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})
