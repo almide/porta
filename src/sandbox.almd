@@ -126,6 +126,7 @@ fn required_interface_capabilities(iface: String) -> Option[List[Capability]] =
     "wasi:cli/stdin" => some([CapIO]),
     "wasi:cli/stdout" => some([CapIO]),
     "wasi:cli/stderr" => some([CapIO]),
+    "wasi:cli/types" => some([CapIO]),
     "wasi:cli/terminal-input" => some([CapIO]),
     "wasi:cli/terminal-output" => some([CapIO]),
     "wasi:cli/terminal-stdin" => some([CapIO]),

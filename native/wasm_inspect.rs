@@ -19,6 +19,10 @@ pub fn wt_inspect(wasm_path: impl AsRef<str>) -> String {
     };
     let mut config = Config::new();
     config.wasm_component_model(true);
+    // The same features the runner enables, or a WASI 0.3 component would be
+    // unreadable here and its imports invisible to the capability check.
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_more_async_builtins(true);
     let engine = match Engine::new(&config) {
         Ok(engine) => engine,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
@@ -87,11 +91,19 @@ fn inspect_component(engine: &Engine, bytes: &[u8]) -> String {
     let ty = component.component_type();
     let imports: Vec<String> = ty
         .imports(engine)
-        .map(|(name, item)| format!("{{\"module\":\"{}\",\"name\":\"\",\"kind\":\"{}\"}}", crate::json_text::escape_json_text(name), item_kind(&item)))
+        .map(|(name, item)| format!("{{\"module\":\"{}\",\"name\":\"\",\"kind\":\"{}\"}}", crate::json_text::escape_json_text(name), item_kind(&item.ty)))
         .collect();
     let exports: Vec<String> = ty
         .exports(engine)
-        .map(|(name, item)| format!("{{\"name\":\"{}\",\"kind\":\"{}\"}}", crate::json_text::escape_json_text(name), item_kind(&item)))
+        .map(|(name, item)| format!("{{\"name\":\"{}\",\"kind\":\"{}\"}}", crate::json_text::escape_json_text(name), item_kind(&item.ty)))
         .collect();
-    format!("{{\"component\":true,\"imports\":[{}],\"exports\":[{}],\"memories\":[]}}", imports.join(","), exports.join(","))
+    // The WASI version is the one its imports name; a component importing no
+    // wasi: interface at all is reported as 0.2, the sync world it would use.
+    let wasi = if ty.imports(engine).any(|(name, _)| name.starts_with("wasi:") && name.contains("@0.3")) { "0.3" } else { "0.2" };
+    format!(
+        "{{\"component\":true,\"wasi\":\"{}\",\"imports\":[{}],\"exports\":[{}],\"memories\":[]}}",
+        wasi,
+        imports.join(","),
+        exports.join(",")
+    )
 }

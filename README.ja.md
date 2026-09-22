@@ -97,7 +97,7 @@ porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
 ### 信頼できない/生成された WASM を動かす
 
 ユーザー投稿やモデル生成のコードを、ホストの FS もネットワークもなし、燃料・
-メモリ・時間を縛って実行。core module でも WASI 0.2 コンポーネントでも同じ検査:
+メモリ・時間を縛って実行。core module でも WASI 0.2 / 0.3 コンポーネントでも同じ検査:
 宣言された import ごとに、与えた能力が要ります。
 
 ```bash

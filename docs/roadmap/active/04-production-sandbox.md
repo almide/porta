@@ -128,7 +128,11 @@ symlink.
   rows. A memory ceiling is the remaining resource gap: an rlimit caps
   address space, not residency, and a real one needs cgroup v2 in a delegated
   subtree, Linux-only and environment-gated — fail-closed when absent, never
-  silent. `explain
+  silent. The WASM side moved to wasmtime 47 and runs WASI 0.2 and 0.3
+  components beside core modules (2026-09-22): a component's imports are
+  interfaces, each mapped to the capability it needs and refused when
+  unknown, and a module the engine cannot read is refused rather than run
+  unchecked. `explain
   --json` and `check --json` also landed: the effective policy (or a
   `{"refused":...}`) and the host's primitives as machine-readable objects, so
   a CI step can gate on the policy without parsing prose. `explain --save

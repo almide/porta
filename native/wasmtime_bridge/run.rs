@@ -12,7 +12,8 @@ pub fn wt_run(handle: i64) -> i64 {
     // Both are reference counted, so the clone is a handle, not a copy.
     let result = match &inst.code {
         Code::Module(module) => run_module(inst, module.clone(), &stdout_pipe, &stderr_pipe),
-        Code::Component(component) => run_component(inst, component.clone(), &stdout_pipe, &stderr_pipe),
+        Code::Component { component, p3: false } => run_component(inst, component.clone(), &stdout_pipe, &stderr_pipe),
+        Code::Component { component, p3: true } => run_component_p3(inst, component.clone(), &stdout_pipe, &stderr_pipe),
     };
     let (fuel_left, result) = match result {
         Ok(outcome) => outcome,
@@ -72,6 +73,39 @@ fn run_component(inst: &WasmInstance, component: component::Component, stdout: &
     let result = match command.wasi_cli_run().call_run(&mut store) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(())) => Err(Error::new(wasmtime_wasi::I32Exit(1))),
+        Err(error) => Err(error),
+    };
+    Ok((store.get_fuel().unwrap_or(0), result))
+}
+
+/// A WASI 0.3 component: the same context and limits, linked against the 0.3
+/// interfaces, and run under the store's concurrent executor because its
+/// `run` is async-lifted. The executor is wasmtime-wasi's own tokio runtime,
+/// entered for this call only; porta stays synchronous around it.
+fn run_component_p3(inst: &WasmInstance, component: component::Component, stdout: &MemoryOutputPipe, stderr: &MemoryOutputPipe) -> Outcome {
+    use wasmtime_wasi::p3::bindings::Command;
+    let ctx = ComponentCtx {
+        wasi: wasi_builder(inst, stdout, stderr).build(),
+        table: ResourceTable::new(),
+        limits: store_limits(inst.max_memory_bytes),
+    };
+    let mut store = Store::new(&inst.engine, ctx);
+    store.limiter(|ctx| &mut ctx.limits);
+    if inst.fuel > 0 {
+        let _ = store.set_fuel(inst.fuel);
+    }
+    let mut linker = component::Linker::new(&inst.engine);
+    wasmtime_wasi::p3::add_to_linker(&mut linker).map_err(|e| format!("linker setup failed: {}", e))?;
+    let ran: Result<Result<(), ()>, Error> = wasmtime_wasi::runtime::in_tokio(async {
+        let command = Command::instantiate_async(&mut store, &component, &linker)
+            .await
+            .map_err(|e| Error::msg(format!("instantiation failed: {}", e)))?;
+        store.run_concurrent(async move |accessor| command.wasi_cli_run().call_run(accessor).await).await?
+    });
+    let result = match ran {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(())) => Err(Error::new(wasmtime_wasi::I32Exit(1))),
+        Err(error) if error.to_string().starts_with("instantiation failed") => return Err(error.to_string()),
         Err(error) => Err(error),
     };
     Ok((store.get_fuel().unwrap_or(0), result))

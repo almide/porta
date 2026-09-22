@@ -16,21 +16,9 @@ use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView, ResourceTable};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-/// What a `.wasm` file turned out to be. A core module runs through WASI
-/// preview 1 and its `_start`; a WASI 0.2 component runs through the
-/// component linker and its `wasi:cli/run`. Both get the same capability
-/// check, the same preopens, the same fuel and memory limits.
-enum Code {
-    Module(Module),
-    Component(component::Component),
-}
-
-/// A component is a core module with one more layer; the header's layer field
-/// tells them apart before either parser is asked. After the magic come a
-/// 16-bit version (0x000d for components) and a 16-bit layer (1 = component).
-pub(crate) fn is_component(bytes: &[u8]) -> bool {
-    bytes.len() >= 8 && bytes[..4] == *b"\0asm" && bytes[4..8] == [0x0d, 0x00, 0x01, 0x00]
-}
+mod load;
+use load::{engine_config, load_code, Code, ComponentCtx};
+pub(crate) use load::is_component;
 
 struct WasmInstance {
     engine: Engine,
@@ -51,20 +39,6 @@ struct WasmInstance {
 struct PortaCtx {
     wasi: WasiP1Ctx,
     limits: StoreLimits,
-}
-
-/// The store data for a component run: the WASI 0.2 context and the resource
-/// table its handles live in, under the same memory limiter as a module.
-struct ComponentCtx {
-    wasi: WasiCtx,
-    table: ResourceTable,
-    limits: StoreLimits,
-}
-
-impl WasiView for ComponentCtx {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
-    }
 }
 
 static INSTANCES: Mutex<Vec<Option<WasmInstance>>> = Mutex::new(Vec::new());
@@ -91,31 +65,8 @@ pub fn wt_create(wasm_path: impl AsRef<str>, fuel: i64) -> i64 {
         Err(_) => return -1,
     };
 
-    let mut config = Config::new();
-    if fuel > 0 {
-        config.consume_fuel(true);
-    }
-    config.wasm_multi_memory(true);
-    config.wasm_component_model(true);
-
-    let engine = match Engine::new(&config) {
-        Ok(e) => e,
-        Err(_) => return -1,
-    };
-
-    // Serialized native modules are executable code, not untrusted WASM.
-    // Never deserialize an attacker-writable sidecar next to an agent.
-    let code = if is_component(&bytes) {
-        match component::Component::from_binary(&engine, &bytes) {
-            Ok(component) => Code::Component(component),
-            Err(_) => return -1,
-        }
-    } else {
-        match Module::from_binary(&engine, &bytes) {
-            Ok(module) => Code::Module(module),
-            Err(_) => return -1,
-        }
-    };
+    let Ok(engine) = Engine::new(&engine_config(fuel)) else { return -1 };
+    let Some(code) = load_code(&engine, &bytes) else { return -1 };
 
     let inst = WasmInstance {
         engine,

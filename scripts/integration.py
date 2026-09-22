@@ -325,6 +325,24 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         result = run('inspect', str(component))
         assert result.returncode == 0 and 'Component (WASI 0.2)' in result.stdout and 'wasi:cli/run' in result.stdout, result
         print('PASS: a WASI 0.2 component runs, is capability-checked by interface, is bounded by fuel, and inspects as one')
+        # The same program as a WASI 0.3 component: async-lifted run, stdio
+        # over component-model streams. Almide emits it with
+        # ALMIDE_COMPONENT_P3=1; its world imports the filesystem interfaces
+        # even when unused, so `worker` refuses it by name and `full` runs it.
+        p3 = root / 'component-hello-p3.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
+                                '--component', '-o', str(p3)], text=True, capture_output=True, timeout=600,
+                               env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
+        assert built.returncode == 0 and p3.is_file(), built
+        result = run('run', str(p3), '--profile', 'full')
+        assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
+        result = run('run', str(p3), '--profile', 'worker')
+        assert result.returncode != 0 and 'wasi:filesystem' in result.stderr, result
+        result = run('run', str(p3), '--profile', 'full', '--step-limit', '10')
+        assert result.returncode != 0 and 'hello' not in result.stdout, result
+        result = run('inspect', str(p3))
+        assert result.returncode == 0 and 'wasi:cli/run@0.3' in result.stdout, result
+        print('PASS: a WASI 0.3 component runs through the async linker under the same check and budgets')
     else:
         print('SKIP: no almide toolchain at .tools/almide; the WASI 0.2 component test did not run')
 
