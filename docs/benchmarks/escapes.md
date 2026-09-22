@@ -2,7 +2,7 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-22, porta 0.6.1 plus the resource ceilings, macOS arm64
+this run is 2026-09-22, porta 0.6.2, macOS arm64
 locally and Linux x86_64 on the CI runner (run 35703962916). A row is **held** when the escape was
 stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
