@@ -72,7 +72,7 @@ pub(crate) fn unsettable_ceiling(ceilings: &[Ceiling]) -> Option<String> {
 /// Ends the whole process group and reaps the child. Negated pid: a shell's
 /// children die with it. SIGKILL because a run past its budget has already
 /// had its share; then the wait, so no zombie is left.
-fn kill_group(child: &mut std::process::Child) {
+pub(crate) fn kill_group(child: &mut std::process::Child) {
     let group = child.id() as libc::pid_t;
     unsafe { libc::kill(-group, libc::SIGKILL) };
     let _ = child.wait();

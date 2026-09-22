@@ -300,8 +300,30 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 0 and '2s CPU' in result.stdout and '300 processes' in result.stdout \
         and '1 MiB' in result.stdout, result
     result = run('explain', '/bin/sh', '--max-cpu', '2', '--json', '--', '-c', 'x')
-    assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0}, result
+    assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0, 'memory_mib': 0}, result
     print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
+
+    # --max-memory-mb is a cgroup v2 ceiling placed through the systemd user
+    # manager, so it exists only on Linux and only where a user manager runs
+    # for this user. Where it does, an allocation past the ceiling is
+    # OOM-killed (137) and a run within it keeps its code; anywhere else the
+    # flag is refused before the run, naming the reason — never run without.
+    user_manager = platform.system() == 'Linux' and os.path.exists(f'/run/user/{os.getuid()}/bus') \
+        and (os.path.exists('/usr/bin/busctl') or os.path.exists('/bin/busctl'))
+    hog = "b = bytearray(200 * 1024 * 1024)\nprint('ALLOCATED')"
+    if user_manager:
+        result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
+        assert result.returncode == 137 and 'ALLOCATED' not in result.stdout, result
+        result = run('run', sys.executable, '--max-memory-mb', '512', '--', '-c', hog)
+        assert result.returncode == 0 and 'ALLOCATED' in result.stdout, result
+        result = run('explain', '/bin/sh', '--max-memory-mb', '64', '--', '-c', 'x')
+        assert result.returncode == 0 and '64 MiB resident' in result.stdout, result
+        print('PASS: --max-memory-mb OOM-kills a run past the ceiling and leaves one within it alone')
+    else:
+        result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
+        assert result.returncode == 125 and 'ALLOCATED' not in result.stdout, result
+        assert ('cgroup' in result.stderr or 'user manager' in result.stderr), result.stderr
+        print('PASS: --max-memory-mb is refused where no cgroup ceiling can be placed (this host), never run without')
 
     # A WASI 0.2 component runs under the same capability check, budgets and
     # preopens as a core module. Its imports are interfaces, so the check maps
@@ -361,7 +383,11 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('check', '--json')
     assert result.returncode == 0, result
     host = json.loads(result.stdout)
-    assert host['all_enforced'] is True and host['missing'] == 0, host
+    # The memory ceiling is the one primitive a host may honestly lack (no
+    # systemd user manager); everything else must be present.
+    absent = [p['name'] for p in host['primitives'] if not p['present']]
+    assert all('memory ceiling' in name for name in absent), host
+    assert host['all_enforced'] is (host['missing'] == 0) and host['missing'] == len(absent), host
     assert host['primitives'] and all('present' in p for p in host['primitives']), host
     print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
 

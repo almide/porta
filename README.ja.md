@@ -28,7 +28,7 @@ Landlock＋seccomp で強制。ラッパーでもお願いでもなく、OS の�
 カーネルが表現できない制限は、緩めず実行を拒否します（**fail-closed**）。
 
 主張ではなく証拠で。公開の脱獄[コーパス](docs/benchmarks/escapes.md)は
-**macOS 17/17・Linux 20/20、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
+**macOS 17/17・Linux 21/21、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
@@ -91,8 +91,9 @@ porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
 ```
 
 ハングは締切で強制終了、CPU 焼きは SIGXCPU で終わり、fork 爆弾は fork できず、
-ファイルは上限で止まる。縛れないのはメモリ —— それには cgroup v2 が要り、porta
-はそのために root で動くことを拒みます。
+ファイルは上限で止まる。systemd のユーザーセッションがある Linux では
+`--max-memory-mb 512` で実行全体の実メモリを cgroup v2 で縛れます。置けない環境
+では、無しで走らせるのではなくフラグを拒否します。
 
 ### 信頼できない/生成された WASM を動かす
 

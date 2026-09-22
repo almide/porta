@@ -99,6 +99,7 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
     max_cpu: opts.max_cpu,
     max_procs: opts.max_procs,
     max_file_size: opts.max_file_size,
+    max_memory_mb: opts.max_memory_mb,
   }
   ok(request)
 }

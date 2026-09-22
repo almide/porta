@@ -128,12 +128,15 @@ host execution and HTTP requests go through the checked MCP built-in tools.
 - **Linux protects a mount as a whole.** The repository-hooks and trusted-file
   protections inside a writable mount are macOS only until Landlock can express
   a directory minus some of its files.
-- **Resource ceilings are per process and there is no memory ceiling.**
-  `--timeout`, `--max-cpu`, `--max-procs` and `--max-file-size` bound a run
-  the way an unprivileged process can (a process group kill and rlimits the
-  kernel enforces on every descendant). A resident-memory cap needs cgroup v2
-  in a delegated subtree; porta does not run as root to get one, so a confined
-  program can still allocate. The WASM runtime, by contrast, caps memory.
+- **Resource ceilings are what an unprivileged process can place.**
+  `--timeout`, `--max-cpu`, `--max-procs` and `--max-file-size` are a process
+  group kill and rlimits the kernel enforces on every descendant, per process.
+  `--max-memory-mb` is the one per-run ceiling: cgroup v2 `memory.max` with
+  swap closed, placed by asking the systemd user manager for a transient scope
+  around the command before it runs its first instruction. That exists only on
+  Linux and only where a user manager runs for you (a logind session, or
+  `loginctl enable-linger`); anywhere else the flag refuses the run rather
+  than running without it. The WASM runtime caps memory on every platform.
 - **macOS and Linux only**, and not identically. Anywhere else, native
   execution fails closed rather than running unrestricted.
 - **Nothing is mounted implicitly.** `porta run` and `porta serve` see no

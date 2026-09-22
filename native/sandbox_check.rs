@@ -143,6 +143,12 @@ fn probe() -> (String, Vec<Primitive>) {
                 present: seccomp,
                 otherwise: "porta will refuse every run: the baseline filter is part of the policy",
             },
+            Primitive {
+                name: "memory ceiling (cgroup v2 via the systemd user manager)",
+                covers: "--max-memory-mb",
+                present: crate::memory_ceiling::unavailable().is_none(),
+                otherwise: "--max-memory-mb is refused here: no user manager holds a delegated cgroup for you",
+            },
         ],
     )
 }

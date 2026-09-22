@@ -48,6 +48,9 @@ type Options = {
   max_cpu: Int,
   max_procs: Int,
   max_file_size: Int,
+  // Resident memory in MiB for the whole run, a cgroup v2 ceiling set through
+  // the systemd user manager on Linux. 0 leaves it unset; refused elsewhere.
+  max_memory_mb: Int,
   // Emit machine-readable JSON instead of prose, for `explain` and `check`.
   json: Bool,
   // Where `explain --save` writes a porta.toml of the policy in these flags.
@@ -83,6 +86,7 @@ fn default_options() -> Options = {
   max_cpu: 0,
   max_procs: 0,
   max_file_size: 0,
+  max_memory_mb: 0,
   json: false,
   save_path: "",
 }
@@ -130,6 +134,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--max-cpu" => valued({...opts, max_cpu: util.parse_int(next)}),
     "--max-procs" => valued({...opts, max_procs: util.parse_int(next)}),
     "--max-file-size" => valued({...opts, max_file_size: util.parse_int(next)}),
+    "--max-memory-mb" => valued({...opts, max_memory_mb: util.parse_int(next)}),
     "--json" => flag({...opts, json: true}),
     "--save" => valued({...opts, save_path: next}),
     "-d" => flag({...opts, detach: true}),
@@ -266,6 +271,7 @@ fn policy_toml(opts: Options) -> String = {
     + line_when(opts.max_cpu > 0, "max-cpu = " + int.to_string(opts.max_cpu))
     + line_when(opts.max_procs > 0, "max-procs = " + int.to_string(opts.max_procs))
     + line_when(opts.max_file_size > 0, "max-file-size = " + int.to_string(opts.max_file_size))
+    + line_when(opts.max_memory_mb > 0, "max-memory-mb = " + int.to_string(opts.max_memory_mb))
     + line_when(opts.profile != "", "profile = " + toml_quote(opts.profile))
     + (if proxy_on then ["", "[proxy]"] else [])
     + line_when(list.len(opts.proxy_allow) > 0, "allow = " + toml_strings(opts.proxy_allow))

@@ -71,6 +71,7 @@ line, never dropped.
 | `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
 | `--max-procs <n>` | Process ceiling while the command runs; a fork past it fails. The kernel counts every process of your user, so set it above what you already have |
 | `--max-file-size <MiB>` | Largest file the command may write; the write past it ends the process with SIGXFSZ (exit 153) and the file stops there |
+| `--max-memory-mb <MiB>` | Resident memory for the command and everything it starts, together, with swap closed: a cgroup v2 ceiling placed through the systemd user manager. Past it the kernel OOM-kills the run (exit 137). Linux only, and only where a user manager runs for you; refused otherwise |
 | `--allow-exec <cmd,...>` | Allow specific commands (comma-separated) |
 | `--profile <name>` | Capability profile: `ai-agent`, `worker`, `full` |
 | `--step-limit <n>` | Max WASM instructions |
@@ -100,6 +101,7 @@ network = ["*:443"]       # Restrict to these ports (empty = all open)
 # max-cpu = 60            # CPU seconds per process (SIGXCPU past it)
 # max-procs = 500         # Process ceiling for your user; stops fork bombs
 # max-file-size = 100     # Largest file, in MiB (SIGXFSZ past it)
+# max-memory-mb = 512     # Resident memory for the whole run (Linux, cgroup v2)
 # env-pass = ["CI"]       # Copy these host variables in by name
 # unix = ["/run/…"]       # Credential sockets the command may reach
 # bind = ["8080"]         # TCP ports the command may listen on
@@ -159,6 +161,7 @@ Exit codes tell a script what happened:
 | the command's own | the command ran; this is what it returned (128 + signal if a signal ended it) |
 | 124 | the run hit its `--timeout` and was killed |
 | 152, 153 | the kernel ended the command at its `--max-cpu` (SIGXCPU) or `--max-file-size` (SIGXFSZ) ceiling |
+| 137 | the kernel killed the command: past its `--max-memory-mb` ceiling, or past the CPU hard limit after it ignored SIGXCPU |
 | 125 | porta refused the run before it began — a rule this kernel cannot express, a missing mount, root without `--allow-root` |
 | 126 | the command exists but the policy leaves it unrunnable (an interpreter outside the strict read set, say) |
 | 127 | the command was not found |

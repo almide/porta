@@ -68,11 +68,13 @@ not stop one of them is accurate and not a vulnerability.
   cannot fork, and a file stops growing at the ceiling — each per process, not
   per run. A program that ignores SIGXCPU is killed anyway: by the kernel at
   the hard limit on Linux, and on macOS, which never follows the signal with a
-  kill, by porta's supervisor once the process group's CPU reaches the ceiling. What is missing is a memory ceiling: an rlimit caps address space,
-  not resident memory, and a real one needs cgroup v2 with a delegated
-  subtree, which porta, refusing to run as root, cannot assume. Until then a
-  confined program can still allocate. (The WASM agent runtime bounds fuel,
-  memory and deadlines outright.)
+  kill, by porta's supervisor once the process group's CPU reaches the ceiling.
+  `--max-memory-mb` bounds resident memory for the whole run through cgroup v2,
+  placed by the systemd user manager, since an rlimit caps only address space;
+  it exists on Linux where a user manager runs for the caller and is refused
+  everywhere else, so a run never proceeds with a ceiling it asked for and did
+  not get. (The WASM agent runtime bounds fuel, memory and deadlines outright,
+  on every platform.)
 - **A malicious operator.** porta enforces the operator's policy against the
   program. It does not protect the program, or a third party, from an operator
   who writes a policy that grants everything, or who passes `--allow-root`.
