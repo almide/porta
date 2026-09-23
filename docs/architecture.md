@@ -8,7 +8,7 @@ The CLI, the MCP protocol, capability checks, and what a run is allowed to do.
 
 | | |
 |---|---|
-| `mod.almd`, `cli.almd`, `help.almd` | command dispatch, options, help |
+| `main.almd`, `cli.almd`, `help.almd` | command dispatch, options, help |
 | `engine.almd`, `dispatch.almd` | serve / run / validate / inspect, and the WASM instance lifecycle |
 | `mcp.almd`, `mcp_builtins.almd`, `mcp_content.almd`, `jsonrpc.almd` | the MCP session, `porta.exec` and `porta.http`, resources and prompts, framing |
 | `sandbox.almd`, `wasm_imports.almd` | capability sets, and the import shape they are checked against |

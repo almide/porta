@@ -71,9 +71,9 @@ jobs:
           python3 scripts/audit_benchmark.py docs/benchmarks/2026-09-20-startup.json.gz
           python3 scripts/audit_benchmark.py docs/benchmarks/2026-09-20-startup-recorded.json.gz --porta-record
       - name: Check
-        run: .tools/almide/almide check src/mod.almd
+        run: .tools/almide/almide check src/main.almd
       - name: Build
-        run: .tools/almide/almide build src/mod.almd -o target/porta
+        run: .tools/almide/almide build src/main.almd -o target/porta
       - name: Test
         run: .tools/almide/almide test --ci
       # The memory ceiling is a cgroup v2 scope asked of the systemd user
@@ -105,8 +105,8 @@ jobs:
           python3 scripts/escapes.py target/porta
       - name: Build WASM agents and probes
         run: |
-          .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
-          .tools/almide/almide build examples/demo-agent/src/mod.almd --target wasm -o examples/demo-agent/agent.wasm
+          .tools/almide/almide build examples/chat-agent/src/main.almd --target wasm -o examples/chat-agent/agent.wasm
+          .tools/almide/almide build examples/demo-agent/src/main.almd --target wasm -o examples/demo-agent/agent.wasm
           .tools/almide/almide build scripts/fixtures/guest_isolation.almd --target wasm -o target/guest-isolation.wasm
           .tools/almide/almide build scripts/fixtures/verify_readonly.almd --target wasm -o target/verify-readonly.wasm
           cargo test --locked --manifest-path examples/verify-json/Cargo.toml --target-dir target/verify-json

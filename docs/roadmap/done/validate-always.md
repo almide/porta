@@ -31,4 +31,4 @@ Stop using `empty_wasm()` as a shortcut. Always have real import data.
 
 ## Files
 - `src/dispatch.almd` — always validate using wt_inspect
-- `src/mod.almd` — remove empty_wasm(), build_run_config
+- `src/main.almd` — remove empty_wasm(), build_run_config

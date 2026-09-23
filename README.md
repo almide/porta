@@ -49,8 +49,17 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 ```
 
 A single binary for macOS on Apple silicon and Linux on x86-64 and arm64,
-checked against its published SHA-256 before it is installed. An Intel Mac, or
-any other target, [builds from source](docs/cli.md#build-from-source). `porta
+checked against its published SHA-256 before it is installed. With
+[Almide](https://github.com/almide/almide) installed, `almide install`
+builds a tagged release from source into `~/.local/bin`, the way `go install`
+does; it is the route for an Intel Mac or any other target:
+
+```bash
+almide install github.com/almide/porta --tag v0.6.5
+```
+
+(A build takes a few minutes; the Rust side compiles Wasmtime.) Building by
+hand is in [the CLI reference](docs/cli.md#build-from-source). `porta
 run` takes either a native command or a `.wasm` module, so anything that
 compiles to WASI runs under it.
 

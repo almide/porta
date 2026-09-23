@@ -50,7 +50,7 @@ error[E0277]: can't compare `HashMap<i64, Vec<i64>>` with `HashMap<i64, Vec<i64>
 
 ```bash
 cd /Users/o6lvl4/workspace/github.com/almide/porta
-almide build src/mod.almd -o porta
+almide build src/main.almd -o porta
 ```
 
 ---

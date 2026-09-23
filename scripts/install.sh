@@ -40,11 +40,16 @@ if ! curl -fsSL "$base/$asset" -o "$scratch/$asset"; then
     echo "porta publishes binaries for Apple silicon and for Linux on both" >&2
     echo "architectures. An Intel Mac is not among them: GitHub's Intel macOS" >&2
     echo "runner could not be obtained to build and test one, and porta does not" >&2
-    echo "publish a binary no machine has executed. Building from source works:" >&2
+    echo "publish a binary no machine has executed. Building from source works;" >&2
+    echo "with Almide installed, the way go install does it:" >&2
+    echo >&2
+    echo "  almide install github.com/almide/porta" >&2
+    echo >&2
+    echo "or by hand:" >&2
     echo >&2
     echo "  git clone $repo && cd porta" >&2
     echo "  bash scripts/install-almide.sh" >&2
-    echo "  .tools/almide/almide build src/mod.almd -o target/porta" >&2
+    echo "  .tools/almide/almide build src/main.almd -o target/porta" >&2
   else
     echo "Releases: $repo/releases — or build from source, see the README." >&2
   fi

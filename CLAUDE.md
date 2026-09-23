@@ -32,8 +32,8 @@ as a definition does.
 ```bash
 bash scripts/install-almide.sh
 bash scripts/install-wasmtime.sh && export PATH="$PWD/.tools/wasmtime:$PATH"
-.tools/almide/almide check src/mod.almd
-.tools/almide/almide build src/mod.almd -o target/porta
+.tools/almide/almide check src/main.almd
+.tools/almide/almide build src/main.almd -o target/porta
 .tools/almide/almide test --ci
 python3 scripts/integration.py target/porta
 
@@ -61,7 +61,7 @@ docker run --rm -v "$PWD:/w:ro" rust:1-trixie bash -c '
   useradd -m dev && cp -r /w /home/dev/src && chown -R dev /home/dev/src
   su dev -c "cd /home/dev/src && rm -rf target .tools
     && bash scripts/install-almide.sh
-    && .tools/almide/almide build src/mod.almd -o target/porta
+    && .tools/almide/almide build src/main.almd -o target/porta
     && python3 scripts/integration.py target/porta"'
 ```
 

@@ -7,9 +7,9 @@ model transport, credentials, tool grants, and execution budgets.
 
 ```bash
 bash scripts/install-almide.sh
-.tools/almide/almide build src/mod.almd -o target/porta
-.tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
-.tools/almide/almide build examples/demo-agent/src/mod.almd --target wasm -o examples/demo-agent/agent.wasm
+.tools/almide/almide build src/main.almd -o target/porta
+.tools/almide/almide build examples/chat-agent/src/main.almd --target wasm -o examples/chat-agent/agent.wasm
+.tools/almide/almide build examples/demo-agent/src/main.almd --target wasm -o examples/demo-agent/agent.wasm
 # Inspect the complete team without credentials or execution.
 target/porta agent-check examples/chat-agent/team.toml
 # Set model endpoint/name in examples/chat-agent/agent.toml first.
