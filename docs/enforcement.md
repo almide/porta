@@ -126,6 +126,13 @@ host execution and HTTP requests go through the checked MCP built-in tools.
 - **Proxy filtering controls connection targets, not TLS contents.** Listening
   is closed once `--allow-net` is in force and opened per port with
   `--allow-bind`; with the network open, so is listening.
+- **Namespaces need the host's consent.** The command's own PID, mount and
+  network namespaces need unprivileged user namespaces. Ubuntu from 23.10
+  restricts them through AppArmor, and most container runtimes refuse them.
+  There porta runs without them and says so, `porta check` shows it, and
+  `--no-net` falls back to Landlock and seccomp. On Ubuntu,
+  `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
+  profile Ubuntu documents for a program that needs them, for porta alone.
 - **Linux protects a mount as a whole.** The repository-hooks and trusted-file
   protections inside a writable mount are macOS only until Landlock can express
   a directory minus some of its files.

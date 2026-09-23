@@ -186,6 +186,9 @@ is allowing a host (cloud metadata) is not offered.
   default read mode leaves other processes' `/proc` entries readable, and only
   `--read-policy strict` closes them. srt and Fence depend on bubblewrap, which
   needs the same kernel permission (or an AppArmor profile that grants it).
+  On Ubuntu, `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"`
+  loads the profile Ubuntu documents for porta alone. CI runs both suites
+  without it and then with it.
 - **Features the others have and porta does not.** Fence refuses commands by
   name, a policy layer above the kernel. nono has a supervisor that can grant
   the sandbox more access at run time after a prompt, rollback sessions, and

@@ -339,7 +339,7 @@ pub(crate) fn available() -> Result<(), &'static str> {
 
 const PROBE_REFUSALS: [&str; 3] = [
     "this host refuses an unprivileged user namespace (a container's seccomp profile, user.max_user_namespaces=0, or kernel.unprivileged_userns_clone=0)",
-    "this host gives an unprivileged user namespace no rights to mount in (on Ubuntu: kernel.apparmor_restrict_unprivileged_userns=1)",
+    "this host gives an unprivileged user namespace no rights to mount in (on Ubuntu, kernel.apparmor_restrict_unprivileged_userns=1: scripts/apparmor-userns.sh grants porta alone)",
     "a fresh /proc cannot be mounted here (the host's /proc has mounts over parts of it, as in most containers)",
 ];
 

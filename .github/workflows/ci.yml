@@ -92,6 +92,17 @@ jobs:
         run: python3 scripts/integration.py target/porta
       - name: Escape corpus
         run: python3 scripts/escapes.py target/porta
+      # The runner restricts unprivileged user namespaces through AppArmor, as
+      # Ubuntu does from 23.10, so the two steps above prove the run without
+      # them. The profile Ubuntu documents for such a program lets porta have
+      # them, and the same two suites then prove the namespaces on x86_64.
+      - name: Integration and escape corpus with user namespaces
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo bash scripts/apparmor-userns.sh target/porta
+          target/porta check | grep -E '^ok +own PID, mount and network namespace'
+          python3 scripts/integration.py target/porta
+          python3 scripts/escapes.py target/porta
       - name: Build WASM agents and probes
         run: |
           .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
