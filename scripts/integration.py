@@ -248,17 +248,14 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 124, result
     assert elapsed < 10, f'timeout did not stop the run promptly: {elapsed:.1f}s'
     # The command leads its own process group, so a backgrounded child is
-    # killed with it rather than orphaned to run out its sleep. The run prints
-    # the child's pid; after the deadline that pid must be gone.
-    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 300 & echo $!; wait')
+    # killed with it rather than orphaned to run out its sleep. The child is
+    # found afterwards by its command line, not by the pid the run prints: in
+    # the command's own PID namespace that pid is not the host's.
+    result = run('run', '/bin/sh', '--timeout', '1', '--', '-c', 'sleep 314159 & wait')
     assert result.returncode == 124, result
-    child = int(result.stdout.split()[0])
     time.sleep(1)
-    try:
-        os.kill(child, 0)
-        raise AssertionError(f'a backgrounded child ({child}) outlived the timeout')
-    except ProcessLookupError:
-        pass
+    survivors = subprocess.run(['pgrep', '-f', 'sleep 314159'], capture_output=True, text=True).stdout.split()
+    assert not survivors, f'a backgrounded child ({survivors}) outlived the timeout'
     result = run('run', '/bin/sh', '--timeout', '5', '--', '-c', 'exit 7')
     assert result.returncode == 7, result
     result = run('explain', '/bin/sh', '--timeout', '3', '--', '-c', 'x')
