@@ -73,6 +73,14 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    # id-token lets the job prove to Sigstore which workflow, repository and
+    # tag it is; the certificate it gets back names them, and nothing else can
+    # obtain one that does.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -89,6 +97,18 @@ jobs:
           mv "$RUNNER_TEMP/porta-checksums.sha256" dist/
           cat dist/porta-checksums.sha256
           ls -l dist
+      # Keyless: no key to keep or leak. The bundle carries the signature, the
+      # certificate naming this workflow at this tag, and the transparency-log
+      # entry; install.sh checks it wherever cosign is installed.
+      - uses: sigstore/cosign-installer@v4
+      - name: Sign the checksums
+        run: cosign sign-blob --yes --bundle dist/porta-checksums.sha256.sigstore.json dist/porta-checksums.sha256
+      # SLSA build provenance for each archive: which workflow run built it,
+      # from which commit. `gh attestation verify <archive> --repo almide/porta`
+      # checks it.
+      - uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
@@ -96,6 +116,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/porta-checksums.sha256
+            dist/porta-checksums.sha256.sigstore.json
           fail_on_unmatched_files: true
 
   # Install what was just published, on every platform it was published for,
@@ -114,10 +135,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # With cosign present and the signature required, the install below fails
+      # unless the checksums carry this workflow's signature.
+      - uses: sigstore/cosign-installer@v4
       - name: Install from the published release and check it enforces
         env:
           GH_TOKEN: ${{ github.token }}
+          PORTA_REQUIRE_SIGNATURE: "1"
         run: bash scripts/verify_release.sh "${{ inputs.tag || github.ref_name }}"
+      - name: Every archive carries build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag || github.ref_name }}" --repo "${{ github.repository }}" \
+            --pattern 'porta-*.tar.gz' --dir "$RUNNER_TEMP/provenance"
+          for archive in "$RUNNER_TEMP"/provenance/*.tar.gz; do
+            gh attestation verify "$archive" --repo "${{ github.repository }}"
+          done
 
   # Only now is it the release the install instructions point at.
   promote:

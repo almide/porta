@@ -30,6 +30,7 @@ Landlock＋seccomp で強制。ラッパーでもお願いでもなく、OS の�
 主張ではなく証拠で。公開の脱獄[コーパス](docs/benchmarks/escapes.md)は
 **macOS 19/19・Linux 23/23（user namespace を許さないホストでは 22/22）、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
 同じコーパスを srt・Fence・nono・landrun でも走らせた[比較表](docs/benchmarks/competitors.md)も、porta が負ける項目込みで公開。
+1 コマンドあたりの[コスト](docs/benchmarks/overhead.md)も公開：porta は macOS で約 16 ms、Linux で 2〜6 ms。
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
@@ -46,7 +47,8 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 ```
 
 macOS（Apple silicon）と Linux（x86-64 / arm64）向けの単一バイナリ。公開済み
-SHA-256 で検証してから導入します。[Almide](https://github.com/almide/almide)
+SHA-256 で検証してから導入します。`cosign` があればリリースの Sigstore 署名も検証します
+（[リリースの検証](docs/cli.md#verifying-a-release)）。[Almide](https://github.com/almide/almide)
 があれば `go install` と同じ感覚で入れられます（Intel Mac やその他の環境はこちら）。
 
 ```bash

@@ -1,0 +1,148 @@
+{
+  "porta": "porta 0.6.6",
+  "host": "Linux 6.12.76-linuxkit aarch64",
+  "namespaces": "without namespaces (the host refuses them)",
+  "runs": 30,
+  "results": {
+    "true": {
+      "bare": {
+        "median_ms": 0.36,
+        "p90_ms": 0.45,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 2.71,
+        "p90_ms": 3.38,
+        "over_bare_ms": 2.35
+      },
+      "porta strict reads": {
+        "median_ms": 2.69,
+        "p90_ms": 3.1,
+        "over_bare_ms": 2.33
+      },
+      "porta --no-net": {
+        "median_ms": 2.38,
+        "p90_ms": 3.25,
+        "over_bare_ms": 2.02
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 2.31,
+        "p90_ms": 2.9,
+        "over_bare_ms": 1.95
+      },
+      "porta --proxy-allow": {
+        "median_ms": 2.69,
+        "p90_ms": 3.1,
+        "over_bare_ms": 2.33
+      },
+      "srt": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "fence": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "nono": {
+        "median_ms": 28.13,
+        "p90_ms": 74.96,
+        "over_bare_ms": 27.77
+      },
+      "landrun": {
+        "median_ms": 2.19,
+        "p90_ms": 2.76,
+        "over_bare_ms": 1.84
+      }
+    },
+    "python3 -c pass": {
+      "bare": {
+        "median_ms": 7.16,
+        "p90_ms": 9.53,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 9.88,
+        "p90_ms": 14.06,
+        "over_bare_ms": 2.72
+      },
+      "porta strict reads": {
+        "median_ms": 9.91,
+        "p90_ms": 12.23,
+        "over_bare_ms": 2.75
+      },
+      "porta --no-net": {
+        "median_ms": 9.97,
+        "p90_ms": 11.77,
+        "over_bare_ms": 2.8
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 9.64,
+        "p90_ms": 11.08,
+        "over_bare_ms": 2.47
+      },
+      "porta --proxy-allow": {
+        "median_ms": 9.87,
+        "p90_ms": 12.61,
+        "over_bare_ms": 2.71
+      },
+      "srt": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "fence": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "nono": {
+        "median_ms": 39.93,
+        "p90_ms": 45.38,
+        "over_bare_ms": 32.76
+      },
+      "landrun": {
+        "median_ms": 9.41,
+        "p90_ms": 11.51,
+        "over_bare_ms": 2.24
+      }
+    },
+    "git status": {
+      "bare": {
+        "median_ms": 1.0,
+        "p90_ms": 1.35,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 3.6,
+        "p90_ms": 4.2,
+        "over_bare_ms": 2.6
+      },
+      "porta strict reads": {
+        "not_measured": "needs the whole home granted under strict reads"
+      },
+      "porta --no-net": {
+        "median_ms": 3.52,
+        "p90_ms": 4.13,
+        "over_bare_ms": 2.51
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 3.61,
+        "p90_ms": 4.02,
+        "over_bare_ms": 2.61
+      },
+      "porta --proxy-allow": {
+        "median_ms": 3.96,
+        "p90_ms": 4.37,
+        "over_bare_ms": 2.96
+      },
+      "srt": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "fence": {
+        "not_measured": "exit 1: bwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"
+      },
+      "nono": {
+        "not_measured": "exit 128: fatal: unknown error occurred while reading the configuration files"
+      },
+      "landrun": {
+        "median_ms": 2.9,
+        "p90_ms": 4.49,
+        "over_bare_ms": 1.89
+      }
+    }
+  }
+}

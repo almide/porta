@@ -4,6 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 #
 # PORTA_RELEASE_TAG selects a version (default: the latest release).
+# PORTA_REQUIRE_SIGNATURE=1 refuses to install without a checked signature.
 # The first argument, or PORTA_INSTALL_DIR, selects where it lands.
 set -euo pipefail
 
@@ -56,6 +57,35 @@ if ! curl -fsSL "$base/$asset" -o "$scratch/$asset"; then
   exit 1
 fi
 curl -fsSL "$base/porta-checksums.sha256" -o "$scratch/checksums"
+
+# The checksum below says the archive is the one the list names. The signature
+# says the list is the one porta's release workflow published, from a tag of
+# almide/porta, and nothing else: a Sigstore bundle whose certificate names
+# that workflow. It is checked wherever cosign is installed; a release from
+# before signing began has no bundle, and says so.
+identity='^https://github\.com/almide/porta/\.github/workflows/release\.yml@refs/tags/v'
+issuer='https://token.actions.githubusercontent.com'
+if command -v cosign >/dev/null 2>&1; then
+  if curl -fsSL "$base/porta-checksums.sha256.sigstore.json" -o "$scratch/checksums.sigstore.json" 2>/dev/null; then
+    cosign verify-blob --bundle "$scratch/checksums.sigstore.json" \
+      --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" \
+      "$scratch/checksums" >/dev/null 2>&1 || {
+      echo "the published checksums are not signed by almide/porta's release workflow; not installing" >&2
+      exit 1
+    }
+    echo "Signature: checksums signed by almide/porta's release workflow (Sigstore)"
+  elif [ -n "${PORTA_REQUIRE_SIGNATURE:-}" ]; then
+    echo "PORTA_REQUIRE_SIGNATURE is set and this release carries no signature" >&2
+    exit 1
+  else
+    echo "This release predates signed releases; only its checksum is checked." >&2
+  fi
+elif [ -n "${PORTA_REQUIRE_SIGNATURE:-}" ]; then
+  echo "PORTA_REQUIRE_SIGNATURE is set and cosign is not installed to check the signature" >&2
+  exit 1
+else
+  echo "Signature not checked: install cosign to have it checked. The checksum is checked either way." >&2
+fi
 
 python3 - "$scratch" "$asset" <<'PY'
 import hashlib, pathlib, sys

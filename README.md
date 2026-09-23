@@ -32,7 +32,9 @@ Shown, not claimed: a published jailbreak
 unprivileged user namespaces),
 zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
 The same corpus run under srt, Fence, nono and landrun is
-[published beside it](docs/benchmarks/competitors.md), including where porta loses.
+[published beside it](docs/benchmarks/competitors.md), including where porta loses,
+and so is [what each costs a command](docs/benchmarks/overhead.md): about
+16 ms under porta on macOS and 2 to 6 ms on Linux.
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
@@ -49,7 +51,9 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 ```
 
 A single binary for macOS on Apple silicon and Linux on x86-64 and arm64,
-checked against its published SHA-256 before it is installed. Or, with
+checked against its published SHA-256 before it is installed, and against
+the release's Sigstore signature where `cosign` is installed
+([verifying a release](docs/cli.md#verifying-a-release)). Or, with
 [Almide](https://github.com/almide/almide), the way `go install` does it
 — the route for an Intel Mac or any other target:
 

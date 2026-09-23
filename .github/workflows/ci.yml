@@ -103,6 +103,10 @@ jobs:
           target/porta check | grep -E '^ok +own PID, mount and network namespace'
           python3 scripts/integration.py target/porta
           python3 scripts/escapes.py target/porta
+      # Not a gate: the numbers move with the runner. Printed so every push
+      # leaves what porta cost on that commit in its log.
+      - name: Overhead
+        run: python3 scripts/overhead.py target/porta --runs 20
       - name: Build WASM agents and probes
         run: |
           .tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
