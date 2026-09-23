@@ -217,7 +217,7 @@ redirects or inherit host proxy settings.
 ```bash
 # Almide 0.63.0, a Rust toolchain, Python 3, curl
 bash scripts/install-almide.sh
-.tools/almide/almide build src/mod.almd -o target/porta
+.tools/almide/almide build src/main.almd -o target/porta
 .tools/almide/almide test --ci
 python3 scripts/integration.py target/porta
 cp target/porta ~/.local/bin/

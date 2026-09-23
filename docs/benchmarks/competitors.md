@@ -9,7 +9,7 @@ platform.
 
 | Tool | Version | Platforms run |
 |---|---|---|
-| porta | 0.6.5 (2026-09-23) | macOS, Linux |
+| porta | 0.6.6 (2026-09-24) | macOS, Linux |
 | [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic sandbox-runtime) | 0.0.77 (npm) | macOS, Linux |
 | [Fence](https://github.com/fencesandbox/fence) | 737751a (2026-09-11) | macOS, Linux |
 | [nono](https://github.com/nolabs-ai/nono) | 0.78.0 | macOS, Linux |

@@ -41,7 +41,7 @@ jobs:
       - name: Install pinned Almide
         run: bash scripts/install-almide.sh
       - name: Build
-        run: .tools/almide/almide build src/mod.almd -o target/porta
+        run: .tools/almide/almide build src/main.almd -o target/porta
       # A binary nobody checked is worse than no binary: the same suite that
       # gates a commit gates a release, on the machine that produced the file.
       - name: Verify the binary that will ship
