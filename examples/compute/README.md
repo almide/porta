@@ -15,7 +15,7 @@ With a Rust toolchain containing `wasm32-wasip1`:
 cargo test --locked --manifest-path examples/compute/Cargo.toml --target-dir target/compute
 cargo build --locked --manifest-path examples/compute/Cargo.toml --target wasm32-wasip1 --release --target-dir target/compute
 cp target/compute/wasm32-wasip1/release/porta-compute.wasm examples/compute/compute.wasm
-.tools/almide/almide build examples/chat-agent/src/main.almd --target wasm -o examples/chat-agent/agent.wasm
+.tools/almide/almide build examples/chat-agent/src/mod.almd --target wasm -o examples/chat-agent/agent.wasm
 target/porta agent-check examples/chat-agent/compute.toml
 ```
 
