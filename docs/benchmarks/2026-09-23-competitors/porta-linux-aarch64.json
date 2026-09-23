@@ -1,0 +1,161 @@
+{
+  "tool": "porta",
+  "system": "Linux",
+  "machine": "aarch64",
+  "tried": 21,
+  "escaped": 0,
+  "hardening_gaps": 0,
+  "not_offered": 0,
+  "rows": [
+    {
+      "name": "write outside every mount",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "write refused"
+    },
+    {
+      "name": "rename the mount root away",
+      "category": "filesystem",
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
+    },
+    {
+      "name": "write a git hook inside a mount",
+      "category": "filesystem",
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
+    },
+    {
+      "name": "write through a symlink pointing outside the mount",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "write through a symlink to outside refused"
+    },
+    {
+      "name": "read a secret through a symlink under strict",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read through a symlink refused"
+    },
+    {
+      "name": "inherit an open file descriptor from porta",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "no descriptor beyond stdio inherited"
+    },
+    {
+      "name": "read an SSH private key",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read refused"
+    },
+    {
+      "name": "read /etc/shadow under strict",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "/etc/shadow closed"
+    },
+    {
+      "name": "read another process's arguments",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "process arguments closed"
+    },
+    {
+      "name": "read the login Keychain",
+      "category": "credentials",
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
+    },
+    {
+      "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
+      "category": "processes",
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
+    },
+    {
+      "name": "reach a port the policy did not open",
+      "category": "network",
+      "verdict": "held",
+      "detail": "443 refused under *:80"
+    },
+    {
+      "name": "reach the cloud metadata endpoint via the proxy",
+      "category": "network",
+      "verdict": "held",
+      "detail": "cloud metadata refused even when allow-listed"
+    },
+    {
+      "name": "get a UDP answer from outside in proxy mode",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no UDP egress in proxy mode"
+    },
+    {
+      "name": "open a socket without socket() via io_uring",
+      "category": "network",
+      "verdict": "held",
+      "detail": "io_uring refused"
+    },
+    {
+      "name": "exec a memory file (fileless)",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "fileless exec refused"
+    },
+    {
+      "name": "attach to a process outside the sandbox (ptrace)",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "attach refused (yama ptrace_scope absent)"
+    },
+    {
+      "name": "enter a new user namespace",
+      "category": "hardening",
+      "verdict": "held",
+      "detail": "unshare refused"
+    },
+    {
+      "name": "reach the network over MPTCP",
+      "category": "network",
+      "verdict": "held",
+      "detail": "MPTCP refused"
+    },
+    {
+      "name": "open a raw socket",
+      "category": "network",
+      "verdict": "held",
+      "detail": "raw socket refused"
+    },
+    {
+      "name": "fork past --max-procs",
+      "category": "resources",
+      "verdict": "held",
+      "detail": "every fork refused under --max-procs 1"
+    },
+    {
+      "name": "grow a file past --max-file-size",
+      "category": "resources",
+      "verdict": "held",
+      "detail": "file stopped at 1048576 bytes under a 1 MiB ceiling"
+    },
+    {
+      "name": "burn CPU past --max-cpu",
+      "category": "resources",
+      "verdict": "held",
+      "detail": "CPU burn ended by the kernel after 1.0s (exit 152)"
+    },
+    {
+      "name": "ignore SIGXCPU and keep burning",
+      "category": "resources",
+      "verdict": "held",
+      "detail": "killed after 2.0s despite ignoring SIGXCPU (exit 137)"
+    },
+    {
+      "name": "allocate past --max-memory-mb",
+      "category": "resources",
+      "verdict": "held",
+      "detail": "allocation past the ceiling was killed (exit 137)"
+    }
+  ]
+}

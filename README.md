@@ -30,6 +30,8 @@ kernel cannot express refuses the run rather than weakening it (**fail-closed**)
 Shown, not claimed: a published jailbreak
 [corpus](docs/benchmarks/escapes.md) holds 18/18 on macOS and 21/21 on Linux,
 zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
+The same corpus run under srt, Fence, nono and landrun is
+[published beside it](docs/benchmarks/competitors.md), including where porta loses.
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
