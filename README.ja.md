@@ -28,7 +28,7 @@ Landlock＋seccomp で強制。ラッパーでもお願いでもなく、OS の�
 カーネルが表現できない制限は、緩めず実行を拒否します（**fail-closed**）。
 
 主張ではなく証拠で。公開の脱獄[コーパス](docs/benchmarks/escapes.md)は
-**macOS 18/18・Linux 21/21、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
+**macOS 18/18・Linux 22/22（user namespace を許さないホストでは 21/21）、突破ゼロ**、負けた行も残す（[脅威モデル](docs/threat-model.md)）。
 同じコーパスを srt・Fence・nono・landrun でも走らせた[比較表](docs/benchmarks/competitors.md)も、porta が負ける項目込みで公開。
 
 ```text
