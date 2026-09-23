@@ -32,7 +32,9 @@ Shown, not claimed: a published jailbreak
 unprivileged user namespaces),
 zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
 The same corpus run under srt, Fence, nono and landrun is
-[published beside it](docs/benchmarks/competitors.md), including where porta loses.
+[published beside it](docs/benchmarks/competitors.md), including where porta loses,
+and so is [what each costs a command](docs/benchmarks/overhead.md): about
+16 ms under porta on macOS and 2 to 6 ms on Linux.
 
 ```text
 $ porta run sh -v ./work --read-policy strict --timeout 5 -- …

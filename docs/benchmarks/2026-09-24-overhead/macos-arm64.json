@@ -1,0 +1,145 @@
+{
+  "porta": "porta 0.6.6",
+  "host": "Darwin 25.3.0 arm64",
+  "namespaces": "",
+  "runs": 30,
+  "results": {
+    "true": {
+      "bare": {
+        "median_ms": 2.94,
+        "p90_ms": 3.57,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 18.95,
+        "p90_ms": 23.21,
+        "over_bare_ms": 16.01
+      },
+      "porta strict reads": {
+        "median_ms": 18.33,
+        "p90_ms": 20.68,
+        "over_bare_ms": 15.39
+      },
+      "porta --no-net": {
+        "median_ms": 18.45,
+        "p90_ms": 19.93,
+        "over_bare_ms": 15.51
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 18.54,
+        "p90_ms": 20.99,
+        "over_bare_ms": 15.6
+      },
+      "porta --proxy-allow": {
+        "median_ms": 18.49,
+        "p90_ms": 23.08,
+        "over_bare_ms": 15.56
+      },
+      "srt": {
+        "median_ms": 144.23,
+        "p90_ms": 181.45,
+        "over_bare_ms": 141.29
+      },
+      "fence": {
+        "median_ms": 42.67,
+        "p90_ms": 47.49,
+        "over_bare_ms": 39.73
+      },
+      "nono": {
+        "median_ms": 116.17,
+        "p90_ms": 142.33,
+        "over_bare_ms": 113.23
+      }
+    },
+    "python3 -c pass": {
+      "bare": {
+        "median_ms": 15.39,
+        "p90_ms": 18.39,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 31.28,
+        "p90_ms": 33.84,
+        "over_bare_ms": 15.9
+      },
+      "porta strict reads": {
+        "median_ms": 31.51,
+        "p90_ms": 36.9,
+        "over_bare_ms": 16.12
+      },
+      "porta --no-net": {
+        "median_ms": 31.03,
+        "p90_ms": 35.37,
+        "over_bare_ms": 15.64
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 31.73,
+        "p90_ms": 38.54,
+        "over_bare_ms": 16.34
+      },
+      "porta --proxy-allow": {
+        "median_ms": 31.39,
+        "p90_ms": 42.66,
+        "over_bare_ms": 16.0
+      },
+      "srt": {
+        "median_ms": 147.8,
+        "p90_ms": 164.48,
+        "over_bare_ms": 132.41
+      },
+      "fence": {
+        "median_ms": 52.97,
+        "p90_ms": 64.23,
+        "over_bare_ms": 37.58
+      },
+      "nono": {
+        "median_ms": 133.23,
+        "p90_ms": 173.2,
+        "over_bare_ms": 117.84
+      }
+    },
+    "git status": {
+      "bare": {
+        "median_ms": 9.29,
+        "p90_ms": 12.1,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 25.56,
+        "p90_ms": 38.7,
+        "over_bare_ms": 16.28
+      },
+      "porta strict reads": {
+        "not_measured": "needs the whole home granted under strict reads"
+      },
+      "porta --no-net": {
+        "median_ms": 25.14,
+        "p90_ms": 36.99,
+        "over_bare_ms": 15.86
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 25.08,
+        "p90_ms": 36.63,
+        "over_bare_ms": 15.79
+      },
+      "porta --proxy-allow": {
+        "median_ms": 25.59,
+        "p90_ms": 29.46,
+        "over_bare_ms": 16.31
+      },
+      "srt": {
+        "median_ms": 139.1,
+        "p90_ms": 162.93,
+        "over_bare_ms": 129.82
+      },
+      "fence": {
+        "median_ms": 47.47,
+        "p90_ms": 56.82,
+        "over_bare_ms": 38.18
+      },
+      "nono": {
+        "not_measured": "exit 128: fatal: unable to access '/Users/o6lvl4/.config/git/config': Operation not permitted"
+      }
+    }
+  }
+}

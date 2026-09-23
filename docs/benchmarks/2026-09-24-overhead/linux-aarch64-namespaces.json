@@ -1,0 +1,160 @@
+{
+  "porta": "porta 0.6.6",
+  "host": "Linux 6.12.76-linuxkit aarch64",
+  "namespaces": "with its own PID/mount namespace",
+  "runs": 30,
+  "results": {
+    "true": {
+      "bare": {
+        "median_ms": 0.48,
+        "p90_ms": 0.63,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 5.07,
+        "p90_ms": 6.7,
+        "over_bare_ms": 4.59
+      },
+      "porta strict reads": {
+        "median_ms": 5.02,
+        "p90_ms": 6.16,
+        "over_bare_ms": 4.55
+      },
+      "porta --no-net": {
+        "median_ms": 5.57,
+        "p90_ms": 7.54,
+        "over_bare_ms": 5.09
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 4.6,
+        "p90_ms": 6.27,
+        "over_bare_ms": 4.12
+      },
+      "porta --proxy-allow": {
+        "median_ms": 4.99,
+        "p90_ms": 6.75,
+        "over_bare_ms": 4.51
+      },
+      "srt": {
+        "median_ms": 245.85,
+        "p90_ms": 331.36,
+        "over_bare_ms": 245.38
+      },
+      "fence": {
+        "median_ms": 145.49,
+        "p90_ms": 156.56,
+        "over_bare_ms": 145.01
+      },
+      "nono": {
+        "median_ms": 33.29,
+        "p90_ms": 45.08,
+        "over_bare_ms": 32.81
+      },
+      "landrun": {
+        "median_ms": 2.61,
+        "p90_ms": 3.52,
+        "over_bare_ms": 2.13
+      }
+    },
+    "python3 -c pass": {
+      "bare": {
+        "median_ms": 7.77,
+        "p90_ms": 15.38,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 12.75,
+        "p90_ms": 32.92,
+        "over_bare_ms": 4.99
+      },
+      "porta strict reads": {
+        "median_ms": 12.98,
+        "p90_ms": 34.45,
+        "over_bare_ms": 5.21
+      },
+      "porta --no-net": {
+        "median_ms": 13.93,
+        "p90_ms": 38.08,
+        "over_bare_ms": 6.16
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 13.94,
+        "p90_ms": 33.71,
+        "over_bare_ms": 6.17
+      },
+      "porta --proxy-allow": {
+        "median_ms": 13.76,
+        "p90_ms": 40.56,
+        "over_bare_ms": 5.99
+      },
+      "srt": {
+        "median_ms": 249.5,
+        "p90_ms": 577.24,
+        "over_bare_ms": 241.73
+      },
+      "fence": {
+        "median_ms": 148.94,
+        "p90_ms": 222.62,
+        "over_bare_ms": 141.17
+      },
+      "nono": {
+        "median_ms": 43.61,
+        "p90_ms": 86.87,
+        "over_bare_ms": 35.84
+      },
+      "landrun": {
+        "median_ms": 10.13,
+        "p90_ms": 22.51,
+        "over_bare_ms": 2.36
+      }
+    },
+    "git status": {
+      "bare": {
+        "median_ms": 0.86,
+        "p90_ms": 1.05,
+        "over_bare_ms": 0.0
+      },
+      "porta default": {
+        "median_ms": 4.74,
+        "p90_ms": 5.31,
+        "over_bare_ms": 3.87
+      },
+      "porta strict reads": {
+        "not_measured": "needs the whole home granted under strict reads"
+      },
+      "porta --no-net": {
+        "median_ms": 4.89,
+        "p90_ms": 5.44,
+        "over_bare_ms": 4.02
+      },
+      "porta --allow-net *:443": {
+        "median_ms": 4.46,
+        "p90_ms": 4.97,
+        "over_bare_ms": 3.59
+      },
+      "porta --proxy-allow": {
+        "median_ms": 4.65,
+        "p90_ms": 5.31,
+        "over_bare_ms": 3.79
+      },
+      "srt": {
+        "median_ms": 185.32,
+        "p90_ms": 207.7,
+        "over_bare_ms": 184.46
+      },
+      "fence": {
+        "median_ms": 136.19,
+        "p90_ms": 145.42,
+        "over_bare_ms": 135.33
+      },
+      "nono": {
+        "not_measured": "exit 128: fatal: unknown error occurred while reading the configuration files"
+      },
+      "landrun": {
+        "median_ms": 2.45,
+        "p90_ms": 2.68,
+        "over_bare_ms": 1.59
+      }
+    }
+  }
+}
