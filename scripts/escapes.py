@@ -565,7 +565,7 @@ def read_other_process_argv_default(ctx):
         return Result(NA, "the default read mode is the row above on macOS")
     if ctx.decoy is None:
         return Result(NA, "no decoy process")
-    if not host_gives_pid_namespaces():
+    if not ctx.runner.gives_pid_namespaces(host_gives_pid_namespaces):
         return Result(NA, "this host refuses unprivileged PID namespaces, so the default read mode cannot hide other processes")
     code = (
         "import sys\n"

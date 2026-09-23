@@ -53,6 +53,7 @@ directory by accident.
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 
@@ -95,6 +96,13 @@ def refuse_ceilings(parsed, tool, offered=()):
         raise NotExpressible(f"{tool} has no {', '.join(missing)}")
 
 
+class HostNamespaces:
+    """For a tool that holds no grant of its own: the host's answer."""
+
+    def gives_pid_namespaces(self, host_gives):
+        return host_gives()
+
+
 class PortaRunner:
     name = "porta"
 
@@ -109,8 +117,15 @@ class PortaRunner:
     def refused_config(self, result):
         return "porta run <target>" in result.stdout + result.stderr
 
+    def gives_pid_namespaces(self, host_gives):
+        # porta may hold a grant the host gives no other program (Ubuntu's
+        # AppArmor profile from scripts/apparmor-userns.sh), so it is asked.
+        report = subprocess.run([self.binary, "check", "--json"], capture_output=True, text=True)
+        primitives = json.loads(report.stdout)["primitives"]
+        return any("PID, mount and network namespace" in p["name"] and p["present"] for p in primitives)
 
-class SettingsRunner:
+
+class SettingsRunner(HostNamespaces):
     """srt and fence: one settings file per run."""
 
     def __init__(self, name, binary, separator):
@@ -149,7 +164,7 @@ class SettingsRunner:
         return "does not hold a valid config" in text or "invalid config" in text.lower() or "unknown field" in text
 
 
-class NonoRunner:
+class NonoRunner(HostNamespaces):
     name = "nono"
     # nono's child holds a socket to nono's supervisor (NONO_CAP_FILE and
     # friends name it). That is its design, not a leak, so the
@@ -201,7 +216,7 @@ class NonoRunner:
 METADATA_HOST = "169.254.169.254"
 
 
-class LandrunRunner:
+class LandrunRunner(HostNamespaces):
     name = "landrun"
 
     def __init__(self, binary):
