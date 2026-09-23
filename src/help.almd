@@ -27,6 +27,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --max-cpu <secs>        CPU seconds per process before the kernel ends it (SIGXCPU)")
   println("  --max-procs <n>         Process ceiling for this user while the command runs; stops fork bombs")
   println("  --max-file-size <MiB>   Largest file the command may write (SIGXFSZ past it)")
+  println("  --max-memory-mb <MiB>   Resident memory for the whole run, swap closed (Linux, cgroup v2 via systemd)")
   println("  --json                  Machine-readable output for 'explain' and 'check'")
   println("  --save <path>           'explain --save' writes these flags as a porta.toml you can commit")
 }

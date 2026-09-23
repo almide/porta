@@ -94,6 +94,12 @@ fn probe() -> (String, Vec<Primitive>) {
                 present: std::path::Path::new("/usr/bin/log").exists(),
                 otherwise: "runs are enforced but refusals are not explained",
             },
+            Primitive {
+                name: "memory ceiling (supervisor ends the group at its footprint)",
+                covers: "--max-memory-mb; a quarter-second poll, not a kernel limit",
+                present: true,
+                otherwise: "",
+            },
         ],
     )
 }
@@ -142,6 +148,12 @@ fn probe() -> (String, Vec<Primitive>) {
                 covers: "ptrace, process_vm_*, mounts, namespaces, io_uring, raw/packet sockets, MPTCP",
                 present: seccomp,
                 otherwise: "porta will refuse every run: the baseline filter is part of the policy",
+            },
+            Primitive {
+                name: "memory ceiling (cgroup v2 via the systemd user manager)",
+                covers: "--max-memory-mb",
+                present: crate::memory_ceiling::unavailable().is_none(),
+                otherwise: "--max-memory-mb is refused here: no user manager holds a delegated cgroup for you",
             },
         ],
     )

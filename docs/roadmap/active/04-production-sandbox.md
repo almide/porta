@@ -286,7 +286,15 @@ was missing, in the terms the user typed.
   when available (island `main.rs:295-315`), read back from the audit log;
   seccomp denials via `SECCOMP_RET_LOG`-style tagging on the deny branch;
   `SIGSYS`/`EPERM` exit classification as Codex's `denial.rs` does, but as a
-  fallback rather than the primary signal.
+  fallback rather than the primary signal. Constraint found 2026-09-23: the
+  audit records ABI 7 writes are read through the audit socket, which needs
+  `CAP_AUDIT_READ`, and porta refuses to run as root. An unprivileged porta
+  therefore cannot read its own Landlock denials even on a 6.15 kernel; the
+  Linux footer needs either a privileged helper that porta does not have or
+  a different signal (the child's errno and the policy porta knows it
+  applied, which can name the likely flag without the kernel's record). No
+  kernel in reach (CI 6.11, the local container 6.12, both ABI 6) can test
+  the ABI 7 path yet either.
 - **Structured output.** `--json` on `run` emits one record per denial and one
   summary: `{op, path|host, rule, suggested_flag, code}` with stable codes
   (nono `diagnostic/codes.rs`). The same record goes to the proxy audit JSONL

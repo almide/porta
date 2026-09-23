@@ -76,6 +76,18 @@ jobs:
         run: .tools/almide/almide build src/mod.almd -o target/porta
       - name: Test
         run: .tools/almide/almide test --ci
+      # The memory ceiling is a cgroup v2 scope asked of the systemd user
+      # manager, and a runner job has no login session, so no user manager
+      # runs for it. Lingering starts one, and the suite then proves the
+      # ceiling on Linux (an OOM kill at 64 MiB) instead of only its refusal.
+      - name: Start a systemd user manager for the memory ceiling
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 1 20); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+          ls -la "/run/user/$(id -u)/bus"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Integration
         run: python3 scripts/integration.py target/porta
       - name: Escape corpus

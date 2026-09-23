@@ -28,7 +28,7 @@ Landlock + seccomp on Linux, not by a wrapper or a prompt. A restriction the
 kernel cannot express refuses the run rather than weakening it (**fail-closed**).
 
 Shown, not claimed: a published jailbreak
-[corpus](docs/benchmarks/escapes.md) holds 17/17 on macOS and 20/20 on Linux,
+[corpus](docs/benchmarks/escapes.md) holds 18/18 on macOS and 21/21 on Linux,
 zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
 
 ```text
@@ -94,8 +94,10 @@ porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
 ```
 
 A hang is killed at the deadline, a CPU burn ends with SIGXCPU, a fork bomb
-cannot fork, and a file stops growing at the ceiling. What porta does not cap
-is memory: that needs cgroup v2, and porta refuses to run as root to get it.
+cannot fork, and a file stops growing at the ceiling. `--max-memory-mb 512`
+bounds resident memory for the whole run: a cgroup v2 ceiling on Linux (a
+systemd user session is needed, and the flag is refused without one), a
+supervisor that ends the run at the ceiling on macOS.
 
 ### Run untrusted or generated WASM
 

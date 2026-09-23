@@ -300,8 +300,32 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 0 and '2s CPU' in result.stdout and '300 processes' in result.stdout \
         and '1 MiB' in result.stdout, result
     result = run('explain', '/bin/sh', '--max-cpu', '2', '--json', '--', '-c', 'x')
-    assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0}, result
+    assert json.loads(result.stdout)['limits'] == {'cpu_seconds': 2, 'processes': 0, 'file_size_mib': 0, 'memory_mib': 0}, result
     print('PASS: --max-cpu, --max-file-size and --max-procs are enforced by the kernel and inherited; one above the hard limit is refused')
+
+    # --max-memory-mb: on Linux a cgroup v2 ceiling placed through the systemd
+    # user manager, so only where a user manager runs for this user; on macOS
+    # the supervisor polls the group's footprint and ends it at the ceiling.
+    # Either way an allocation past the ceiling is killed (137) and a run
+    # within it keeps its code. A Linux host without a user manager refuses
+    # the flag before the run, naming the reason — never run without.
+    user_manager = platform.system() == 'Linux' and os.path.exists(f'/run/user/{os.getuid()}/bus') \
+        and (os.path.exists('/usr/bin/busctl') or os.path.exists('/bin/busctl'))
+    # The hog keeps its allocation alive long enough for a polling supervisor.
+    hog = "import time\nb = bytearray(200 * 1024 * 1024)\ntime.sleep(1)\nprint('ALLOCATED')"
+    if user_manager or platform.system() == 'Darwin':
+        result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
+        assert result.returncode == 137 and 'ALLOCATED' not in result.stdout, result
+        result = run('run', sys.executable, '--max-memory-mb', '512', '--', '-c', hog)
+        assert result.returncode == 0 and 'ALLOCATED' in result.stdout, result
+        result = run('explain', '/bin/sh', '--max-memory-mb', '64', '--', '-c', 'x')
+        assert result.returncode == 0 and '64 MiB resident' in result.stdout, result
+        print('PASS: --max-memory-mb kills a run past the ceiling and leaves one within it alone')
+    else:
+        result = run('run', sys.executable, '--max-memory-mb', '64', '--', '-c', hog)
+        assert result.returncode == 125 and 'ALLOCATED' not in result.stdout, result
+        assert ('cgroup' in result.stderr or 'user manager' in result.stderr), result.stderr
+        print('PASS: --max-memory-mb is refused where no cgroup ceiling can be placed (this host), never run without')
 
     # A WASI 0.2 component runs under the same capability check, budgets and
     # preopens as a core module. Its imports are interfaces, so the check maps
@@ -346,6 +370,21 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     else:
         print('SKIP: no almide toolchain at .tools/almide; the WASI 0.2 component test did not run')
 
+    # Under strict reads, a command named bare is found the way the shell finds
+    # it, and one outside the readable roots is refused up front with the
+    # directory to grant — rather than started and left to die on EACCES.
+    tooldir = ungranted / 'tools'
+    tooldir.mkdir()
+    (tooldir / 'porta-tool').write_text('#!/bin/sh\necho ran-anyway\n')
+    (tooldir / 'porta-tool').chmod(0o755)
+    on_path = {**os.environ, 'PATH': f"{tooldir}:{os.environ.get('PATH', '')}"}
+    result = run('run', 'porta-tool', '--read-policy', 'strict', '-v', str(root), env=on_path)
+    assert result.returncode == 126 and 'ran-anyway' not in result.stdout, result
+    assert 'unreadable' in result.stderr and str(tooldir) in result.stderr, result.stderr
+    result = run('run', 'porta-tool', '-v', str(root), env=on_path)
+    assert result.returncode == 0 and result.stdout.strip() == 'ran-anyway', result
+    print('PASS: a bare command outside the strict read roots is refused by name with the -v to grant')
+
     # --json gives explain and check a machine-readable form. explain reports
     # the effective policy; a run it would refuse reports the refusal instead.
     result = run('explain', '/bin/echo', '-v', str(root), '--allow-net', 'api.example.com:443',
@@ -361,7 +400,11 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('check', '--json')
     assert result.returncode == 0, result
     host = json.loads(result.stdout)
-    assert host['all_enforced'] is True and host['missing'] == 0, host
+    # The memory ceiling is the one primitive a host may honestly lack (no
+    # systemd user manager); everything else must be present.
+    absent = [p['name'] for p in host['primitives'] if not p['present']]
+    assert all('memory ceiling' in name for name in absent), host
+    assert host['all_enforced'] is (host['missing'] == 0) and host['missing'] == len(absent), host
     assert host['primitives'] and all('present' in p for p in host['primitives']), host
     print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
 

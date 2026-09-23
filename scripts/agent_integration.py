@@ -186,12 +186,15 @@ description = "Fixture WASM tool"
         result = run(config())
         assert result.returncode != 0 and 'tool not granted: shell' in result.stderr, result
         mode = 'add'
-        for limits, error in [('max_steps = 1', 'step budget exceeded'),
-                              ('max_model_calls = 1', 'model call budget exceeded'),
-                              ('fuel_per_step = 1', 'guest execution failed'),
-                              ('memory_pages = 1', 'instantiate guest')]:
+        # A fuel budget of one is spent before _start or during it, depending
+        # on how much of instantiation the engine meters; either way the
+        # budget stopped the guest, which is what is being checked.
+        for limits, errors in [('max_steps = 1', ('step budget exceeded',)),
+                               ('max_model_calls = 1', ('model call budget exceeded',)),
+                               ('fuel_per_step = 1', ('guest execution failed', 'all fuel consumed')),
+                               ('memory_pages = 1', ('instantiate guest',))]:
             result = run(config(limits=limits))
-            assert result.returncode != 0 and error in result.stderr, result
+            assert result.returncode != 0 and any(error in result.stderr for error in errors), result
         print('PASS: unknown tools denied; step, model-call, fuel and memory budgets enforced')
 
         result = run(config(extra='typo_grant = true'))

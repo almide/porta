@@ -72,40 +72,51 @@ pub(crate) fn unsettable_ceiling(ceilings: &[Ceiling]) -> Option<String> {
 /// Ends the whole process group and reaps the child. Negated pid: a shell's
 /// children die with it. SIGKILL because a run past its budget has already
 /// had its share; then the wait, so no zombie is left.
-fn kill_group(child: &mut std::process::Child) {
+pub(crate) fn kill_group(child: &mut std::process::Child) {
     let group = child.id() as libc::pid_t;
     unsafe { libc::kill(-group, libc::SIGKILL) };
     let _ = child.wait();
 }
 
+/// What a run ended for passing its memory ceiling reports: 128 + SIGKILL,
+/// the code the kernel's own OOM kill gives on Linux, so both platforms agree.
+pub(crate) const MEMORY_EXCEEDED: i64 = 128 + libc::SIGKILL as i64;
+
 /// Waits for the child, killing its process group at the wall-clock deadline
-/// (exit 124) or, on macOS, once the group's CPU time reaches the ceiling
-/// (exit 152). Linux needs no CPU watch here: past the hard limit the kernel
-/// kills. macOS only ever sends SIGXCPU, which a program may ignore, so there
-/// the supervisor measures the group and does the killing itself.
-pub(crate) fn wait_within(mut child: std::process::Child, timeout: u64, max_cpu: u64) -> std::io::Result<i64> {
+/// (exit 124) or, on macOS, once the group's CPU time (exit 152) or resident
+/// footprint (exit 137) reaches its ceiling. Linux needs neither watch here:
+/// past the CPU hard limit the kernel kills, and the memory ceiling is a
+/// cgroup the kernel enforces. macOS only ever sends SIGXCPU, which a program
+/// may ignore, and has no cgroup, so there the supervisor measures the group
+/// every quarter second and does the killing itself.
+pub(crate) fn wait_within(mut child: std::process::Child, timeout: u64, max_cpu: u64, max_memory: u64) -> std::io::Result<i64> {
     let deadline = (timeout > 0).then(|| std::time::Instant::now() + std::time::Duration::from_secs(timeout));
-    let watch_cpu = cfg!(target_os = "macos") && max_cpu > 0;
-    if deadline.is_none() && !watch_cpu {
+    let watch = cfg!(target_os = "macos") && (max_cpu > 0 || max_memory > 0);
+    if deadline.is_none() && !watch {
         return child.wait().map(exit_code);
     }
     let group = child.id() as libc::pid_t;
-    let mut ticks: u32 = 0;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(exit_code(status));
         }
-        if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+        let past_deadline = deadline.is_some_and(|at| std::time::Instant::now() >= at);
+        let over = if past_deadline { Some(TIMED_OUT) } else if watch { ceiling_passed(group, max_cpu, max_memory) } else { None };
+        if let Some(code) = over {
             kill_group(&mut child);
-            return Ok(TIMED_OUT);
-        }
-        ticks += 1;
-        if watch_cpu && ticks % 5 == 0 && group_cpu_seconds(group) >= max_cpu as f64 {
-            kill_group(&mut child);
-            return Ok(CPU_EXCEEDED);
+            return Ok(code);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+/// Which ceiling the group has passed, if any: the exit code to report.
+fn ceiling_passed(group: libc::pid_t, max_cpu: u64, max_memory: u64) -> Option<i64> {
+    let usage = group_usage(group);
+    if max_cpu > 0 && usage.cpu_seconds >= max_cpu as f64 {
+        return Some(CPU_EXCEEDED);
+    }
+    (max_memory > 0 && usage.memory_bytes >= max_memory).then_some(MEMORY_EXCEEDED)
 }
 
 /// A child's exit code, or 128 plus the signal that ended it, as a shell
@@ -118,15 +129,26 @@ pub(crate) fn exit_code(status: std::process::ExitStatus) -> i64 {
     }
 }
 
-/// CPU seconds used so far by every live process in `group`, plus the time
-/// of the children each has already reaped. A process that exits unreaped
-/// takes its share with it, but every process still carries its own rlimit.
+/// What a process group has used so far, as the supervisor sees it.
+#[derive(Default)]
+struct GroupUsage {
+    /// CPU seconds of every live member, plus the time of the children each
+    /// has already reaped. A process that exits unreaped takes its share with
+    /// it, but every process still carries its own rlimit.
+    cpu_seconds: f64,
+    /// The physical footprint of every live member, summed: what Activity
+    /// Monitor calls Memory. Read at each poll, so a burst can pass the
+    /// ceiling for up to a quarter second before the group is ended.
+    memory_bytes: u64,
+}
+
 #[cfg(target_os = "macos")]
-fn group_cpu_seconds(group: libc::pid_t) -> f64 {
+fn group_usage(group: libc::pid_t) -> GroupUsage {
     const PROC_PGRP_ONLY: u32 = 2;
     let mut pids = vec![0 as libc::pid_t; 4096];
     let pid_size = std::mem::size_of::<libc::pid_t>();
     let mut units: u64 = 0;
+    let mut footprint: u64 = 0;
     let mut timebase = libc::mach_timebase_info { numer: 0, denom: 0 };
     // One block: list the group, read each member's usage, fetch the timebase.
     // libc mirrors the header's `rusage_info_t *` although the call takes the
@@ -138,16 +160,18 @@ fn group_cpu_seconds(group: libc::pid_t) -> f64 {
             let mut info: libc::rusage_info_v1 = std::mem::zeroed();
             if libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V1, (&mut info as *mut libc::rusage_info_v1).cast()) == 0 {
                 units += info.ri_user_time + info.ri_system_time + info.ri_child_user_time + info.ri_child_system_time;
+                footprint += info.ri_phys_footprint;
             }
         }
         libc::mach_timebase_info(&mut timebase);
     }
     // The times are in mach absolute-time units; the timebase turns them into
     // nanoseconds (1/1 on Intel, 125/3 on Apple silicon).
-    units as f64 * timebase.numer as f64 / timebase.denom.max(1) as f64 / 1e9
+    let cpu_seconds = units as f64 * timebase.numer as f64 / timebase.denom.max(1) as f64 / 1e9;
+    GroupUsage { cpu_seconds, memory_bytes: footprint }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn group_cpu_seconds(_group: libc::pid_t) -> f64 {
-    0.0
+fn group_usage(_group: libc::pid_t) -> GroupUsage {
+    GroupUsage::default()
 }

@@ -43,6 +43,8 @@ type ExecRequest = {
   max_cpu: Int,
   max_procs: Int,
   max_file_size: Int,
+  // Resident memory in MiB for the whole run (cgroup v2, Linux). 0 = unset.
+  max_memory_mb: Int,
 }
 
 fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
@@ -66,6 +68,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("max_cpu", value.int(req.max_cpu)),
     ("max_procs", value.int(req.max_procs)),
     ("max_file_size", value.int(req.max_file_size)),
+    ("max_memory_mb", value.int(req.max_memory_mb)),
   ]))
 
 // The working directory a run starts in: the first granted mount, without the

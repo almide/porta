@@ -2,14 +2,16 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-22, porta 0.6.2, macOS arm64
+this run is 2026-09-23, porta 0.6.3, macOS arm64
 locally and Linux x86_64 on the CI runner (run 35703962916). A row is **held** when the escape was
 stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 17 tried, 0 escaped
-- **Linux x86_64**: 20 tried, 0 escaped
+- **macOS arm64**: 18 tried, 0 escaped
+- **Linux x86_64** (the CI runner, with a systemd user manager started for
+  the job; run 35756833265): 21 tried, 0 escaped
+- **Linux aarch64** (a systemd container, 2026-09-23): 21 tried, 0 escaped
 
 ## A correction to earlier runs
 
@@ -59,12 +61,17 @@ on anything porta prints.
 | grow a file past `--max-file-size` | resources | held | held |
 | burn CPU past `--max-cpu` | resources | held | held |
 | ignore SIGXCPU and keep burning | resources | held | held |
+| allocate past `--max-memory-mb` | resources | held | held |
 
 Where a row is — on one platform, the escape is not expressible there:
 the mount-internal and Keychain protections are macOS-only (Landlock grants
 a directory whole), and the syscall-level attempts are Linux-only (the macOS
 profile closes those channels differently, tested in the integration suite).
-The resource rows are kernel rlimits and hold on both; on Linux the one that
+The memory row is a cgroup v2 ceiling placed through the systemd user manager
+on Linux, which needs a user manager (where there is none the row is not
+hosted and the flag is refused), and on macOS porta's own supervisor ending
+the group at its footprint. The other resource rows are kernel
+rlimits and hold on both; on Linux the one that
 ignores SIGXCPU ends in the kernel's SIGKILL at the hard limit (exit 137), on
 macOS in porta's own kill (exit 152). The SIGXCPU row exists because
 the first macOS run of the CPU ceiling showed a program that ignores the signal

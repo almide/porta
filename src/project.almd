@@ -35,6 +35,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
         max_cpu: cfg.max_cpu,
         max_procs: cfg.max_procs,
         max_file_size: cfg.max_file_size,
+        max_memory_mb: cfg.max_memory_mb,
         wasm_args: all_args,
       }
       engine.run_native(opts)

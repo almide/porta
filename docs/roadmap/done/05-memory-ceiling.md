@@ -1,5 +1,26 @@
 <!-- description: A resident-memory ceiling for native runs through cgroup v2, fail-closed -->
+<!-- done: 2026-09-23 -->
 # Memory Ceiling for Native Runs
+
+Shipped as `--max-memory-mb` (2026-09-23). The design below held with one
+change: porta does not write the cgroup files itself. An unprivileged porta
+usually lives in a login scope full of other processes, and cgroup v2 lets a
+non-root cgroup hand a controller to its children only when it holds no
+processes, so the delegated subtree is reached through the systemd user
+manager instead — `StartTransientUnit` over the user bus with the stopped
+child's pid, `MemoryMax` and `MemorySwapMax=0`, the call `systemd-run --user
+--scope` makes for itself. The child cannot stop before exec (the parent's
+`spawn` waits for an exec), so under a ceiling it starts as `/bin/sh -c 'kill
+-STOP $$ && exec "$0" "$@"'` with Landlock and seccomp already on: the stub
+stops, porta places that pid, reads `/proc/<pid>/cgroup` and `memory.max`
+back, and only then SIGCONTs, whereupon the same pid becomes the command. Any
+step short of that kills the child and refuses the run.
+No user manager (a container, a bare CI runner, macOS) refuses the flag with
+the reason. Proven in a systemd container: 200 MiB allocated under a 64 MiB
+ceiling is OOM-killed (137); the same within 512 MiB runs; `porta check`
+reports the primitive.
+
+The plan as written before the work:
 
 The one resource a native run cannot be bounded in today. `--timeout` bounds
 wall-clock; `--max-cpu`, `--max-procs` and `--max-file-size` are rlimits the

@@ -55,6 +55,10 @@ struct SandboxRequest {
     #[serde(default)] max_cpu: u64,
     #[serde(default)] max_procs: u64,
     #[serde(default)] max_file_size: u64,
+    /// Resident memory, in MiB, for the command and everything it starts,
+    /// together: a cgroup v2 ceiling set through the systemd user manager on
+    /// Linux, with swap closed. 0 leaves it unset. The one per-run ceiling.
+    #[serde(default)] max_memory_mb: u64,
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
@@ -129,6 +133,19 @@ fn resolve_mount(mount: &str) -> Result<String, String> {
 /// path that exists, and not a name on the PATH porta itself was started
 /// with. Found here, before any policy is applied, so the answer names the
 /// command rather than the exec wrapper that failed to find it.
+/// The file the kernel will execute for `cmd`, resolved: a path as given
+/// (relative to the run's directory), or the first `PATH` entry holding it,
+/// the way the shell would find it. `None` when nothing resolves.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn resolve_command(cmd: &str, cwd: &str) -> Option<std::path::PathBuf> {
+    if cmd.contains('/') {
+        let base = if cwd.is_empty() { "." } else { cwd };
+        return std::fs::canonicalize(std::path::Path::new(base).join(cmd)).ok();
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join(cmd)).find(|candidate| candidate.is_file()).and_then(|found| std::fs::canonicalize(found).ok())
+}
+
 fn missing_command(cmd: &str, cwd: &str) -> Option<String> {
     if cmd.contains('/') {
         let base = if cwd.is_empty() { "." } else { cwd };
@@ -171,7 +188,32 @@ impl SandboxRequest {
         if let Some(reason) = unsettable_ceiling(&request.ceilings()) {
             return Err(reason);
         }
+        if let Some(reason) = request.memory_ceiling_unavailable() {
+            return Err(reason);
+        }
         Ok(request)
+    }
+
+    /// Why `--max-memory-mb` cannot be honoured here, if it cannot. A ceiling
+    /// this host cannot enforce refuses the run, like any other rule.
+    #[cfg(target_os = "linux")]
+    fn memory_ceiling_unavailable(&self) -> Option<String> {
+        if self.max_memory_mb == 0 {
+            return None;
+        }
+        crate::memory_ceiling::unavailable().map(|reason| format!("--max-memory-mb: {reason}"))
+    }
+
+    /// macOS has no cgroup; the supervisor measures the group's footprint and
+    /// ends it at the ceiling, so the flag is honoured, in that sense.
+    #[cfg(target_os = "macos")]
+    fn memory_ceiling_unavailable(&self) -> Option<String> {
+        None
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn memory_ceiling_unavailable(&self) -> Option<String> {
+        (self.max_memory_mb > 0).then(|| "--max-memory-mb has no enforcement on this platform".to_string())
     }
 
     /// The ceilings this request sets, in the kernel's units. The file size
@@ -199,6 +241,10 @@ impl SandboxRequest {
         }
         if self.max_file_size > 0 {
             parts.push(format!("files up to {} MiB", self.max_file_size));
+        }
+        if self.max_memory_mb > 0 {
+            let how = if cfg!(target_os = "linux") { "cgroup, swap closed" } else { "the group is ended when its footprint reaches it" };
+            parts.push(format!("{} MiB resident memory for the whole run ({how})", self.max_memory_mb));
         }
         if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
     }
@@ -244,7 +290,7 @@ impl SandboxRequest {
         if self.read_policy != "strict" {
             return None;
         }
-        let program = std::fs::canonicalize(&self.cmd).ok()?;
+        let program = resolve_command(&self.cmd, &self.cwd)?;
         let roots = readable_roots(&self.allowed_dirs);
         if roots.iter().any(|root| program.starts_with(root)) {
             return None;
@@ -327,7 +373,7 @@ impl SandboxRequest {
         format!(
             "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
 \"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
-\"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{}}},\
+\"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{},\"memory_mib\":{}}},\
 \"enforcement\":{}}}",
             quoted(&self.cmd),
             array(&self.args),
@@ -342,6 +388,7 @@ impl SandboxRequest {
             self.max_cpu,
             self.max_procs,
             self.max_file_size,
+            self.max_memory_mb,
             quoted(self.enforcement_backend()),
         )
     }
@@ -430,6 +477,24 @@ impl SandboxRequest {
     fn restrict_current_process(policy: ChildPolicy) -> std::io::Result<()> {
         crate::landlock::Ruleset::restrict_current_process(policy.ruleset)?;
         crate::seccomp::restrict_current_process(policy.egress)
+    }
+
+    /// The command as spawned. Under a memory ceiling it starts as a shell that
+    /// stops itself and then becomes the command: the parent's `spawn` returns
+    /// only once something has exec'd, so a stop before exec would deadlock it,
+    /// while a stop after exec of a stub leaves the same pid — the one porta
+    /// places in the scope — to `exec` the real command once continued. The
+    /// stub runs under the same Landlock and seccomp policy as the command.
+    #[cfg(target_os = "linux")]
+    fn spawned_command(&self) -> std::process::Command {
+        if self.max_memory_mb == 0 {
+            let mut command = self.command(&self.cmd);
+            command.args(&self.args);
+            return command;
+        }
+        let mut command = self.command("/bin/sh");
+        command.args(["-c", "kill -STOP $$ && exec \"$0\" \"$@\"", &self.cmd]).args(&self.args);
+        command
     }
 
     /// A command carrying this request's arguments, directory and environment.
@@ -631,7 +696,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
         .spawn()
         .map_err(|error| format!("cannot start the command: {error}"))
         .and_then(|child| {
-            wait_within(child, request.timeout, request.max_cpu)
+            wait_within(child, request.timeout, request.max_cpu, request.max_memory_mb.saturating_mul(MIB))
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
     explain_denials(&request.tag, &started, code, &request.rerun_line());
@@ -644,8 +709,12 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
 /// carried on chose to. `PORTA_DENIALS=never` keeps the footer away entirely.
 #[cfg(target_os = "macos")]
 fn explain_denials(tag: &str, started: &str, code: i64, rerun: &str) {
+    use crate::ceilings::{CPU_EXCEEDED, MEMORY_EXCEEDED, TIMED_OUT};
     let setting = std::env::var("PORTA_DENIALS").unwrap_or_default();
-    if setting == "never" || (code == 0 && setting != "always") {
+    // A run porta's own supervisor ended has nothing the kernel refused to
+    // explain, and the log query would cost it seconds of retries.
+    let ended_by_porta = matches!(code, TIMED_OUT | CPU_EXCEEDED | MEMORY_EXCEEDED);
+    if setting == "never" || ((code == 0 || ended_by_porta) && setting != "always") {
         return;
     }
     let denials = crate::denials::collect(tag, started);
@@ -703,8 +772,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     // serving — so only the child is narrowed, after the fork.
     let ruleset = request.ruleset()?;
     let policy = request.child_policy(&ruleset);
-    let mut command = request.command(&request.cmd);
-    command.args(&request.args);
+    let mut command = request.spawned_command();
     command.stdin(std::process::Stdio::inherit());
     command.stdout(std::process::Stdio::inherit());
     command.stderr(std::process::Stdio::inherit());
@@ -714,14 +782,14 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     // Its own process group, so `--timeout` reaches everything the command
     // starts, not only the command itself.
     command.process_group(0);
-    let code = command
-        .spawn()
-        .map_err(|error| format!("cannot start the command under the sandbox: {error}"))
-        .and_then(|child| {
-            wait_within(child, request.timeout, request.max_cpu)
-                .map_err(|error| format!("waiting for the command failed: {error}"))
-        })?;
-    Ok(code)
+    let mut child = command.spawn().map_err(|error| format!("cannot start the command under the sandbox: {error}"))?;
+    if request.max_memory_mb > 0 {
+        // The child has stopped itself after applying its policy; place it
+        // under the ceiling, or end it there — never let it run without one.
+        crate::memory_ceiling::place(&mut child, &request.tag, request.max_memory_mb.saturating_mul(MIB))?;
+    }
+    // The memory ceiling is the cgroup's here, so the supervisor watches none.
+    wait_within(child, request.timeout, request.max_cpu, 0).map_err(|error| format!("waiting for the command failed: {error}"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
