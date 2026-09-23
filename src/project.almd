@@ -31,6 +31,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
         env_pass: cfg.env_pass,
         allow_unix: cfg.allow_unix,
         allow_bind: cfg.allow_bind,
+        no_net: cfg.no_net,
         timeout: cfg.timeout,
         max_cpu: cfg.max_cpu,
         max_procs: cfg.max_procs,

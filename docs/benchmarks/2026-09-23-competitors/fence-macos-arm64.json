@@ -2,7 +2,7 @@
   "tool": "fence",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 11,
+  "tried": 12,
   "escaped": 4,
   "hardening_gaps": 0,
   "not_offered": 7,
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "not offered",
       "detail": "fence has no port grants"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

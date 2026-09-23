@@ -35,6 +35,7 @@ does not show you where.
 | **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
 | **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
 | **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
+| **No network (`--no-net`)** | every outbound, bind and inbound denied, the resolver included | a network namespace of its own with only a loopback interface, where the host allows unprivileged user namespaces; otherwise Landlock closes every TCP port and seccomp every other family |
 | **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
 | **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |

@@ -54,6 +54,10 @@ use std::sync::OnceLock;
 pub(crate) const HELPER_PROCESSES: u64 = 2;
 
 const NAMESPACES: libc::c_long = (libc::CLONE_NEWUSER | libc::CLONE_NEWNS | libc::CLONE_NEWPID) as libc::c_long;
+/// Under `--no-net`: a network namespace too, holding only a loopback
+/// interface. The host's interfaces, its loopback services and its abstract
+/// Unix sockets are not in it.
+const NETWORK: libc::c_long = libc::CLONE_NEWNET as libc::c_long;
 
 /// One system call. Every argument is a number or a pointer to memory the
 /// caller owns for the length of the call.
@@ -142,6 +146,7 @@ impl MapLine {
 pub(crate) struct Isolation {
     uid_map: MapLine,
     gid_map: MapLine,
+    network: bool,
     /// Under a memory ceiling: A writes its pid on `ready` and waits for a
     /// byte on `go` before it forks, so porta can place it in the ceiling's
     /// cgroup while nothing of the command exists yet. A also holds copies of
@@ -160,25 +165,29 @@ pub(crate) struct Gate {
 }
 
 impl Isolation {
-    /// The isolation for one run, and the gate when `gated`.
-    pub(crate) fn prepare(gated: bool) -> io::Result<(Isolation, Option<Gate>)> {
+    /// The isolation for one run, the gate when `gated`, and a network
+    /// namespace of its own when `network`.
+    pub(crate) fn prepare(gated: bool, network: bool) -> io::Result<(Isolation, Option<Gate>)> {
         let uid_map = MapLine::identity(sys(libc::SYS_getuid, [0; 5])?);
         let gid_map = MapLine::identity(sys(libc::SYS_getgid, [0; 5])?);
         if !gated {
-            return Ok((Isolation { uid_map, gid_map, gate: None }, None));
+            return Ok((Isolation { uid_map, gid_map, network, gate: None }, None));
         }
         let (ready, ready_child) = io::pipe()?;
         let (go_child, go) = io::pipe()?;
         let fds = [ready_child.as_raw_fd(), go_child.as_raw_fd(), ready.as_raw_fd(), go.as_raw_fd()];
         let gate = Gate { ready, go, child_ends: (ready_child, go_child) };
-        Ok((Isolation { uid_map, gid_map, gate: Some(fds) }, Some(gate)))
+        Ok((Isolation { uid_map, gid_map, network, gate: Some(fds) }, Some(gate)))
     }
 
     /// The first `pre_exec` step. Returns only in C; A and B stay here until
     /// the run ends and exit from here.
     pub(crate) fn enter(self) -> io::Result<()> {
-        sys(libc::SYS_unshare, [NAMESPACES, 0, 0, 0, 0])?;
+        sys(libc::SYS_unshare, [NAMESPACES | if self.network { NETWORK } else { 0 }, 0, 0, 0, 0])?;
         self.map_and_privatise()?;
+        if self.network {
+            loopback_up()?;
+        }
         if let Some(gate) = self.gate {
             pass_gate(gate)?;
         }
@@ -219,6 +228,19 @@ fn write_file(path: &[u8], contents: &[u8]) -> io::Result<()> {
     let written = write_all(fd, contents);
     close(fd);
     written
+}
+
+/// The new network namespace's loopback interface, which starts down. A
+/// command that talks to itself over 127.0.0.1 still can.
+fn loopback_up() -> io::Result<()> {
+    let socket = sys(libc::SYS_socket, [libc::AF_INET as libc::c_long, (libc::SOCK_DGRAM | libc::SOCK_CLOEXEC) as libc::c_long, 0, 0, 0])? as RawFd;
+    // struct ifreq: the interface name, then the flags as a short.
+    let mut request = [0u8; 40];
+    request[..2].copy_from_slice(b"lo");
+    request[16..18].copy_from_slice(&((libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short).to_ne_bytes());
+    let raised = sys(libc::SYS_ioctl, [socket as libc::c_long, libc::SIOCSIFFLAGS as libc::c_long, ptr(request.as_ptr()), 0, 0]);
+    close(socket);
+    raised.map(drop)
 }
 
 /// A procfs for the new PID namespace over `/proc`. Runs in B, the first
@@ -322,7 +344,7 @@ const PROBE_REFUSALS: [&str; 3] = [
 ];
 
 fn probe() -> Result<(), &'static str> {
-    let Ok((isolation, _)) = Isolation::prepare(false) else { return Err(PROBE_REFUSALS[0]) };
+    let Ok((isolation, _)) = Isolation::prepare(false, true) else { return Err(PROBE_REFUSALS[0]) };
     match fork() {
         Ok(0) => exit(probe_child(&isolation)),
         Ok(child) => match waitpid(child) {
@@ -339,10 +361,12 @@ fn probe() -> Result<(), &'static str> {
 /// The probe's child: 0 when everything worked, otherwise the stage that
 /// failed. Raw system calls only; it runs after a fork of a threaded process.
 fn probe_child(isolation: &Isolation) -> libc::c_int {
-    if sys(libc::SYS_unshare, [NAMESPACES, 0, 0, 0, 0]).is_err() {
+    // The network namespace is asked for too, so an answer of yes holds for
+    // --no-net as well.
+    if sys(libc::SYS_unshare, [NAMESPACES | NETWORK, 0, 0, 0, 0]).is_err() {
         return 1;
     }
-    if isolation.map_and_privatise().is_err() {
+    if isolation.map_and_privatise().is_err() || loopback_up().is_err() {
         return 2;
     }
     match fork() {

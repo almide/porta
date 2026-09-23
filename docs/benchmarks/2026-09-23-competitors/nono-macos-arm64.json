@@ -2,7 +2,7 @@
   "tool": "nono",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 10,
+  "tried": 11,
   "escaped": 4,
   "hardening_gaps": 0,
   "not_offered": 7,
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "not offered",
       "detail": "nono cannot filter by TCP port on macOS"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

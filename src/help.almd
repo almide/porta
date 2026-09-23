@@ -23,6 +23,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --env-pass <NAME,...>   Copy these host variables in (the rest stay outside)")
   println("  --allow-unix <path>     Let the command reach this credential socket (repeatable)")
   println("  --allow-bind <port>     Let the command listen on this port under --allow-net")
+  println("  --no-net                No network at all: no TCP, UDP or host loopback (own network namespace on Linux)")
   println("  --timeout <secs>        Kill the command and all it started after this many seconds (exit 124)")
   println("  --max-cpu <secs>        CPU seconds per process before the kernel ends it (SIGXCPU)")
   println("  --max-procs <n>         Process ceiling for this user while the command runs; stops fork bombs")

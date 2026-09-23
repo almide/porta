@@ -128,13 +128,16 @@ pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
     roots
 }
 
+/// A request's TCP rules: the ports it may reach and serve on, and whether
+/// TCP is closed even with no port named (`--no-net` without a namespace).
+pub(crate) struct Network<'a> {
+    pub(crate) connect: &'a [String],
+    pub(crate) bind: &'a [u16],
+    pub(crate) closed: bool,
+}
+
 /// The Landlock policy a request asks for, or why this kernel cannot apply it.
-pub(crate) fn ruleset(
-    allowed_dirs: &[String],
-    allowed_net: &[String],
-    bind_ports: &[u16],
-    read_policy: &str,
-) -> Result<crate::landlock::Ruleset, String> {
+pub(crate) fn ruleset(allowed_dirs: &[String], network: Network, read_policy: &str) -> Result<crate::landlock::Ruleset, String> {
     let strict = read_policy == "strict";
     let policy = crate::landlock::Policy {
         writable_dirs: writable_dirs(allowed_dirs),
@@ -142,9 +145,9 @@ pub(crate) fn ruleset(
         system_dirs: SYSTEM_READABLE.iter().chain(SYSTEM_ETC_DIRS.iter()).map(|dir| dir.to_string()).collect(),
         system_files: SYSTEM_FILES.iter().map(|file| file.to_string()).collect(),
         restrict_reads: strict,
-        tcp_ports: requested_tcp_ports(allowed_net)?,
-        bind_ports: bind_ports.to_vec(),
-        restrict_network: !allowed_net.is_empty(),
+        tcp_ports: requested_tcp_ports(network.connect)?,
+        bind_ports: network.bind.to_vec(),
+        restrict_network: network.closed || !network.connect.is_empty(),
     };
     crate::landlock::prepare(&policy)
 }

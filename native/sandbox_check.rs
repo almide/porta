@@ -150,8 +150,8 @@ fn probe() -> (String, Vec<Primitive>) {
                 otherwise: "porta will refuse every run: the baseline filter is part of the policy",
             },
             Primitive {
-                name: "own PID and mount namespace (user namespaces)",
-                covers: "other processes invisible in /proc, in every read mode",
+                name: "own PID, mount and network namespace (user namespaces)",
+                covers: "other processes invisible in /proc; under --no-net, a network of loopback only",
                 present: crate::pid_namespace::available().is_ok(),
                 // Not a rule anyone asked for, so its absence narrows nothing
                 // a run was promised: runs go ahead, and say so.

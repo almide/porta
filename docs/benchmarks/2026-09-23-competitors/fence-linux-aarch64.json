@@ -2,7 +2,7 @@
   "tool": "fence",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 16,
+  "tried": 17,
   "escaped": 0,
   "hardening_gaps": 1,
   "not_offered": 6,
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "not offered",
       "detail": "fence has no port grants"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

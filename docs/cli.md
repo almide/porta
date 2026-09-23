@@ -66,6 +66,7 @@ line, never dropped.
 | `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
 | `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
+| `--no-net` | No network at all: no TCP or UDP to anywhere, and not the host's loopback either. On Linux the command gets a network namespace of its own holding only a loopback interface it can use itself; where the host refuses one, Landlock closes every TCP port and seccomp every other socket family, and a kernel that can do neither refuses the run. Refused beside `--allow-net`, `--allow-bind` or a proxy |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
 | `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
@@ -96,6 +97,7 @@ command = "claude"         # Command to run (native mode)
 mounts = ["."]            # Directories the command can write to
 # mounts = [".:ro"]       # Read-only mount
 network = ["*:443"]       # Restrict to these ports (empty = all open)
+# no-net = true           # No network at all (instead of network)
 # read-policy = "strict"  # Confine reads to mounts + system dirs
 # timeout = 300           # Kill the run after N seconds (exit 124)
 # max-cpu = 60            # CPU seconds per process (SIGXCPU past it)

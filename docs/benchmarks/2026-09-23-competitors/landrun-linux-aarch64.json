@@ -2,8 +2,8 @@
   "tool": "landrun",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 16,
-  "escaped": 1,
+  "tried": 17,
+  "escaped": 2,
   "hardening_gaps": 1,
   "not_offered": 6,
   "rows": [
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "held",
       "detail": "443 refused under *:80"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "ESCAPED",
+      "detail": "reached udp 1.1.1.1:53"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

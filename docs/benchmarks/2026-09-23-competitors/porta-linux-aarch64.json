@@ -2,7 +2,7 @@
   "tool": "porta",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 22,
+  "tried": 23,
   "escaped": 0,
   "hardening_gaps": 0,
   "not_offered": 0,
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "held",
       "detail": "443 refused under *:80"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

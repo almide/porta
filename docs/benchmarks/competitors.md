@@ -53,7 +53,7 @@ directory when the row grants none.
 
 | Attempt | porta | srt | Fence | nono |
 |---|---|---|---|---|
-| **tried / escaped / not offered** | **18 / 0 / 0** | 13 / 4 / 5 | 11 / 4 / 7 | 10 / 4 / 7 |
+| **tried / escaped / not offered** | **19 / 0 / 0** | 14 / 4 / 5 | 12 / 4 / 7 | 11 / 4 / 7 |
 | write outside every mount | held | held | held | held |
 | rename the mount root away | held | held | held | **ESCAPED** |
 | write a git hook inside a mount | held | held | held | **ESCAPED** |
@@ -65,6 +65,7 @@ directory when the row grants none.
 | read the login Keychain | held | **ESCAPED** | **ESCAPED** | held |
 | reach Launch Services | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
 | reach a port the policy did not open | held | held | not offered | not offered |
+| reach anything with no network granted | held | held | held | held |
 | reach the cloud metadata endpoint via the proxy | held | held | held | held |
 | open a raw socket | held | held | not offered | not offered |
 | fork past `--max-procs` | held | not offered | not offered | not offered |
@@ -100,7 +101,7 @@ What the escapes are:
 
 | Attempt | porta | srt | Fence | nono | landrun |
 |---|---|---|---|---|---|
-| **tried / escaped / not offered** | **22 / 0 / 0** | 17 / 0 / 5 | 16 / 0 / 6 | 18 / 2 / 3 | 16 / 1 / 6 |
+| **tried / escaped / not offered** | **23 / 0 / 0** | 18 / 0 / 5 | 17 / 0 / 6 | 19 / 2 / 3 | 17 / 2 / 6 |
 | write outside every mount | held | held | held | held | held |
 | write through a symlink pointing outside the mount | held | held | held | held | held |
 | read a secret through a symlink under strict | held | held | held | held | held |
@@ -110,6 +111,7 @@ What the escapes are:
 | read another process's arguments (strict reads) | held | held | held | **ESCAPED** | held |
 | read another process's arguments (default reads) | held | held | held | **ESCAPED** | held |
 | reach a port the policy did not open | held | held | not offered | held | held |
+| reach anything with no network granted | held | held | held | held | **ESCAPED** |
 | reach the cloud metadata endpoint via the proxy | held | held | held | held | not offered |
 | get a UDP answer from outside in proxy mode | held | held | held | held | **ESCAPED** |
 | open a socket without `socket()` via io_uring | held | held | held | held | held |
@@ -126,9 +128,10 @@ What the escapes are:
 
 What the escapes are:
 
-- **UDP** (landrun). Landlock's network rules cover TCP only. Under a policy
-  that granted no network, landrun refused a TCP connection to `1.1.1.1:53`
-  but let a UDP DNS question to the same address get its answer. porta has the
+- **UDP** (landrun, in both network rows). Landlock's network rules cover TCP
+  only. Under a policy that granted no network, landrun refused a TCP
+  connection to `1.1.1.1:53` but let a UDP DNS question to the same address
+  get its answer. porta has the
   same Landlock limit, so it adds a seccomp filter that refuses every socket
   family a TCP rule cannot see. srt, Fence and nono isolate the network in a
   namespace or proxy.
@@ -162,12 +165,20 @@ is allowing a host (cloud metadata) is not offered.
 
 ## Where porta loses
 
-- **No network namespace.** srt and Fence run the command in a network
-  namespace of its own, and it reaches the network only through their proxy.
-  porta leaves it in the host's network namespace. Landlock's TCP port rules
-  and a seccomp filter refuse every other socket family and every other
-  address. The network rows above show no escape from that difference. It is
-  still a layer porta does not have.
+- **The network is open by default.** A run with no network flag reaches
+  the network as a Docker container does; `--no-net`, `--allow-net` or
+  `--proxy-allow` close it. srt and Fence start closed. The row "reach
+  anything with no network granted" runs porta with `--no-net` and the others
+  with their defaults.
+- **A network namespace only under `--no-net`.** srt and Fence run every
+  command in a network namespace of its own and let it out only through
+  their proxy. porta gives the command its own namespace (loopback only)
+  under `--no-net`. Under `--allow-net` and `--proxy-allow` it stays in the
+  host's, where Landlock's TCP port rules and a seccomp filter refuse every
+  other socket family. No network row above shows an escape from that
+  difference, but under `--allow-net` UDP stays open on Linux (see the
+  threat model). A namespace would not close that without a network stack of
+  porta's own.
 - **Hosts that refuse unprivileged user namespaces.** Examples are Ubuntu 23.10
   and later with `kernel.apparmor_restrict_unprivileged_userns=1`, and most
   containers. porta then cannot create the PID namespace. The run goes ahead

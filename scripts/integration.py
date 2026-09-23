@@ -405,10 +405,32 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     # refused, as on a stock Ubuntu desktop or in a container); everything
     # else must be present.
     absent = [p['name'] for p in host['primitives'] if not p['present']]
-    assert all('memory ceiling' in name or 'PID and mount namespace' in name for name in absent), host
+    assert all('memory ceiling' in name or 'PID, mount and network namespace' in name for name in absent), host
     assert host['all_enforced'] is (host['missing'] == 0) and host['missing'] == len(absent), host
     assert host['primitives'] and all('present' in p for p in host['primitives']), host
     print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
+
+    # --no-net: nothing leaves, not even to a service on the host's loopback,
+    # and it cannot be combined with a grant that would open some of it.
+    result = run('explain', '/bin/echo', '-v', str(root), '--no-net', '--json')
+    assert json.loads(result.stdout)['network'] == {'mode': 'none', 'allow': []}, result
+    result = run('run', '/bin/echo', '-v', str(root), '--no-net', '--allow-net', '*:443', '--', 'must-not-run')
+    assert result.returncode != 0 and 'must-not-run' not in result.stdout and '--no-net' in result.stderr, result
+    listener = __import__('socket').socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    try:
+        dial = ('import socket,sys\n'
+                'try: socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3); print("REACHED")\n'
+                'except OSError: print("closed")')
+        port = str(listener.getsockname()[1])
+        result = run('run', sys.executable, '-v', str(root), '--', '-c', dial, port)
+        assert 'REACHED' in result.stdout, result
+        result = run('run', sys.executable, '-v', str(root), '--no-net', '--', '-c', dial, port)
+        assert 'closed' in result.stdout, result
+    finally:
+        listener.close()
+    print('PASS: --no-net reaches nothing, the host loopback included, and refuses a grant beside it')
 
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
@@ -754,7 +776,7 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         # gives one. The command must still end the way it would have: its
         # exit code, its signal, and --max-procs counting its own processes.
         host = json.loads(run('check', '--json').stdout)
-        if any('PID and mount namespace' in p['name'] and p['present'] for p in host['primitives']):
+        if any('PID, mount and network namespace' in p['name'] and p['present'] for p in host['primitives']):
             decoy = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)',
                                       '--token=sk-live-MUST-NOT-LEAK'])
             try:

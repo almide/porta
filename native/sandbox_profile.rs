@@ -144,6 +144,8 @@ pub(crate) struct ProfileRequest<'a> {
     pub read_policy: &'a str,
     /// Whether the loopback endpoint in `allowed_net` is the only egress.
     pub proxy: bool,
+    /// `--no-net`: every network operation denied, the resolver included.
+    pub no_network: bool,
     /// TCP ports the command may listen on. Empty means none when a network
     /// rule is in force, and everything when the network is open.
     pub bind_ports: &'a [u16],
@@ -162,7 +164,11 @@ pub(crate) fn build_sandbox_profile(request: &ProfileRequest) -> String {
     profile.push_str(&write_rules(request.allowed_dirs));
     profile.push_str(&read_rules(request.allowed_dirs, request.read_policy));
     profile.push_str(&credential_read_rules());
-    profile.push_str(&network_rules(request.allowed_net, request.proxy, request.bind_ports));
+    profile.push_str(&if request.no_network {
+        NO_NETWORK_RULES.to_string()
+    } else {
+        network_rules(request.allowed_net, request.proxy, request.bind_ports)
+    });
     profile.push_str(&socket_rules(request.allowed_unix));
     profile.push_str(&host_rules());
     tagged(&profile, request.tag)
@@ -206,6 +212,7 @@ pub(crate) fn build_sandbox_profile_rs(
         allowed_net,
         read_policy,
         proxy,
+        no_network: false,
         bind_ports: &[],
         allowed_unix: &[],
         tag: "",
@@ -344,6 +351,10 @@ pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
         .chain(PROFILE_READABLE.iter().map(|dir| dir.to_string()))
         .collect()
 }
+
+/// `--no-net`: no outbound, no listening, no inbound, and no resolver. The
+/// Unix sockets `--allow-unix` names are reopened after this, as in every mode.
+const NO_NETWORK_RULES: &str = "(deny network-outbound)\n(deny network-bind)\n(deny network-inbound)\n";
 
 /// The network is open like Docker's until `--allow-net` names a port, which
 /// then closes everything else. Only the port is filtered, not the host.

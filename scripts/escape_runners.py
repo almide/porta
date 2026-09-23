@@ -20,12 +20,13 @@ The translations, per tool:
          `--proxy-allow` becomes `allowedDomains`. srt grants a port only
          with a host, so `--allow-net '*:P'` is written for the one host the
          rows contact, `example.com:P`.
+         `--no-net` is an empty `allowedDomains`, srt's own default.
   fence  The same settings shape as srt, with `defaultDenyRead` and
          `allowRead` for strict reads. Fence has no port grants, so a row
          that grants one port is not offered.
   nono   Flags: `-v` becomes `--allow`, `--allow-net '*:P'` becomes
          `--block-net --allow-connect-port P`, `--proxy-allow` becomes
-         `--allow-domain`. nono confines reads by default, so strict reads
+         `--allow-domain`, `--no-net` becomes `--block-net`. nono confines reads by default, so strict reads
          need nothing further. `--max-memory-mb` becomes `--memory`,
          `--max-procs` becomes `--max-processes` (a cgroup `pids.max` on
          Linux); nono has no CPU, file-size or time ceiling. The Python
@@ -36,7 +37,8 @@ The translations, per tool:
          grants are what any command needs to start, the same set porta's
          strict reads allow: `--rox` for /usr, /bin, /lib and the Python
          prefix, `--ro /etc`, `--rw` for /dev and /tmp. `-v` becomes `--rw`
-         (`--ro` for `:ro`), `--allow-net '*:P'` becomes `--connect-tcp P`.
+         (`--ro` for `:ro`), `--allow-net '*:P'` becomes `--connect-tcp P`;
+         `--no-net` is landrun's default of no TCP grant.
          landrun targets Landlock ABI 9 and refuses to run on an older kernel
          unless given `--best-effort`, which lets it degrade to what the
          kernel has; it runs that way here, and the table says so. It has no
@@ -61,13 +63,16 @@ class NotExpressible(Exception):
 
 def parse_policy(policy):
     """porta's flags, as the fields a translation needs."""
-    parsed = {"write": [], "read_only": [], "strict": False, "net": [], "proxy": [], "ceilings": {}}
+    parsed = {"write": [], "read_only": [], "strict": False, "net": [], "proxy": [], "ceilings": {}, "no_net": False}
     items = list(policy)
     index = 0
     while index < len(items):
         flag, value = items[index], items[index + 1] if index + 1 < len(items) else ""
         index += 2
-        if flag == "-v":
+        if flag == "--no-net":
+            parsed["no_net"] = True
+            index -= 1
+        elif flag == "-v":
             (parsed["read_only"] if value.endswith(":ro") else parsed["write"]).append(value.removesuffix(":ro"))
         elif flag == "--read-policy":
             parsed["strict"] = value == "strict"
@@ -170,6 +175,8 @@ class NonoRunner:
         for path in parsed["read_only"]:
             flags += ["--read", path]
         flags += self.port_flags(parsed["net"])
+        if parsed["no_net"]:
+            flags.append("--block-net")
         for host in parsed["proxy"]:
             flags += ["--allow-domain", host]
         return [self.binary, *flags, "--", target, *args]
