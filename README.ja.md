@@ -46,7 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 ```
 
 macOS（Apple silicon）と Linux（x86-64 / arm64）向けの単一バイナリ。公開済み
-SHA-256 で検証してから導入します。[Almide](https://github.com/almide/almide)
+SHA-256 で検証してから導入します。`cosign` があればリリースの Sigstore 署名も検証します
+（[リリースの検証](docs/cli.md#verifying-a-release)）。[Almide](https://github.com/almide/almide)
 があれば `go install` と同じ感覚で入れられます（Intel Mac やその他の環境はこちら）。
 
 ```bash

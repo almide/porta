@@ -131,6 +131,33 @@ porta up -- --print "hi"   # Pass arguments to the command
 as a `porta.toml`, so an invocation you converged on becomes the project's
 checked-in policy. Secrets and `-e` values are left out on purpose.
 
+## Verifying a release
+
+From 0.6.7 on, every release carries two Sigstore signatures, both keyless
+and both issued to porta's release workflow at the release's tag:
+
+- `porta-checksums.sha256.sigstore.json` signs the checksum list. `install.sh`
+  checks it wherever `cosign` is installed and refuses to install on a
+  mismatch; `PORTA_REQUIRE_SIGNATURE=1` also refuses when cosign is missing.
+  By hand:
+
+  ```bash
+  cosign verify-blob --bundle porta-checksums.sha256.sigstore.json \
+    --certificate-identity-regexp '^https://github\.com/almide/porta/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    porta-checksums.sha256
+  ```
+
+- Each archive has SLSA build provenance (which workflow run built it, from
+  which commit):
+
+  ```bash
+  gh attestation verify porta-macos-aarch64.tar.gz --repo almide/porta
+  ```
+
+The release workflow checks both on every published platform before the
+release becomes the latest.
+
 ## When a run is refused
 
 A refusal looks exactly like a broken tool — `Operation not permitted` — until
