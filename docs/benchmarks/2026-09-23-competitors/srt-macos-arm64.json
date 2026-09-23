@@ -1,0 +1,167 @@
+{
+  "tool": "srt",
+  "system": "Darwin",
+  "machine": "arm64",
+  "tried": 13,
+  "escaped": 4,
+  "hardening_gaps": 0,
+  "not_offered": 5,
+  "rows": [
+    {
+      "name": "write outside every mount",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "write refused"
+    },
+    {
+      "name": "rename the mount root away",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "rename refused"
+    },
+    {
+      "name": "write a git hook inside a mount",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "hook write refused"
+    },
+    {
+      "name": "write through a symlink pointing outside the mount",
+      "category": "filesystem",
+      "verdict": "held",
+      "detail": "write through a symlink to outside refused"
+    },
+    {
+      "name": "read a secret through a symlink under strict",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read through a symlink refused"
+    },
+    {
+      "name": "inherit an open file descriptor from porta",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "no descriptor beyond stdio inherited"
+    },
+    {
+      "name": "read an SSH private key",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "secret read"
+    },
+    {
+      "name": "read /etc/shadow under strict",
+      "category": "credentials",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "read another process's arguments",
+      "category": "processes",
+      "verdict": "ESCAPED",
+      "detail": "another process's arguments read"
+    },
+    {
+      "name": "read another process's arguments, default reads",
+      "category": "processes",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "read the login Keychain",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "the login keychain database is readable"
+    },
+    {
+      "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
+      "category": "processes",
+      "verdict": "ESCAPED",
+      "detail": "Launch Services reachable: PROBE-STARTED; com.apple.lsd.mapdb REACHABLE; com.apple.lsd.modifydb denied 1100"
+    },
+    {
+      "name": "reach a port the policy did not open",
+      "category": "network",
+      "verdict": "held",
+      "detail": "443 refused under *:80"
+    },
+    {
+      "name": "reach the cloud metadata endpoint via the proxy",
+      "category": "network",
+      "verdict": "held",
+      "detail": "cloud metadata refused even when allow-listed"
+    },
+    {
+      "name": "get a UDP answer from outside in proxy mode",
+      "category": "network",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "open a socket without socket() via io_uring",
+      "category": "network",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "exec a memory file (fileless)",
+      "category": "processes",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "attach to a process outside the sandbox (ptrace)",
+      "category": "processes",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "enter a new user namespace",
+      "category": "hardening",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "reach the network over MPTCP",
+      "category": "network",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "open a raw socket",
+      "category": "network",
+      "verdict": "held",
+      "detail": "raw socket refused"
+    },
+    {
+      "name": "fork past --max-procs",
+      "category": "resources",
+      "verdict": "not offered",
+      "detail": "srt has no --max-procs"
+    },
+    {
+      "name": "grow a file past --max-file-size",
+      "category": "resources",
+      "verdict": "not offered",
+      "detail": "srt has no --max-file-size"
+    },
+    {
+      "name": "burn CPU past --max-cpu",
+      "category": "resources",
+      "verdict": "not offered",
+      "detail": "srt has no --max-cpu"
+    },
+    {
+      "name": "ignore SIGXCPU and keep burning",
+      "category": "resources",
+      "verdict": "not offered",
+      "detail": "srt has no --max-cpu"
+    },
+    {
+      "name": "allocate past --max-memory-mb",
+      "category": "resources",
+      "verdict": "not offered",
+      "detail": "srt has no --max-memory-mb"
+    }
+  ]
+}

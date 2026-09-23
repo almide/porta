@@ -17,6 +17,7 @@ as a definition does.
 |---|---|
 | `wasmtime_bridge.rs` + `wasmtime_bridge/{load,run}.rs` | WASM instance lifecycle and the FFI surface; `load` reads a file as a core module or a WASI 0.2 / 0.3 component, `run` executes it |
 | `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
+| `pid_namespace.rs` | the command's own user, PID and mount namespace on Linux, a fresh `/proc` in it, and the pid-1 helper that reports how the command ended; where the host refuses them the run goes ahead and says so |
 | `ceilings.rs`, `memory_ceiling.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU or memory ceiling; on Linux the memory ceiling is a cgroup v2 scope asked of the systemd user manager |
 | `denials.rs`, `sandbox_check.rs` | what the kernel refused during a run and which flag would have allowed it (macOS, from the unified log via a per-run tag on every deny rule); what this host can enforce, for `porta check` |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
@@ -48,9 +49,9 @@ is poor the reported function boundaries are wrong, so splitting an `.almd`
 file may not move its complexity number — see
 `docs/roadmap/done/04-code-quality-grade.md` before chasing one.
 
-`landlock.rs`, `landlock_policy.rs`, `seccomp.rs` and `memory_ceiling.rs` open
-with `#![cfg(target_os = "linux")]`, so on macOS they are not compiled — not type
-checked, not const-evaluated, not linted. Every gate above can pass while one
+`landlock.rs`, `landlock_policy.rs`, `seccomp.rs`, `memory_ceiling.rs` and
+`pid_namespace.rs` open with `#![cfg(target_os = "linux")]`, so on macOS they
+are not compiled — not type checked, not const-evaluated, not linted. Every gate above can pass while one
 of them does not build. Changing one means building it on Linux before
 committing:
 

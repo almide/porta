@@ -10,8 +10,10 @@ corpus that hid its losses would not be evidence.
 
 - **macOS arm64**: 18 tried, 0 escaped
 - **Linux x86_64** (the CI runner, with a systemd user manager started for
-  the job; run 35756833265): 21 tried, 0 escaped
-- **Linux aarch64** (a systemd container, 2026-09-23): 21 tried, 0 escaped
+  the job; run 35808689468): 21 tried, 0 escaped. The runner refuses
+  unprivileged user namespaces (Ubuntu's AppArmor restriction), so the
+  default-reads row for another process's arguments is not hosted there
+- **Linux aarch64** (a systemd container, 2026-09-23): 22 tried, 0 escaped
 
 ## A correction to earlier runs
 
@@ -35,6 +37,16 @@ misread. It now asks the bootstrap server for the Launch Services mach
 services directly and reads the kernel's answer, and no row's verdict depends
 on anything porta prints.
 
+A third correction came from running the corpus against other sandbox tools
+([the comparison](competitors.md)). Three Linux rows measured less than their
+names said. The UDP row counted an opened socket as egress; it now asks a
+public resolver a DNS question and counts only an answer, after the same
+question has been answered outside any sandbox. The ptrace row called
+`PTRACE_TRACEME`, which traces nothing but the caller; it now attaches to a
+process outside the sandbox. The user-namespace row is not a way out of the
+policy but a step an escape would start from, and is now counted apart, as
+hardening. porta held all three before and after.
+
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
 | write outside every mount | filesystem | held | held |
@@ -46,15 +58,16 @@ on anything porta prints.
 | read an SSH private key | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
+| read another process's arguments, default reads | processes | — | held |
 | read the login Keychain | credentials | held | — |
-| start a program outside the sandbox | processes | held | — |
+| reach Launch Services (what `open(1)` starts programs through) | processes | held | — |
 | reach a port the policy did not open | network | held | held |
 | reach the cloud metadata endpoint via the proxy | network | held | held |
-| open a UDP socket in proxy mode | network | — | held |
+| get a UDP answer from outside in proxy mode | network | — | held |
 | open a socket without socket() via io_uring | network | — | held |
 | exec a memory file (fileless) | processes | — | held |
-| attach to another process (ptrace) | processes | — | held |
-| enter a new user namespace | processes | — | held |
+| attach to a process outside the sandbox (ptrace) | processes | — | held |
+| enter a new user namespace | hardening | — | held |
 | reach the network over MPTCP | network | — | held |
 | open a raw socket | network | held | held |
 | fork past `--max-procs` | resources | held | held |

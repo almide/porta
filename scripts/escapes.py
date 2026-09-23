@@ -4,6 +4,10 @@ tried against a porta binary, one attempt per row.
 
     python3 scripts/escapes.py target/porta            # table on stdout
     python3 scripts/escapes.py target/porta --json out.json
+    python3 scripts/escapes.py path/to/srt --runner srt # the same rows, another tool
+
+`--runner` is porta (the default), srt, fence or nono; see
+scripts/escape_runners.py for how each row's policy is translated.
 
 Each attempt runs a command under `porta run` with a policy that should stop
 it, and records whether it was stopped ("held"), got through ("ESCAPED"), or
@@ -29,10 +33,12 @@ import sys
 import tempfile
 import time
 
+from escape_runners import NotExpressible, environment, make_runner
+
 SYSTEM = platform.system()
 MACHINE = platform.machine()
 
-HELD, ESCAPED, NA = "held", "ESCAPED", "n/a"
+HELD, ESCAPED, NA, UNOFFERED = "held", "ESCAPED", "n/a", "not offered"
 
 
 class Result:
@@ -44,10 +50,6 @@ class Result:
 class HarnessError(Exception):
     """The harness itself did not run what it meant to. Never a verdict: a
     corpus whose runs silently did nothing would report every row held."""
-
-
-def usage_returned(result):
-    return "porta run <target>" in result.stdout or "porta run <target>" in result.stderr
 
 
 class Attempt:
@@ -67,35 +69,64 @@ class Attempt:
         return self._run(ctx)
 
 
-class Context:
-    """What every attempt is handed: the binary, a granted writable mount, an
-    ungranted directory outside every always-writable root, and a decoy
-    process holding a secret in its arguments."""
+class ProbeDidNotStart(Exception):
+    """The row's probe never ran under this tool's policy: its interpreter or
+    tool could not start. An escape that was never attempted was not held."""
 
-    def __init__(self, porta, workspace, ungranted):
-        self.porta = porta
+
+PROBE_STARTED = "PROBE-STARTED"
+
+# The interpreter itself, not a launcher shim in front of it: a shim under the
+# home directory is a path a strict tool rightly will not open, and the probe
+# should not fail for a reason that has nothing to do with the row.
+_real = pathlib.Path(sys.base_prefix) / "bin" / "python3"
+PYTHON = str(_real) if _real.exists() else sys.executable
+
+
+class Context:
+    """What every attempt is handed: the tool under test, a granted writable
+    mount, an ungranted directory outside every always-writable root, and a
+    decoy process holding a secret in its arguments."""
+
+    def __init__(self, runner, workspace, ungranted):
+        self.runner = runner
         self.workspace = workspace      # granted with -v; writable
         self.ungranted = ungranted      # under $HOME, granted to nothing
         self.decoy = None
+        # A tool starts where a user would start it: in the project it was
+        # granted, the first writable mount, or an empty directory when the row
+        # grants none. Some tools find the files they protect relative to the
+        # directory they start in, and a harness that started them elsewhere
+        # would score them on a protection it had switched off.
+        self.empty_dir = tempfile.mkdtemp(prefix="escapes-cwd-")
 
     def porta_run(self, *args, policy=(), env=None):
-        # The target is the first bare word before `--`; only its own arguments
-        # go after. A harness that put the target after `--` got porta's usage
-        # text and exit 0 back, ran nothing, and every absence-based row passed
-        # — which is why `usage_returned` below is fatal, not a verdict.
-        target, rest = args[0], args[1:]
-        argv = [self.porta, "run", target, *policy, "--", *rest]
-        run_env = {**os.environ, **(env or {})}
+        # Every row states its policy in porta's flags; the runner translates
+        # them for the tool under test, or raises NotExpressible. A tool that
+        # refused its own configuration, or porta printing its usage, is a
+        # harness error, never a verdict: a run that did nothing would read as
+        # held on every absence-based row.
+        argv = self.runner.argv(args[0], list(args[1:]), list(policy))
+        mounts = [policy[i + 1] for i in range(len(policy) - 1) if policy[i] == "-v" and not policy[i + 1].endswith(":ro")]
+        start_dir = mounts[0] if mounts and os.path.isdir(mounts[0]) else self.empty_dir
         try:
-            result = subprocess.run(argv, capture_output=True, text=True, timeout=30, env=run_env)
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=30,
+                                    env=environment(env), stdin=subprocess.DEVNULL, cwd=start_dir)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, "", "timed out")
-        if usage_returned(result):
-            raise HarnessError(f"porta printed its usage instead of running: {' '.join(argv)}")
+        if self.runner.refused_config(result):
+            raise HarnessError(f"{self.runner.name} refused the translated configuration: "
+                               f"{(result.stdout + result.stderr).strip()[:300]}")
         return result
 
     def py(self, code, *args, policy=()):
-        return self.porta_run(sys.executable, "-c", code, *map(str, args), policy=policy)
+        # The probe says it started before anything else, so a row can tell
+        # "the escape was stopped" from "the probe never ran".
+        started = f"import sys\nsys.stdout.write('{PROBE_STARTED}\\n'); sys.stdout.flush()\n"
+        result = self.porta_run(PYTHON, "-c", started + code, *map(str, args), policy=policy)
+        if PROBE_STARTED not in result.stdout:
+            raise ProbeDidNotStart((result.stderr or result.stdout).strip()[:160])
+        return result
 
 
 # --- attempts, grouped by what they reach for ------------------------------
@@ -185,6 +216,8 @@ def inherit_porta_fd(ctx):
         "        pass\n"
         "print('LEAK' if leaked else 'clean')"
     )
+    if getattr(ctx.runner, "passes_supervisor_socket", False):
+        return Result(NA, f"{ctx.runner.name} hands the child its own supervisor socket by design")
     result = ctx.py(code, policy=["--proxy-allow", "example.com",
                                   "--proxy-audit", str(ctx.workspace / "audit.jsonl"),
                                   "-v", str(ctx.workspace)])
@@ -253,10 +286,20 @@ def read_other_process_argv(ctx):
 
 
 def read_keychain(ctx):
+    # The login Keychain's database file, read directly: its first four bytes
+    # are the format's magic, "kych". Nothing secret is printed, but a file the
+    # run can read is a file it can copy out and attack offline. An earlier
+    # version judged `security list-keychains`, which prints the search list
+    # from preferences and proves nothing about the Keychain itself.
     if SYSTEM != "Darwin":
         return Result(NA, "Keychain is macOS-only")
-    result = ctx.porta_run("/usr/bin/security", "list-keychains")
-    return Result(ESCAPED, "keychain reachable") if "login.keychain" in result.stdout else Result(HELD, "keychain closed")
+    keychain = pathlib.Path.home() / "Library" / "Keychains" / "login.keychain-db"
+    if not keychain.exists():
+        return Result(NA, "no login keychain on this host")
+    result = ctx.porta_run("/usr/bin/head", "-c", "4", str(keychain))
+    if not result.stdout and "No such file" in result.stderr:
+        raise ProbeDidNotStart(result.stderr.strip()[:160])
+    return Result(ESCAPED, "the login keychain database is readable") if result.stdout == "kych" else Result(HELD, "keychain closed")
 
 
 def launch_outside_sandbox(ctx):
@@ -284,14 +327,14 @@ def launch_outside_sandbox(ctx):
     result = ctx.py(code)
     if "REACHABLE" in result.stdout:
         return Result(ESCAPED, "Launch Services reachable: " + result.stdout.strip().replace("\n", "; "))
-    if "denied" not in result.stdout:
-        return Result(ESCAPED, f"the probe did not run: {(result.stdout + result.stderr).strip()[:200]}")
     return Result(HELD, "Launch Services mach lookups refused")
 
 
 def _egress_tool(ctx, argv, policy):
     """A network tool that should be unable to reach the internet."""
     result = ctx.porta_run(*argv, policy=policy)
+    if not result.stdout.strip():
+        raise ProbeDidNotStart(result.stderr.strip()[:160])
     return result
 
 
@@ -400,18 +443,34 @@ def allocate_past_memory_ceiling(ctx):
     return Result(HELD, f"allocation past the ceiling was killed (exit {result.returncode})")
 
 
+UDP_PROBE = (
+    "import socket\n"
+    "q=bytes.fromhex('abcd01000001000000000000076578616d706c6503636f6d0000010001')\n"
+    "try:\n"
+    "    s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)\n"
+    "except OSError as e: print('closed', e.errno); raise SystemExit\n"
+    # UDP drops packets; three questions before an answer counts as absent.
+    "for _ in range(3):\n"
+    "    try: s.sendto(q, ('1.1.1.1', 53)); s.recvfrom(512); print('ANSWERED'); break\n"
+    "    except OSError as e: last=e\n"
+    "else: print('closed', last)"
+)
+
+
 def udp_under_allow_net(ctx):
+    # A DNS question to a public resolver over UDP, and whether an answer
+    # comes back. That is egress. Merely opening a socket is not: a tool that
+    # isolates the network in a namespace lets the socket open and gives it
+    # nowhere to go, and an earlier version of this row scored that as an
+    # escape. The same question is asked outside any sandbox first, so a host
+    # that cannot reach the resolver at all cannot host the row.
     if SYSTEM != "Linux":
         return Result(NA, "UDP under --allow-net is only closed on Linux via seccomp; macOS closes it via the profile, tested elsewhere")
-    code = (
-        "import socket\n"
-        "try:\n"
-        "    socket.socket(socket.AF_INET, socket.SOCK_DGRAM); print('OPENED')\n"
-        "except OSError as e: print('closed', e.errno)"
-    )
-    # proxy mode is where UDP is closed; --allow-net leaves it open by design.
-    result = ctx.py(code, policy=["--proxy-allow", "example.com"])
-    return Result(ESCAPED, "UDP socket opened in proxy mode") if "OPENED" in result.stdout else Result(HELD, "UDP closed in proxy mode")
+    control = subprocess.run([PYTHON, "-c", UDP_PROBE], capture_output=True, text=True, timeout=15)
+    if "ANSWERED" not in control.stdout:
+        return Result(NA, "this host gets no UDP answer from 1.1.1.1:53 unsandboxed")
+    result = ctx.py(UDP_PROBE, policy=["--proxy-allow", "example.com"])
+    return Result(ESCAPED, "a UDP DNS query got an answer in proxy mode") if "ANSWERED" in result.stdout else Result(HELD, "no UDP egress in proxy mode")
 
 
 def io_uring(ctx):
@@ -443,18 +502,70 @@ def fileless_exec(ctx):
     return Result(ESCAPED, "fileless execveat ran") if "EXECVED" in result.stdout else Result(HELD, "fileless exec refused")
 
 
+USERNS_PROBE = (
+    "import ctypes,os\n"
+    "libc=ctypes.CDLL(None,use_errno=True)\n"
+    "uid,gid=os.getuid(),os.getgid()\n"
+    "if libc.unshare(0x10000000|0x00020000|0x20000000): raise SystemExit(1)\n"
+    "open('/proc/self/setgroups','w').write('deny')\n"
+    "open('/proc/self/uid_map','w').write(f'{uid} {uid} 1')\n"
+    "open('/proc/self/gid_map','w').write(f'{gid} {gid} 1')\n"
+    "pid=os.fork()\n"
+    "if pid==0: os._exit(0 if libc.mount(b'proc',b'/proc',b'proc',0,None)==0 else 1)\n"
+    "raise SystemExit(os.waitstatus_to_exitcode(os.waitpid(pid,0)[1]))"
+)
+
+
+def host_gives_pid_namespaces():
+    """Whether an unprivileged process here may have its own user, PID and
+    mount namespaces and mount a procfs in them: what hiding other processes
+    without closing /proc takes, for any tool."""
+    return subprocess.run([PYTHON, "-c", USERNS_PROBE], capture_output=True, timeout=15).returncode == 0
+
+
+def read_other_process_argv_default(ctx):
+    # The row above, in the default read mode, where /proc stays readable and
+    # only a PID namespace of the command's own hides other processes.
+    if SYSTEM != "Linux":
+        return Result(NA, "the default read mode is the row above on macOS")
+    if ctx.decoy is None:
+        return Result(NA, "no decoy process")
+    if not host_gives_pid_namespaces():
+        return Result(NA, "this host refuses unprivileged PID namespaces, so the default read mode cannot hide other processes")
+    code = (
+        "import sys\n"
+        "try:\n"
+        "    data=open('/proc/'+sys.argv[1]+'/cmdline','rb').read()\n"
+        f"    print('LEAK' if b'{MARKER}' in data else 'closed')\n"
+        "except OSError: print('closed')"
+    )
+    result = ctx.py(code, ctx.decoy.pid, policy=["-v", str(ctx.workspace)])
+    return Result(ESCAPED, "another process's arguments read") if "LEAK" in result.stdout else Result(HELD, "the process is not visible")
+
+
 def ptrace_sibling(ctx):
+    # Attach to the decoy, a process of the same user outside the sandbox.
+    # Attached, the run could read its memory and rewrite its registers. An
+    # earlier version called PTRACE_TRACEME, which asks nothing of any other
+    # process and proved only that ptrace(2) was not filtered.
     if SYSTEM != "Linux":
         return Result(NA, "ptrace probe is Linux-only here")
     code = (
-        "import ctypes\n"
+        "import ctypes,sys,os\n"
         "libc=ctypes.CDLL(None,use_errno=True)\n"
-        "import ctypes as c\n"
-        "r=libc.ptrace(0, 1, 0, 0)\n"  # PTRACE_TRACEME=0 is harmless; a denied ptrace(2) returns EPERM
-        "print('closed' if r<0 else 'TRACED')"
+        "pid=int(sys.argv[1])\n"
+        "r=libc.ptrace(16, pid, 0, 0)\n"  # PTRACE_ATTACH
+        "if r==0:\n"
+        "    os.waitpid(pid, 0); libc.ptrace(17, pid, 0, 0); print('ATTACHED')\n"  # PTRACE_DETACH
+        "else:\n"
+        "    print('closed', ctypes.get_errno())"
     )
-    result = ctx.py(code, policy=["-v", str(ctx.workspace)])
-    return Result(ESCAPED, "ptrace permitted") if "TRACED" in result.stdout else Result(HELD, "ptrace refused")
+    yama = pathlib.Path("/proc/sys/kernel/yama/ptrace_scope")
+    scope = yama.read_text().strip() if yama.exists() else "absent"
+    result = ctx.py(code, ctx.decoy.pid, policy=["-v", str(ctx.workspace)])
+    if "ATTACHED" in result.stdout:
+        return Result(ESCAPED, f"attached to a process outside the sandbox (yama ptrace_scope {scope})")
+    return Result(HELD, f"attach refused (yama ptrace_scope {scope})")
 
 
 def new_namespace(ctx):
@@ -506,15 +617,16 @@ CORPUS = [
     Attempt("read an SSH private key", "credentials", None, read_ssh_key),
     Attempt("read /etc/shadow under strict", "credentials", ["Linux"], read_etc_shadow_strict),
     Attempt("read another process's arguments", "processes", None, read_other_process_argv),
+    Attempt("read another process's arguments, default reads", "processes", ["Linux"], read_other_process_argv_default),
     Attempt("read the login Keychain", "credentials", ["Darwin"], read_keychain),
-    Attempt("start a program outside the sandbox", "processes", ["Darwin"], launch_outside_sandbox),
+    Attempt("reach Launch Services (open(1) starts programs outside the sandbox through it)", "processes", ["Darwin"], launch_outside_sandbox),
     Attempt("reach a port the policy did not open", "network", None, direct_tcp_wrong_port),
     Attempt("reach the cloud metadata endpoint via the proxy", "network", None, reach_cloud_metadata),
-    Attempt("open a UDP socket in proxy mode", "network", ["Linux"], udp_under_allow_net),
+    Attempt("get a UDP answer from outside in proxy mode", "network", ["Linux"], udp_under_allow_net),
     Attempt("open a socket without socket() via io_uring", "network", ["Linux"], io_uring),
     Attempt("exec a memory file (fileless)", "processes", ["Linux"], fileless_exec),
-    Attempt("attach to another process (ptrace)", "processes", ["Linux"], ptrace_sibling),
-    Attempt("enter a new user namespace", "processes", ["Linux"], new_namespace),
+    Attempt("attach to a process outside the sandbox (ptrace)", "processes", ["Linux"], ptrace_sibling),
+    Attempt("enter a new user namespace", "hardening", ["Linux"], new_namespace),
     Attempt("reach the network over MPTCP", "network", ["Linux"], mptcp_socket),
     Attempt("open a raw socket", "network", None, raw_socket),
     Attempt("fork past --max-procs", "resources", None, fork_past_process_ceiling),
@@ -525,13 +637,65 @@ CORPUS = [
 ]
 
 
+def run_canary(ctx):
+    # Before any verdict: prove the harness runs a command at all. A run that
+    # should succeed writes into the granted workspace and says so; if it does
+    # not, no row below could mean anything.
+    canary = ctx.workspace / "canary"
+    result = ctx.porta_run("/bin/sh", "-c", 'echo alive > "$1" && echo RAN', "sh", str(canary),
+                           policy=["-v", str(ctx.workspace)])
+    if result.returncode != 0 or "RAN" not in result.stdout or not canary.exists():
+        raise HarnessError(f"the canary run did not run: exit {result.returncode}, {result.stderr.strip()}")
+
+
+def try_attempt(ctx, attempt):
+    if not attempt.applies():
+        return Result(NA, f"not applicable on {SYSTEM}")
+    try:
+        return attempt.run(ctx)
+    except NotExpressible as reason:
+        return Result(UNOFFERED, str(reason))
+    except ProbeDidNotStart as reason:
+        return Result(NA, f"the probe could not start under {ctx.runner.name}'s policy: {reason}")
+
+
+def tally(rows):
+    """Counts per verdict. A hardening row is not a way out of the policy; it
+    is a step an escape would start from (a new user namespace opens kernel
+    code an unprivileged process otherwise cannot reach), so it is counted
+    apart from escapes."""
+    verdicts = [(a.category, r.verdict) for a, r in rows]
+    return {
+        "tried": sum(v not in (NA, UNOFFERED) for _, v in verdicts),
+        "escaped": sum(v == ESCAPED and c != "hardening" for c, v in verdicts),
+        "hardening_gaps": sum(v == ESCAPED and c == "hardening" for c, v in verdicts),
+        "not_offered": sum(v == UNOFFERED for _, v in verdicts),
+    }
+
+
+def report(tool, rows, counts, json_out):
+    width = max(len(a.name) for a in CORPUS)
+    offered = f", {counts['not_offered']} not offered" if counts["not_offered"] else ""
+    hardened = f" and {counts['hardening_gaps']} hardening gap(s)" if counts["hardening_gaps"] else ""
+    print(f"escape corpus: {tool} on {SYSTEM}/{MACHINE} — {counts['tried']} tried, {counts['escaped']} escaped{hardened}{offered}\n")
+    for attempt, result in rows:
+        flag = {HELD: " ok ", ESCAPED: "FAIL", NA: "  - ", UNOFFERED: " no "}[result.verdict]
+        print(f"{flag}  {attempt.name:<{width}}  {result.detail}")
+    if json_out:
+        pathlib.Path(json_out).write_text(json.dumps({
+            "tool": tool, "system": SYSTEM, "machine": MACHINE, **counts,
+            "rows": [{"name": a.name, "category": a.category, "verdict": r.verdict, "detail": r.detail} for a, r in rows],
+        }, indent=2))
+
+
+def option(name):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    porta = str(pathlib.Path(sys.argv[1]).resolve())
-    json_out = None
-    if "--json" in sys.argv:
-        json_out = sys.argv[sys.argv.index("--json") + 1]
+    runner = make_runner(option("--runner") or "porta", str(pathlib.Path(sys.argv[1]).resolve()))
 
     # A directory the run is never granted, outside every always-writable root:
     # under $HOME, never /tmp. And a granted writable workspace.
@@ -540,29 +704,11 @@ def main():
     workspace.mkdir()
 
     decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", f"--token={MARKER}"])
-    ctx = Context(porta, workspace, ungranted)
+    ctx = Context(runner, workspace, ungranted)
     ctx.decoy = decoy
-
-    rows, findings, tried = [], 0, 0
     try:
-        # Before any verdict: prove the harness runs a command at all. A run
-        # that should succeed writes into the granted workspace and says so;
-        # if it does not, no row below could mean anything.
-        canary = workspace / "canary"
-        result = ctx.porta_run("/bin/sh", "-c", 'echo alive > "$1" && echo RAN', "sh", str(canary),
-                               policy=["-v", str(workspace)])
-        if result.returncode != 0 or "RAN" not in result.stdout or not canary.exists():
-            raise HarnessError(f"the canary run did not run: exit {result.returncode}, {result.stderr.strip()}")
-        for attempt in CORPUS:
-            if not attempt.applies():
-                rows.append((attempt, Result(NA, f"not applicable on {SYSTEM}")))
-                continue
-            result = attempt.run(ctx)
-            rows.append((attempt, result))
-            if result.verdict == ESCAPED:
-                findings += 1
-            if result.verdict != NA:
-                tried += 1
+        run_canary(ctx)
+        rows = [(attempt, try_attempt(ctx, attempt)) for attempt in CORPUS]
     except HarnessError as error:
         print(f"HARNESS ERROR: {error}\nno verdicts: the corpus did not run, so nothing was proven", file=sys.stderr)
         sys.exit(2)
@@ -571,21 +717,11 @@ def main():
         decoy.wait()
         shutil.rmtree(ungranted, ignore_errors=True)
 
-    width = max(len(a.name) for a in CORPUS)
-    print(f"escape corpus on {SYSTEM}/{MACHINE} — {tried} tried, {findings} escaped\n")
-    for attempt, result in rows:
-        flag = {HELD: " ok ", ESCAPED: "FAIL", NA: "  - "}[result.verdict]
-        print(f"{flag}  {attempt.name:<{width}}  {result.detail}")
-
-    if json_out:
-        pathlib.Path(json_out).write_text(json.dumps({
-            "system": SYSTEM, "machine": MACHINE, "tried": tried, "escaped": findings,
-            "rows": [{"name": a.name, "category": a.category, "verdict": r.verdict, "detail": r.detail} for a, r in rows],
-        }, indent=2))
-
+    counts = tally(rows)
+    report(runner.name, rows, counts, option("--json"))
     print()
-    if findings:
-        print(f"{findings} escape(s) got through. Each is a hole to close.")
+    if counts["escaped"] or counts["hardening_gaps"]:
+        print(f"{counts['escaped'] + counts['hardening_gaps']} escape(s) or hardening gap(s) got through. Each is a hole to close.")
         sys.exit(1)
     print("Every attempt this host could make was held.")
 

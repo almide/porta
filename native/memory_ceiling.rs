@@ -112,6 +112,26 @@ pub fn place(child: &mut std::process::Child, tag: &str, bytes: u64) -> Result<(
     Ok(())
 }
 
+/// The same handshake for a child in its own namespaces (`pid_namespace`),
+/// run on a thread while `spawn` waits: the outermost child sends its pid and
+/// waits at the gate before it forks the command, so placing it places
+/// everything the run will start. The go-ahead is one byte; a gate closed
+/// without it ends the child before the command exists.
+pub fn place_at_gate(
+    mut ready: std::io::PipeReader,
+    mut go: std::io::PipeWriter,
+    tag: String,
+    bytes: u64,
+) -> std::thread::JoinHandle<Result<(), String>> {
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let mut pid = [0u8; 4];
+        ready.read_exact(&mut pid).map_err(|_| "--max-memory-mb: the command ended before its memory ceiling could be applied".to_string())?;
+        confine(libc::pid_t::from_ne_bytes(pid), &tag, bytes).map_err(|reason| format!("--max-memory-mb: {reason}"))?;
+        go.write_all(&[1]).map_err(|error| format!("--max-memory-mb: cannot let the command start: {error}"))
+    })
+}
+
 /// Waits for the child to stop itself (it raises SIGSTOP after applying its
 /// policy), so it can be moved before it runs a single instruction of the
 /// command. A child that exited instead reports that.

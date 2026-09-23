@@ -479,22 +479,64 @@ impl SandboxRequest {
         crate::seccomp::restrict_current_process(policy.egress)
     }
 
-    /// The command as spawned. Under a memory ceiling it starts as a shell that
+    /// The command as spawned, in its own namespaces when `isolation` is given
+    /// (see `pid_namespace`); entering them is the first step after the fork,
+    /// before the ceilings and the policy.
+    ///
+    /// Under a memory ceiling without the namespaces it starts as a shell that
     /// stops itself and then becomes the command: the parent's `spawn` returns
     /// only once something has exec'd, so a stop before exec would deadlock it,
     /// while a stop after exec of a stub leaves the same pid — the one porta
     /// places in the scope — to `exec` the real command once continued. The
     /// stub runs under the same Landlock and seccomp policy as the command.
+    /// With the namespaces the outermost process waits at a gate instead,
+    /// before any of the command exists.
     #[cfg(target_os = "linux")]
-    fn spawned_command(&self) -> std::process::Command {
-        if self.max_memory_mb == 0 {
-            let mut command = self.command(&self.cmd);
-            command.args(&self.args);
-            return command;
+    fn spawned_command(&self, isolation: Option<crate::pid_namespace::Isolation>) -> std::process::Command {
+        use std::os::unix::process::CommandExt;
+        let stub = self.max_memory_mb > 0 && isolation.is_none();
+        let mut command = self.bare_command(if stub { "/bin/sh" } else { &self.cmd });
+        if let Some(isolation) = isolation {
+            unsafe {
+                command.pre_exec(move || isolation.enter());
+            }
         }
-        let mut command = self.command("/bin/sh");
-        command.args(["-c", "kill -STOP $$ && exec \"$0\" \"$@\"", &self.cmd]).args(&self.args);
+        // Inside the namespaces the kernel counts the namespace's processes
+        // against --max-procs, porta's two helpers among them.
+        let helpers = if isolation.is_some() { crate::pid_namespace::HELPER_PROCESSES } else { 0 };
+        let ceilings: Vec<Ceiling> = self
+            .ceilings()
+            .into_iter()
+            .map(|ceiling| if ceiling.resource == libc::RLIMIT_NPROC as libc::c_int { Ceiling { value: ceiling.value + helpers, ..ceiling } } else { ceiling })
+            .collect();
+        with_ceilings(&mut command, ceilings);
+        if stub {
+            command.args(["-c", "kill -STOP $$ && exec \"$0\" \"$@\"", &self.cmd]);
+        }
+        command.args(&self.args);
         command
+    }
+
+    /// The namespaces for this run where the host gives them, with the gate
+    /// porta holds under a memory ceiling. Where it does not, the run goes
+    /// without them and, when `/proc` is otherwise readable, says so once.
+    #[cfg(target_os = "linux")]
+    fn isolation(&self) -> Result<(Option<crate::pid_namespace::Isolation>, Option<crate::pid_namespace::Gate>), String> {
+        use crate::pid_namespace::{available, Isolation};
+        match available() {
+            Ok(()) => Isolation::prepare(self.max_memory_mb > 0)
+                .map(|(isolation, gate)| (Some(isolation), gate))
+                .map_err(|error| format!("cannot prepare the command's namespaces: {error}")),
+            Err(reason) => {
+                static NOTED: std::sync::Once = std::sync::Once::new();
+                if self.read_policy != "strict" {
+                    NOTED.call_once(|| {
+                        eprintln!("porta: {reason}, so the command shares the host's process list; --read-policy strict closes /proc");
+                    });
+                }
+                Ok((None, None))
+            }
+        }
     }
 
     /// A command carrying this request's arguments, directory and environment.
@@ -507,15 +549,16 @@ impl SandboxRequest {
     /// exec, so every path that runs a command — spawned, supervised or
     /// replacing porta itself — applies them the same way.
     fn command(&self, program: &str) -> std::process::Command {
-        use std::os::unix::process::CommandExt;
+        let mut command = self.bare_command(program);
+        with_ceilings(&mut command, self.ceilings());
+        command
+    }
+
+    /// `command` without the ceilings, for a caller that must put a step of
+    /// its own after the fork first.
+    fn bare_command(&self, program: &str) -> std::process::Command {
         let mut command = std::process::Command::new(program);
         command.env_clear();
-        let ceilings = self.ceilings();
-        if !ceilings.is_empty() {
-            unsafe {
-                command.pre_exec(move || apply_ceilings(&ceilings));
-            }
-        }
         for key in INHERITED_ENV {
             if let Ok(value) = std::env::var(key) {
                 command.env(key, value);
@@ -538,6 +581,15 @@ pub use crate::http_proxy::{wt_is_host_allowed, wt_proxy_start, wt_proxy_stop};
 
 /// Execute a command inside an OS-level sandbox.
 /// Returns JSON: {"exit_code":0,"stdout":"...","stderr":"..."} or {"error":"..."}
+fn with_ceilings(command: &mut std::process::Command, ceilings: Vec<Ceiling>) {
+    use std::os::unix::process::CommandExt;
+    if !ceilings.is_empty() {
+        unsafe {
+            command.pre_exec(move || apply_ceilings(&ceilings));
+        }
+    }
+}
+
 pub fn wt_exec_sandboxed(request_json: impl AsRef<str>) -> String {
     match SandboxRequest::parse(request_json.as_ref()) {
         Ok(request) => run_sandboxed(&request),
@@ -597,8 +649,11 @@ fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
         Err(reason) => return json_error(&reason),
     };
     let policy = request.child_policy(&ruleset);
-    let mut command = request.command(&request.cmd);
-    command.args(&request.args);
+    let isolation = match request.isolation() {
+        Ok((isolation, _)) => isolation,
+        Err(reason) => return json_error(&reason),
+    };
+    let mut command = request.spawned_command(isolation);
     unsafe {
         command.pre_exec(move || SandboxRequest::restrict_current_process(policy));
     }
@@ -772,7 +827,8 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     // serving — so only the child is narrowed, after the fork.
     let ruleset = request.ruleset()?;
     let policy = request.child_policy(&ruleset);
-    let mut command = request.spawned_command();
+    let (isolation, gate) = request.isolation()?;
+    let mut command = request.spawned_command(isolation);
     command.stdin(std::process::Stdio::inherit());
     command.stdout(std::process::Stdio::inherit());
     command.stderr(std::process::Stdio::inherit());
@@ -782,8 +838,28 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
     // Its own process group, so `--timeout` reaches everything the command
     // starts, not only the command itself.
     command.process_group(0);
-    let mut child = command.spawn().map_err(|error| format!("cannot start the command under the sandbox: {error}"))?;
-    if request.max_memory_mb > 0 {
+    // With the namespaces, the ceiling is placed while `spawn` is still
+    // waiting: the outermost child stops at the gate before the command
+    // exists, and `spawn` returns only once the command has exec'd.
+    let bytes = request.max_memory_mb.saturating_mul(MIB);
+    let (placing, child_ends) = match gate {
+        Some(gate) => (Some(crate::memory_ceiling::place_at_gate(gate.ready, gate.go, request.tag.clone(), bytes)), Some(gate.child_ends)),
+        None => (None, None),
+    };
+    let spawned = command.spawn();
+    // The child has its own copies now; porta's must go, or a child that died
+    // before using them would never read as gone.
+    drop(child_ends);
+    let placed = placing.map(|thread| thread.join().unwrap_or_else(|_| Err("--max-memory-mb: placing the command panicked".into())));
+    let mut child = match (spawned, placed) {
+        (Ok(mut child), Some(Err(reason))) => {
+            crate::ceilings::kill_group(&mut child);
+            return Err(reason);
+        }
+        (Err(_), Some(Err(reason))) => return Err(reason),
+        (spawned, _) => spawned.map_err(|error| format!("cannot start the command under the sandbox: {error}"))?,
+    };
+    if request.max_memory_mb > 0 && isolation.is_none() {
         // The child has stopped itself after applying its policy; place it
         // under the ceiling, or end it there — never let it run without one.
         crate::memory_ceiling::place(&mut child, &request.tag, request.max_memory_mb.saturating_mul(MIB))?;

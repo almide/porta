@@ -400,10 +400,12 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     result = run('check', '--json')
     assert result.returncode == 0, result
     host = json.loads(result.stdout)
-    # The memory ceiling is the one primitive a host may honestly lack (no
-    # systemd user manager); everything else must be present.
+    # A host may honestly lack two primitives: the memory ceiling (no systemd
+    # user manager) and the PID namespace (unprivileged user namespaces
+    # refused, as on a stock Ubuntu desktop or in a container); everything
+    # else must be present.
     absent = [p['name'] for p in host['primitives'] if not p['present']]
-    assert all('memory ceiling' in name for name in absent), host
+    assert all('memory ceiling' in name or 'PID and mount namespace' in name for name in absent), host
     assert host['all_enforced'] is (host['missing'] == 0) and host['missing'] == len(absent), host
     assert host['primitives'] and all('present' in p for p in host['primitives']), host
     print('PASS: --json gives explain the effective policy (or the refusal) and check the host report, both parseable')
@@ -746,6 +748,31 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
             decoy.terminate()
             decoy.wait()
         print('PASS: a strict run cannot enumerate other processes through /proc')
+
+        # In the default read mode /proc stays open, and a PID namespace of
+        # the command's own is what hides other processes — where the host
+        # gives one. The command must still end the way it would have: its
+        # exit code, its signal, and --max-procs counting its own processes.
+        host = json.loads(run('check', '--json').stdout)
+        if any('PID and mount namespace' in p['name'] and p['present'] for p in host['primitives']):
+            decoy = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)',
+                                      '--token=sk-live-MUST-NOT-LEAK'])
+            try:
+                result = run('run', '/bin/sh', '-v', str(workspace), '--', '-c',
+                             f'cat /proc/{decoy.pid}/cmdline 2>/dev/null || echo hidden; '
+                             'readlink /proc/self >/dev/null && echo SELF')
+                assert 'MUST-NOT-LEAK' not in result.stdout and 'hidden' in result.stdout, result
+                assert 'SELF' in result.stdout, result
+            finally:
+                decoy.terminate()
+                decoy.wait()
+            assert run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'exit 7').returncode == 7
+            assert run('run', '/bin/sh', '-v', str(workspace), '--', '-c', 'kill -TERM $$').returncode == 143
+            result = run('run', '/bin/sh', '-v', str(workspace), '--max-procs', '2', '--', '-c',
+                         '/bin/true && echo forked')
+            assert 'forked' in result.stdout, result
+            print('PASS: the default read mode hides other processes in a PID namespace, '
+                  'keeping exit codes, signals and --max-procs as they were')
 
         # Its own entry stays closed too. A rule on /proc/self would cover the
         # shell and none of the tools it starts, each with a pid of its own —
