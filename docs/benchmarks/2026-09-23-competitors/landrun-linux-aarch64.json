@@ -2,7 +2,7 @@
   "tool": "landrun",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 15,
+  "tried": 16,
   "escaped": 1,
   "hardening_gaps": 1,
   "not_offered": 6,
@@ -60,6 +60,12 @@
       "category": "processes",
       "verdict": "held",
       "detail": "process arguments closed"
+    },
+    {
+      "name": "read another process's arguments, default reads",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "the process is not visible"
     },
     {
       "name": "read the login Keychain",

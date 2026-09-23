@@ -11,7 +11,7 @@ corpus that hid its losses would not be evidence.
 - **macOS arm64**: 18 tried, 0 escaped
 - **Linux x86_64** (the CI runner, with a systemd user manager started for
   the job; run 35756833265): 21 tried, 0 escaped
-- **Linux aarch64** (a systemd container, 2026-09-23): 21 tried, 0 escaped
+- **Linux aarch64** (a systemd container, 2026-09-23): 22 tried, 0 escaped
 
 ## A correction to earlier runs
 
@@ -56,6 +56,7 @@ hardening. porta held all three before and after.
 | read an SSH private key | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
+| read another process's arguments, default reads | processes | — | held |
 | read the login Keychain | credentials | held | — |
 | reach Launch Services (what `open(1)` starts programs through) | processes | held | — |
 | reach a port the policy did not open | network | held | held |

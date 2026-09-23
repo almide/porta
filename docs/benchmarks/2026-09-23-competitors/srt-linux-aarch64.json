@@ -2,7 +2,7 @@
   "tool": "srt",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 16,
+  "tried": 17,
   "escaped": 0,
   "hardening_gaps": 1,
   "not_offered": 5,
@@ -60,6 +60,12 @@
       "category": "processes",
       "verdict": "held",
       "detail": "process arguments closed"
+    },
+    {
+      "name": "read another process's arguments, default reads",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "the process is not visible"
     },
     {
       "name": "read the login Keychain",

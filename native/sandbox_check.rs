@@ -150,6 +150,17 @@ fn probe() -> (String, Vec<Primitive>) {
                 otherwise: "porta will refuse every run: the baseline filter is part of the policy",
             },
             Primitive {
+                name: "own PID and mount namespace (user namespaces)",
+                covers: "other processes invisible in /proc, in every read mode",
+                present: crate::pid_namespace::available().is_ok(),
+                // Not a rule anyone asked for, so its absence narrows nothing
+                // a run was promised: runs go ahead, and say so.
+                otherwise: crate::pid_namespace::available()
+                    .err()
+                    .map(|reason| &*Box::leak(format!("runs go ahead in the host's PID namespace ({reason}); --read-policy strict closes /proc").into_boxed_str()))
+                    .unwrap_or_default(),
+            },
+            Primitive {
                 name: "memory ceiling (cgroup v2 via the systemd user manager)",
                 covers: "--max-memory-mb",
                 present: crate::memory_ceiling::unavailable().is_none(),

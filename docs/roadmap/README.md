@@ -4,7 +4,7 @@
 
 ## Active
 
-5 items
+4 items
 
 | Item | Description |
 |------|-------------|
@@ -12,7 +12,6 @@
 | [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
 | [Linux Native Enforcement](active/03-linux-native-enforcement.md) | Enforce native command restrictions on Linux, not just macOS |
 | [The Production Sandbox](active/04-production-sandbox.md) | What porta must do to be the sandbox people trust in production |
-| [Own PID namespace on Linux](active/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |
 
 ## On Hold
 
@@ -31,13 +30,14 @@
 
 ## Done
 
-21 items
+22 items
 
 <details>
-<summary>Show all 21 completed items</summary>
+<summary>Show all 22 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-09-23 | [Own PID namespace on Linux](done/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |
 | 2026-09-23 | [Memory Ceiling for Native Runs](done/05-memory-ceiling.md) | A resident-memory ceiling for native runs through cgroup v2, fail-closed |
 | 2026-09-20 | [Code Quality Grade](done/04-code-quality-grade.md) | Raise the codopsy project grade from B to A |
 | 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |

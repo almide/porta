@@ -100,7 +100,7 @@ What the escapes are:
 
 | Attempt | porta | srt | Fence | nono | landrun |
 |---|---|---|---|---|---|
-| **tried / escaped / not offered** | **21 / 0 / 0** | 16 / 0 / 5 | 15 / 0 / 6 | 17 / 1 / 3 | 15 / 1 / 6 |
+| **tried / escaped / not offered** | **22 / 0 / 0** | 17 / 0 / 5 | 16 / 0 / 6 | 18 / 2 / 3 | 16 / 1 / 6 |
 | write outside every mount | held | held | held | held | held |
 | write through a symlink pointing outside the mount | held | held | held | held | held |
 | read a secret through a symlink under strict | held | held | held | held | held |
@@ -108,6 +108,7 @@ What the escapes are:
 | read an SSH private key | held | held | held | held | held |
 | read /etc/shadow under strict | held | held | held | held | held |
 | read another process's arguments (strict reads) | held | held | held | **ESCAPED** | held |
+| read another process's arguments (default reads) | held | held | held | **ESCAPED** | held |
 | reach a port the policy did not open | held | held | not offered | held | held |
 | reach the cloud metadata endpoint via the proxy | held | held | held | held | not offered |
 | get a UDP answer from outside in proxy mode | held | held | held | held | **ESCAPED** |
@@ -131,14 +132,17 @@ What the escapes are:
   same Landlock limit, so it adds a seccomp filter that refuses every socket
   family a TCP rule cannot see. srt, Fence and nono isolate the network in a
   namespace or proxy.
-- **Another process's arguments** (nono). `/proc/<pid>/cmdline` of a process
-  outside the sandbox was readable.
+- **Another process's arguments** (nono, in both read modes).
+  `/proc/<pid>/cmdline` of a process outside the sandbox was readable. The
+  other four hide it in different ways. srt, Fence and porta run the command
+  in a PID namespace of its own, where that process does not exist. landrun
+  grants nothing under `/proc`, so all of it is closed.
 - **User namespaces** (hardening gap in all four). `unshare(CLONE_NEWUSER)`
   succeeded inside the sandbox. Fence refuses the `unshare` *command* by name,
   but the same call made from Python went through. porta's seccomp baseline
   refuses the syscall.
 
-Outside the rows above, srt and Fence held every Linux row porta held. The
+Apart from those, srt and Fence held every Linux row porta held. The
 differences on Linux are the resource ceilings and the hardening row.
 
 **Ceilings.** nono has two: `--memory` and `--max-processes`, both through
@@ -158,32 +162,33 @@ is allowing a host (cloud metadata) is not offered.
 
 ## Where porta loses
 
-These are measured outside the corpus, by hand, on the same hosts, and are
-reproducible with the commands shown.
-
-- **Another process's arguments on Linux, default reads.** The corpus row
-  above runs under `--read-policy strict`. In porta's default read mode on
-  Linux, a sandboxed `cat /proc/<pid>/cmdline` read another process's command
-  line (token included). Under srt and Fence the same read fails: they run
-  the command in its own PID namespace, where that process does not exist.
-  porta closes it only under strict reads. On macOS porta closes it in every
-  mode. Closing it on Linux too is
-  [on the roadmap](../roadmap/active/06-pid-namespace.md).
-
-  ```bash
-  python3 -c 'import time; time.sleep(30)' --token=SECRET & P=$!
-  porta run /usr/bin/cat -v /tmp/hv -- /proc/$P/cmdline      # prints it
-  ```
-- **No PID, mount or network namespace at all.** srt and Fence (through
-  bubblewrap) give the command its own view of processes and network; porta
-  confines the command in the host's namespaces with Landlock and seccomp.
-  The rows above show no escape from that difference except the one just
-  named. It is still a layer porta does not have.
+- **No network namespace.** srt and Fence run the command in a network
+  namespace of its own, and it reaches the network only through their proxy.
+  porta leaves it in the host's network namespace. Landlock's TCP port rules
+  and a seccomp filter refuse every other socket family and every other
+  address. The network rows above show no escape from that difference. It is
+  still a layer porta does not have.
+- **Hosts that refuse unprivileged user namespaces.** Examples are Ubuntu 23.10
+  and later with `kernel.apparmor_restrict_unprivileged_userns=1`, and most
+  containers. porta then cannot create the PID namespace. The run goes ahead
+  in the host's, says so on stderr, and `porta check` shows it. There, the
+  default read mode leaves other processes' `/proc` entries readable, and only
+  `--read-policy strict` closes them. srt and Fence depend on bubblewrap, which
+  needs the same kernel permission (or an AppArmor profile that grants it).
 - **Features the others have and porta does not.** Fence refuses commands by
   name, a policy layer above the kernel. nono has a supervisor that can grant
   the sandbox more access at run time after a prompt, rollback sessions, and
   detachable sessions. Fence and srt can expose an inbound port to the
   sandboxed command. porta has none of these.
+
+This section named one more loss when first published on 2026-09-23. In
+porta's default read mode on Linux, a sandboxed `cat /proc/<pid>/cmdline`
+read another process's command line, token included, where srt and Fence
+hid it. porta now runs the command in PID, mount and user namespaces of its
+own on Linux, with a fresh `/proc` (see
+[the roadmap item](../roadmap/done/06-pid-namespace.md)). The corpus row
+"read another process's arguments (default reads)" was added to keep it
+closed.
 
 ## Run it yourself
 

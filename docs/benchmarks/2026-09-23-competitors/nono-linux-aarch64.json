@@ -2,8 +2,8 @@
   "tool": "nono",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 17,
-  "escaped": 1,
+  "tried": 18,
+  "escaped": 2,
   "hardening_gaps": 1,
   "not_offered": 3,
   "rows": [
@@ -57,6 +57,12 @@
     },
     {
       "name": "read another process's arguments",
+      "category": "processes",
+      "verdict": "ESCAPED",
+      "detail": "another process's arguments read"
+    },
+    {
+      "name": "read another process's arguments, default reads",
       "category": "processes",
       "verdict": "ESCAPED",
       "detail": "another process's arguments read"

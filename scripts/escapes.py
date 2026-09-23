@@ -502,6 +502,47 @@ def fileless_exec(ctx):
     return Result(ESCAPED, "fileless execveat ran") if "EXECVED" in result.stdout else Result(HELD, "fileless exec refused")
 
 
+USERNS_PROBE = (
+    "import ctypes,os\n"
+    "libc=ctypes.CDLL(None,use_errno=True)\n"
+    "uid,gid=os.getuid(),os.getgid()\n"
+    "if libc.unshare(0x10000000|0x00020000|0x20000000): raise SystemExit(1)\n"
+    "open('/proc/self/setgroups','w').write('deny')\n"
+    "open('/proc/self/uid_map','w').write(f'{uid} {uid} 1')\n"
+    "open('/proc/self/gid_map','w').write(f'{gid} {gid} 1')\n"
+    "pid=os.fork()\n"
+    "if pid==0: os._exit(0 if libc.mount(b'proc',b'/proc',b'proc',0,None)==0 else 1)\n"
+    "raise SystemExit(os.waitstatus_to_exitcode(os.waitpid(pid,0)[1]))"
+)
+
+
+def host_gives_pid_namespaces():
+    """Whether an unprivileged process here may have its own user, PID and
+    mount namespaces and mount a procfs in them: what hiding other processes
+    without closing /proc takes, for any tool."""
+    return subprocess.run([PYTHON, "-c", USERNS_PROBE], capture_output=True, timeout=15).returncode == 0
+
+
+def read_other_process_argv_default(ctx):
+    # The row above, in the default read mode, where /proc stays readable and
+    # only a PID namespace of the command's own hides other processes.
+    if SYSTEM != "Linux":
+        return Result(NA, "the default read mode is the row above on macOS")
+    if ctx.decoy is None:
+        return Result(NA, "no decoy process")
+    if not host_gives_pid_namespaces():
+        return Result(NA, "this host refuses unprivileged PID namespaces, so the default read mode cannot hide other processes")
+    code = (
+        "import sys\n"
+        "try:\n"
+        "    data=open('/proc/'+sys.argv[1]+'/cmdline','rb').read()\n"
+        f"    print('LEAK' if b'{MARKER}' in data else 'closed')\n"
+        "except OSError: print('closed')"
+    )
+    result = ctx.py(code, ctx.decoy.pid, policy=["-v", str(ctx.workspace)])
+    return Result(ESCAPED, "another process's arguments read") if "LEAK" in result.stdout else Result(HELD, "the process is not visible")
+
+
 def ptrace_sibling(ctx):
     # Attach to the decoy, a process of the same user outside the sandbox.
     # Attached, the run could read its memory and rewrite its registers. An
@@ -576,6 +617,7 @@ CORPUS = [
     Attempt("read an SSH private key", "credentials", None, read_ssh_key),
     Attempt("read /etc/shadow under strict", "credentials", ["Linux"], read_etc_shadow_strict),
     Attempt("read another process's arguments", "processes", None, read_other_process_argv),
+    Attempt("read another process's arguments, default reads", "processes", ["Linux"], read_other_process_argv_default),
     Attempt("read the login Keychain", "credentials", ["Darwin"], read_keychain),
     Attempt("reach Launch Services (open(1) starts programs outside the sandbox through it)", "processes", ["Darwin"], launch_outside_sandbox),
     Attempt("reach a port the policy did not open", "network", None, direct_tcp_wrong_port),

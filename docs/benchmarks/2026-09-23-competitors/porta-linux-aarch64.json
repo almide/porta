@@ -2,7 +2,7 @@
   "tool": "porta",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 21,
+  "tried": 22,
   "escaped": 0,
   "hardening_gaps": 0,
   "not_offered": 0,
@@ -60,6 +60,12 @@
       "category": "processes",
       "verdict": "held",
       "detail": "process arguments closed"
+    },
+    {
+      "name": "read another process's arguments, default reads",
+      "category": "processes",
+      "verdict": "held",
+      "detail": "the process is not visible"
     },
     {
       "name": "read the login Keychain",

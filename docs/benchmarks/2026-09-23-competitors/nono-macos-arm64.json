@@ -62,6 +62,12 @@
       "detail": "another process's arguments read"
     },
     {
+      "name": "read another process's arguments, default reads",
+      "category": "processes",
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
+    },
+    {
       "name": "read the login Keychain",
       "category": "credentials",
       "verdict": "held",
