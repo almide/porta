@@ -47,14 +47,14 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 
 macOS（Apple silicon）と Linux（x86-64 / arm64）向けの単一バイナリ。公開済み
 SHA-256 で検証してから導入します。[Almide](https://github.com/almide/almide)
-があれば、`go install` と同じ感覚でタグを指定してソースからビルドし、
-`~/.local/bin` に入れられます（Intel Mac やその他の環境はこちら）。
+があれば `go install` と同じ感覚で入れられます（Intel Mac やその他の環境はこちら）。
 
 ```bash
-almide install github.com/almide/porta --tag v0.6.5
+almide install github.com/almide/porta --branch main
 ```
 
-ビルドは数分かかります（Rust 側で Wasmtime をコンパイルするため）。手でビルドする方法は
+`main` が最新リリースです。`--tag v0.6.6` で版を固定できます。ソースからビルドして
+`~/.local/bin` に入れるので数分かかります（Rust 側で Wasmtime をコンパイルするため）。手でビルドする方法は
 [CLI リファレンス](docs/cli.md#build-from-source)。`porta run` はネイティブ
 コマンドでも `.wasm` でも取れるので、WASI にコンパイルできるものは何でも動きます。
 

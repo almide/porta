@@ -43,7 +43,7 @@ if ! curl -fsSL "$base/$asset" -o "$scratch/$asset"; then
     echo "publish a binary no machine has executed. Building from source works;" >&2
     echo "with Almide installed, the way go install does it:" >&2
     echo >&2
-    echo "  almide install github.com/almide/porta" >&2
+    echo "  almide install github.com/almide/porta --branch main" >&2
     echo >&2
     echo "or by hand:" >&2
     echo >&2
