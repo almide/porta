@@ -39,6 +39,8 @@ type Options = {
   allow_unix: List[String],
   // TCP ports the child may listen on once --allow-net closes the network.
   allow_bind: List[String],
+  // No network at all: no TCP, no UDP, not even the host's loopback.
+  no_net: Bool,
   // Seconds the command may run before porta kills it and everything it
   // started. 0 means no limit.
   timeout: Int,
@@ -82,6 +84,7 @@ fn default_options() -> Options = {
   env_pass: [],
   allow_unix: [],
   allow_bind: [],
+  no_net: false,
   timeout: 0,
   max_cpu: 0,
   max_procs: 0,
@@ -127,6 +130,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--proxy-audit" => valued({...opts, proxy_audit: next}),
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
+    "--no-net" => flag({...opts, no_net: true}),
     "--env-pass" => valued({...opts, env_pass: opts.env_pass + string.split(next, ",")}),
     "--allow-unix" => valued({...opts, allow_unix: opts.allow_unix + [next]}),
     "--allow-bind" => valued({...opts, allow_bind: opts.allow_bind + [next]}),
@@ -263,6 +267,7 @@ fn policy_toml(opts: Options) -> String = {
     ["[runtime]", "type = \"native\"", "command = " + toml_quote(opts.path), "", "[sandbox]",
      "mounts = " + toml_strings(mounts)]
     + line_when(list.len(opts.allow_net) > 0, "network = " + toml_strings(opts.allow_net))
+    + line_when(opts.no_net, "no-net = true")
     + line_when(opts.read_policy == "strict", "read-policy = \"strict\"")
     + line_when(list.len(opts.env_pass) > 0, "env-pass = " + toml_strings(opts.env_pass))
     + line_when(list.len(opts.allow_unix) > 0, "unix = " + toml_strings(opts.allow_unix))

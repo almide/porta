@@ -32,6 +32,8 @@ type ExecRequest = {
   allow_root: Bool,
   // TCP ports the command may listen on once `net` closes the network.
   bind: List[String],
+  // No network at all. The native side refuses it beside any grant.
+  no_net: Bool,
   // Unix sockets the command may connect to although they hold a credential
   // agent.
   unix: List[String],
@@ -63,6 +65,7 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("proxy", value.bool(req.proxy)),
     ("allow_root", value.bool(req.allow_root)),
     ("bind", strings(req.bind)),
+    ("no_net", value.bool(req.no_net)),
     ("unix", strings(req.unix)),
     ("timeout", value.int(req.timeout)),
     ("max_cpu", value.int(req.max_cpu)),

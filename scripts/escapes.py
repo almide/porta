@@ -28,6 +28,7 @@ import os
 import pathlib
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -348,6 +349,40 @@ def direct_tcp_wrong_port(ctx):
     return Result(ESCAPED, f"reached 443 under *:80 (HTTP {result.stdout.strip()})") if result.stdout.strip().startswith("2") else Result(HELD, "443 refused under *:80")
 
 
+NO_NET_PROBE = (
+    "import socket,sys\n"
+    "reached=[]\n"
+    "try:\n"
+    "    socket.create_connection(('127.0.0.1', int(sys.argv[1])), 3).close(); reached.append('host loopback')\n"
+    "except OSError: pass\n"
+    "try:\n"
+    "    socket.create_connection(('1.1.1.1', 443), 3).close(); reached.append('TCP 1.1.1.1:443')\n"
+    "except OSError: pass\n"
+    "try:\n"
+    "    s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)\n"
+    "    for _ in range(3):\n"
+    "        try: s.sendto(bytes.fromhex('abcd01000001000000000000076578616d706c6503636f6d0000010001'), ('1.1.1.1', 53)); s.recvfrom(512); reached.append('UDP 1.1.1.1:53'); break\n"
+    "        except OSError: pass\n"
+    "except OSError: pass\n"
+    "print('REACHED ' + ', '.join(reached) if reached else 'closed')"
+)
+
+
+def no_network_at_all(ctx):
+    # --no-net: a service on the host's loopback, TCP to the internet and a UDP
+    # DNS question must all go unanswered. The host's loopback is the one a
+    # namespace-less filter tends to forget.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    try:
+        result = ctx.py(NO_NET_PROBE, listener.getsockname()[1], policy=["--no-net", "-v", str(ctx.workspace)])
+    finally:
+        listener.close()
+    reached = result.stdout.strip().removeprefix("PROBE-STARTED").strip()
+    return Result(ESCAPED, reached.lower()) if reached.startswith("REACHED") else Result(HELD, "no loopback service, TCP or UDP reached")
+
+
 def reach_cloud_metadata(ctx):
     # The cloud metadata endpoint (169.254.169.254) is the classic agent
     # exfil/credential target. Even placed on the proxy allow-list it must be
@@ -530,7 +565,7 @@ def read_other_process_argv_default(ctx):
         return Result(NA, "the default read mode is the row above on macOS")
     if ctx.decoy is None:
         return Result(NA, "no decoy process")
-    if not host_gives_pid_namespaces():
+    if not ctx.runner.gives_pid_namespaces(host_gives_pid_namespaces):
         return Result(NA, "this host refuses unprivileged PID namespaces, so the default read mode cannot hide other processes")
     code = (
         "import sys\n"
@@ -621,6 +656,7 @@ CORPUS = [
     Attempt("read the login Keychain", "credentials", ["Darwin"], read_keychain),
     Attempt("reach Launch Services (open(1) starts programs outside the sandbox through it)", "processes", ["Darwin"], launch_outside_sandbox),
     Attempt("reach a port the policy did not open", "network", None, direct_tcp_wrong_port),
+    Attempt("reach anything under --no-net", "network", None, no_network_at_all),
     Attempt("reach the cloud metadata endpoint via the proxy", "network", None, reach_cloud_metadata),
     Attempt("get a UDP answer from outside in proxy mode", "network", ["Linux"], udp_under_allow_net),
     Attempt("open a socket without socket() via io_uring", "network", ["Linux"], io_uring),

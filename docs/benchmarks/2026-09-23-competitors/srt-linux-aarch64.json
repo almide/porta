@@ -2,7 +2,7 @@
   "tool": "srt",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 17,
+  "tried": 18,
   "escaped": 0,
   "hardening_gaps": 1,
   "not_offered": 5,
@@ -84,6 +84,12 @@
       "category": "network",
       "verdict": "held",
       "detail": "443 refused under *:80"
+    },
+    {
+      "name": "reach anything under --no-net",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",

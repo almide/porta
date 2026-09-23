@@ -137,6 +137,8 @@ effect fn run_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value
     // MCP exec runs under whatever porta itself was started as.
     allow_root: true,
     bind: [],
+    // The caller's allow-list decides MCP exec's network.
+    no_net: false,
     unix: [],
     // MCP exec is bounded by the caller's own request, not a wall-clock here.
     timeout: 0,

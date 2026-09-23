@@ -38,6 +38,11 @@ struct SandboxRequest {
     #[serde(default)] allow_root: bool,
     /// TCP ports the command may listen on once a network rule is in force.
     #[serde(rename = "bind", default)] allowed_bind: Vec<String>,
+    /// No network at all. On Linux the command gets a network namespace of its
+    /// own holding only a loopback interface, where the host gives one;
+    /// otherwise Landlock refuses every TCP port and seccomp every other
+    /// family. A kernel that can do neither refuses the run.
+    #[serde(rename = "no_net", default)] no_network: bool,
     /// Unix socket paths the command may connect to although they hold a
     /// credential agent. Empty by default: the SSH agent, gpg-agent and the
     /// container runtimes are closed unless named.
@@ -176,10 +181,8 @@ impl SandboxRequest {
             return Err(reason);
         }
         bind_ports(&request.allowed_bind)?;
-        if !request.allowed_bind.is_empty() && request.allowed_net.is_empty() {
-            return Err("--allow-bind only means something once --allow-net closes the network; \
-                        with the network open every port can already be bound"
-                .into());
+        if let Some(reason) = request.contradictory_network() {
+            return Err(reason.into());
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(reason) = request.unreadable_command() {
@@ -192,6 +195,17 @@ impl SandboxRequest {
             return Err(reason);
         }
         Ok(request)
+    }
+
+    /// Network flags that contradict each other, if any do.
+    fn contradictory_network(&self) -> Option<&'static str> {
+        if self.no_network && (self.proxy || !self.allowed_net.is_empty() || !self.allowed_bind.is_empty()) {
+            return Some("--no-net closes the network; it cannot also grant --allow-net, --allow-bind or a proxy");
+        }
+        (!self.allowed_bind.is_empty() && self.allowed_net.is_empty()).then_some(
+            "--allow-bind only means something once --allow-net closes the network; \
+             with the network open every port can already be bound",
+        )
     }
 
     /// Why `--max-memory-mb` cannot be honoured here, if it cannot. A ceiling
@@ -313,6 +327,7 @@ impl SandboxRequest {
             allowed_net: &self.allowed_net,
             read_policy: &self.read_policy,
             proxy: self.proxy,
+            no_network: self.no_network,
             bind_ports: &bind_ports(&self.allowed_bind).unwrap_or_default(),
             allowed_unix: &self.allowed_unix,
             tag: &self.tag,
@@ -331,7 +346,7 @@ impl SandboxRequest {
         text.push_str(&format!("reads        {}\n", if self.read_policy == "strict" { "mounts and the platform's own directories only" } else { "open, minus credential stores" }));
         text.push_str(&format!(
             "network      {}\n",
-            if self.proxy { "the loopback proxy only".to_string() } else if self.allowed_net.is_empty() { "open".to_string() } else { format!("TCP to {}", self.allowed_net.join(", ")) }
+            if self.no_network { "none".to_string() } else if self.proxy { "the loopback proxy only".to_string() } else if self.allowed_net.is_empty() { "open".to_string() } else { format!("TCP to {}", self.allowed_net.join(", ")) }
         ));
         if !self.allowed_bind.is_empty() {
             text.push_str(&format!("listen on    {}\n", self.allowed_bind.join(", ")));
@@ -363,7 +378,9 @@ impl SandboxRequest {
                 .collect();
             format!("[{}]", parts.join(","))
         };
-        let (net_mode, net_allow): (&str, &[String]) = if self.proxy {
+        let (net_mode, net_allow): (&str, &[String]) = if self.no_network {
+            ("none", &[])
+        } else if self.proxy {
             ("proxy", &[])
         } else if self.allowed_net.is_empty() {
             ("open", &[])
@@ -434,7 +451,9 @@ impl SandboxRequest {
     /// Which seccomp program this request needs beside Landlock.
     #[cfg(target_os = "linux")]
     fn egress(&self) -> crate::seccomp::Egress {
-        if self.proxy {
+        // Without a namespace of its own, no network is the proxy filter with
+        // no port Landlock lets TCP reach: nothing leaves.
+        if self.proxy || (self.no_network && !self.network_isolated()) {
             crate::seccomp::Egress::ProxyOnly
         } else if !self.allowed_net.is_empty() {
             crate::seccomp::Egress::TcpPorts
@@ -448,6 +467,14 @@ impl SandboxRequest {
     /// the macOS ones come through [`Self::profile`].
     #[cfg(target_os = "linux")]
     fn ruleset(&self) -> Result<crate::landlock::Ruleset, String> {
+        let abi = crate::landlock::abi_version().unwrap_or(0);
+        if self.no_network && !self.network_isolated() && abi < 4 {
+            return Err(format!(
+                "--no-net needs a network namespace or Landlock ABI 4, and this host gives neither ({}; Landlock ABI {abi}); \
+                 porta will not run the command with the network open",
+                crate::pid_namespace::available().err().unwrap_or("")
+            ));
+        }
         if !crate::seccomp::available() {
             return Err("this kernel will not accept a seccomp filter, and porta closes the \
                         syscalls Landlock cannot see with one; porta will not run the command \
@@ -456,12 +483,21 @@ impl SandboxRequest {
         }
         // Built here, in the parent, so the child has only to point at it.
         crate::seccomp::prepare(self.egress());
-        crate::landlock_policy::ruleset(
-            &self.allowed_dirs,
-            &self.allowed_net,
-            &bind_ports(&self.allowed_bind)?,
-            &self.read_policy,
-        )
+        let network = crate::landlock_policy::Network {
+            connect: &self.allowed_net,
+            bind: &bind_ports(&self.allowed_bind)?,
+            // Under --no-net without a namespace of its own, Landlock closes
+            // every TCP port. With one, nothing but the command's own loopback
+            // is there to reach, and a test suite may serve on it.
+            closed: self.no_network && !self.network_isolated(),
+        };
+        crate::landlock_policy::ruleset(&self.allowed_dirs, network, &self.read_policy)
+    }
+
+    /// Whether this run's network is a namespace of its own.
+    #[cfg(target_os = "linux")]
+    fn network_isolated(&self) -> bool {
+        self.no_network && crate::pid_namespace::available().is_ok()
     }
 
     /// Everything the child applies to itself, gathered before the fork.
@@ -524,7 +560,7 @@ impl SandboxRequest {
     fn isolation(&self) -> Result<(Option<crate::pid_namespace::Isolation>, Option<crate::pid_namespace::Gate>), String> {
         use crate::pid_namespace::{available, Isolation};
         match available() {
-            Ok(()) => Isolation::prepare(self.max_memory_mb > 0)
+            Ok(()) => Isolation::prepare(self.max_memory_mb > 0, self.no_network)
                 .map(|(isolation, gate)| (Some(isolation), gate))
                 .map_err(|error| format!("cannot prepare the command's namespaces: {error}")),
             Err(reason) => {

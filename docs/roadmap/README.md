@@ -30,14 +30,15 @@
 
 ## Done
 
-22 items
+23 items
 
 <details>
-<summary>Show all 22 completed items</summary>
+<summary>Show all 23 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
 | 2026-09-23 | [Own PID namespace on Linux](done/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |
+| 2026-09-23 | [No network at all](done/07-no-network.md) | --no-net: no network at all, backed by a network namespace on Linux |
 | 2026-09-23 | [Memory Ceiling for Native Runs](done/05-memory-ceiling.md) | A resident-memory ceiling for native runs through cgroup v2, fail-closed |
 | 2026-09-20 | [Code Quality Grade](done/04-code-quality-grade.md) | Raise the codopsy project grade from B to A |
 | 2026-04-08 | [Test Coverage for Security Paths](done/test-coverage.md) | Add security-focused tests and integration tests for all enforcement paths |
