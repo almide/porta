@@ -4,7 +4,7 @@
 
 ## Active
 
-4 items
+5 items
 
 | Item | Description |
 |------|-------------|
@@ -12,6 +12,7 @@
 | [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
 | [Linux Native Enforcement](active/03-linux-native-enforcement.md) | Enforce native command restrictions on Linux, not just macOS |
 | [The Production Sandbox](active/04-production-sandbox.md) | What porta must do to be the sandbox people trust in production |
+| [Own PID namespace on Linux](active/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |
 
 ## On Hold
 

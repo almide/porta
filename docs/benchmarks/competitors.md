@@ -167,7 +167,8 @@ reproducible with the commands shown.
   line (token included). Under srt and Fence the same read fails: they run
   the command in its own PID namespace, where that process does not exist.
   porta closes it only under strict reads. On macOS porta closes it in every
-  mode.
+  mode. Closing it on Linux too is
+  [on the roadmap](../roadmap/active/06-pid-namespace.md).
 
   ```bash
   python3 -c 'import time; time.sleep(30)' --token=SECRET & P=$!
