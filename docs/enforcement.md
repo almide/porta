@@ -140,7 +140,8 @@ host execution and HTTP requests go through the checked MCP built-in tools.
   There porta runs without them and says so, `porta check` shows it, and
   `--no-net` falls back to Landlock and seccomp. On Ubuntu,
   `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
-  profile Ubuntu documents for a program that needs them, for porta alone.
+  profile Ubuntu documents for a program that needs them, for porta alone;
+  in GitHub Actions, `uses: almide/porta@<tag>` does it for the runner.
 - **Linux protects inside a mount, and closes credential sockets, only in a
   mount namespace.** Landlock grants a directory whole and has no rule over a
   Unix socket's `connect`, so both need the namespace; where the host refuses

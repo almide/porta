@@ -60,6 +60,15 @@ almide install github.com/almide/porta --branch main
 [CLI リファレンス](docs/cli.md#build-from-source)。`porta run` はネイティブ
 コマンドでも `.wasm` でも取れるので、WASI にコンパイルできるものは何でも動きます。
 
+GitHub Actions では action が同じ検証つきでリリースを入れ、Ubuntu ランナーでは
+ランナーが本来与えない user namespace を porta にだけ許す AppArmor プロファイルも
+読み込みます:
+
+```yaml
+- uses: almide/porta@v0.6.12
+- run: porta run ./scripts/untrusted-step.sh -v .
+```
+
 ## こう使う
 
 `--` の前は porta のオプション、後ろはコマンドの引数です。

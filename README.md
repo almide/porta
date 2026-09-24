@@ -68,6 +68,15 @@ Wasmtime). Building by hand is in
 run` takes either a native command or a `.wasm` module, so anything that
 compiles to WASI runs under it.
 
+In a GitHub Actions workflow, the action installs a release the same checked
+way and, on Ubuntu runners, loads the AppArmor profile that gives porta the
+user namespaces the runner otherwise withholds:
+
+```yaml
+- uses: almide/porta@v0.6.12
+- run: porta run ./scripts/untrusted-step.sh -v .
+```
+
 ## Use it for
 
 Everything before `--` is porta's; everything after belongs to the command.

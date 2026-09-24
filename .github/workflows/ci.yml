@@ -160,3 +160,27 @@ jobs:
         run: python3 scripts/artifact_pins_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
       - name: Offline team configuration inspection
         run: python3 scripts/agent_check_integration.py target/porta examples/chat-agent/agent.wasm examples/demo-agent/agent.wasm
+
+  # The action a workflow uses to confine its own steps: install a released
+  # porta against its signature, and on Ubuntu give it the namespaces the
+  # runner's AppArmor otherwise withholds. Tried as a user would use it.
+  action:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: porta
+        uses: ./
+        with:
+          version: v0.6.11
+          why: "true"
+      - name: Confine a step
+        run: |
+          porta run /bin/sh -v . -- -c 'echo inside > granted.txt && cat granted.txt'
+          ! porta run /bin/sh -v . -- -c "echo outside > \"$HOME/porta-action-escape\"" 
+          test ! -e "$HOME/porta-action-escape"
+      - name: The namespaces are there
+        if: runner.os == 'Linux'
+        run: porta check | grep -E '^ok +own PID, mount and network namespace'
