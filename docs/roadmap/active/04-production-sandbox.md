@@ -401,7 +401,9 @@ capability and the one enterprise users ask about first.
   process, network exfiltration by socket), what it does not (kernel bugs,
   side channels, a malicious operator, resource exhaustion), and the mapping
   from each SECURITY.md claim to the corpus file that tests it.
-- **Fuzzing** of the two parsers that face attacker input: the CLI/`porta.toml`
+- **Fuzzing** (started 2026-09-24: `scripts/fuzz.py` covers policy
+  generation, the proxy and the command line on both platforms, and runs in CI;
+  it found three bugs, recorded in the threat model) of the two parsers that face attacker input: the CLI/`porta.toml`
   reader and the profile/ruleset generator (paths with quotes, control
   characters, `..`, symlinks, 10k mounts — sandbox-runtime hit a
   `SBPL_STRING_MAX_BYTES` cliff and nono a 17,770-rule crash).

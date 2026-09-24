@@ -133,8 +133,23 @@ fn always_writable() -> Vec<String> {
     PROFILE_WRITABLE.iter().map(|dir| dir.to_string()).collect()
 }
 
+/// `value` as the inside of a profile string. Backslash and quote are
+/// escaped, and so is every control character, as `\xHH`: a newline left raw
+/// would carry the rule onto a second line, where the per-run tagging, which
+/// works a line at a time, could land inside the string (found by
+/// `scripts/fuzz.py policy`). The profile language reads `\xHH` back as the
+/// byte it names, so the rule still names the directory on disk.
 fn sandbox_literal(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            ch if ch.is_control() && (ch as u32) < 0x80 => escaped.push_str(&format!("\\x{:02x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 /// One request's policy inputs, as the profile builder reads them.
@@ -183,13 +198,19 @@ pub(crate) fn message_tag(run_tag: &str) -> String {
 
 /// Every deny rule with this run's tag as its message. A rule is one line and
 /// ends with its closing parenthesis, so the message goes just before it.
+///
+/// The profile is split on `\n` alone. `str::lines` would also take a `\r`
+/// before it, and a path may hold one: a mount named `repo\r\nx` came out of
+/// the old split as `repo\nx`, a different directory, in every rule for it
+/// (found by `scripts/fuzz.py policy`).
 fn tagged(profile: &str, tag: &str) -> String {
     if tag.is_empty() {
         return profile.to_string();
     }
     let message = format!(" (with message \"{}\"))\n", message_tag(tag));
     profile
-        .lines()
+        .split_inclusive('\n')
+        .map(|chunk| chunk.strip_suffix('\n').unwrap_or(chunk))
         .map(|line| {
             if line.starts_with("(deny ") && line.ends_with(')') {
                 format!("{}{}", &line[..line.len() - 1], message)
@@ -317,7 +338,7 @@ fn credential_read_rules() -> String {
 fn confined_read_rules(allowed_dirs: &[String]) -> String {
     let mut rules = String::from("(deny file-read*)\n");
     let always = always_writable();
-    let granted = allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro"));
+    let granted = allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir));
     for dir in granted.chain(always.iter().map(String::as_str)).chain(PROFILE_READABLE) {
         rules.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", sandbox_literal(dir)));
     }
@@ -326,7 +347,7 @@ fn confined_read_rules(allowed_dirs: &[String]) -> String {
     }
     // A tool resolving its own path walks the ancestors of every mount with
     // stat(2); metadata on those, and only metadata, stays readable.
-    for dir in allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro")) {
+    for dir in allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir)) {
         let mut ancestor = std::path::Path::new(dir).parent();
         while let Some(path) = ancestor {
             if path.as_os_str().is_empty() || path == std::path::Path::new("/") { break; }
@@ -346,7 +367,7 @@ fn confined_read_rules(allowed_dirs: &[String]) -> String {
 pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
     allowed_dirs
         .iter()
-        .map(|dir| dir.trim_end_matches(":ro").to_string())
+        .map(|dir| dir.strip_suffix(":ro").unwrap_or(dir).to_string())
         .chain(always_writable())
         .chain(PROFILE_READABLE.iter().map(|dir| dir.to_string()))
         .collect()

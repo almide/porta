@@ -429,6 +429,17 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         listener.close()
     print('PASS: --no-net reaches nothing, the host loopback included, and refuses a grant beside it')
 
+    # Found by scripts/fuzz.py. A mount whose name holds a carriage return
+    # before a newline lost its grant on macOS (the profile's per-run tagging
+    # split lines the way str::lines does, and dropped the \r), and a ":ro"
+    # inside a name was stripped from the working directory as if it ended it.
+    for name in ('repo\r\nx', 'a:rob', 'q"(deny x)\n(allow default)'):
+        odd = root / name
+        odd.mkdir()
+        result = run('run', '/bin/sh', '-v', str(odd), '--', '-c', 'printf x > "$1" && echo LANDED', 'sh', str(odd / 'in'))
+        assert 'LANDED' in result.stdout and (odd / 'in').exists(), (name, result)
+    print('PASS: mounts named with a carriage return, a newline, quotes or ":ro" inside keep their grant')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

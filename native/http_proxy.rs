@@ -44,8 +44,13 @@ static PROXIES: Mutex<Vec<Option<ProxyInstance>>> = Mutex::new(Vec::new());
 
 /// Match a hostname against a pattern supporting `*.example.com` subdomain wildcards.
 /// `*.example.com` matches `example.com` itself and any proper subdomain, but not
-/// `evilexample.com`. Matching is case-insensitive.
+/// `evilexample.com`. Matching is case-insensitive, and one trailing dot is
+/// the same name, as DNS reads it: `evil.com.` resolves where `evil.com` does,
+/// and before this a deny-list naming `evil.com` let it through (found by
+/// `scripts/fuzz.py proxy`).
 fn host_matches(host: &str, pattern: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let pattern = pattern.strip_suffix('.').unwrap_or(pattern);
     if pattern.eq_ignore_ascii_case(host) {
         return true;
     }
