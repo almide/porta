@@ -47,6 +47,13 @@ use std::io::{self, PipeReader, PipeWriter};
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::OnceLock;
 
+mod covers;
+mod pid_one;
+mod probe;
+pub(crate) use covers::Hidden;
+use pid_one::*;
+pub(crate) use probe::available;
+
 /// porta's own processes counted by RLIMIT_NPROC inside the namespace (A and
 /// B). The kernel counts a user namespace's processes against the limit set
 /// in it, so `--max-procs` is raised by these two and keeps meaning the
@@ -226,114 +233,6 @@ impl Isolation {
     }
 }
 
-/// What B does to one path in the command's mount namespace before the
-/// command exists. The host's copy is untouched, and nothing the command does
-/// can undo it: the seccomp baseline refuses mounts. Prepared before the fork,
-/// so applying it allocates nothing.
-pub(crate) struct Hidden {
-    path: std::ffi::CString,
-    how: Cover,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Cover {
-    /// Closed to reads: a directory under an empty tmpfs no one may enter, a
-    /// file under `/dev/null`. A closed Unix socket is a file here too: a
-    /// `connect` to `/dev/null` is refused.
-    HideDirectory,
-    HideFile,
-    /// Protected inside a writable mount: bound onto itself read-only, so it
-    /// can be read and not changed; and, as a mount point, not renamed or
-    /// removed either.
-    Freeze,
-    /// Bound onto itself as it is, only to become a mount point: a mount root,
-    /// or the `.git` holding protected hooks, cannot then be renamed away and
-    /// replaced.
-    Pin,
-}
-
-impl Hidden {
-    /// The paths of `deny_read` that exist, outermost only (one inside another
-    /// is covered with it, and could not be mounted on once it is), the closed
-    /// Unix sockets, then the protections for each writable mount.
-    pub(crate) fn prepare(deny_read: &[String], sockets: &[String], writable: &[String], protect: &[String]) -> Vec<Hidden> {
-        let exists: Vec<(&String, std::fs::Metadata)> =
-            deny_read.iter().filter_map(|path| std::fs::metadata(path).ok().map(|meta| (path, meta))).collect();
-        let mut covers: Vec<(String, Cover)> = exists
-            .iter()
-            .filter(|(path, _)| !exists.iter().any(|(other, _)| other != path && path.starts_with(&format!("{other}/"))))
-            .map(|(path, meta)| (path.to_string(), if meta.is_dir() { Cover::HideDirectory } else { Cover::HideFile }))
-            .collect();
-        covers.extend(sockets.iter().map(|socket| (socket.clone(), Cover::HideFile)));
-        for mount in writable {
-            covers.extend(protections(mount, protect));
-        }
-        covers
-            .into_iter()
-            .filter_map(|(path, how)| std::ffi::CString::new(path).ok().map(|path| Hidden { path, how }))
-            .collect()
-    }
-
-    fn cover(&self) -> io::Result<()> {
-        let target = ptr(self.path.as_ptr());
-        let locked = (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as libc::c_long;
-        match self.how {
-            Cover::HideDirectory => {
-                let tmpfs = ptr(b"tmpfs\0".as_ptr());
-                let flags = libc::MS_RDONLY as libc::c_long | locked;
-                sys(libc::SYS_mount, [tmpfs, target, tmpfs, flags, ptr(b"mode=000,size=4k\0".as_ptr())]).map(drop)
-            }
-            Cover::HideFile => {
-                sys(libc::SYS_mount, [ptr(b"/dev/null\0".as_ptr()), target, 0, libc::MS_BIND as libc::c_long, 0])?;
-                // Inside a user namespace a remount must keep the flags the
-                // source mount carries (/dev is nosuid, often noexec); asking
-                // for read-only alone is refused.
-                let flags = (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY) as libc::c_long | locked;
-                sys(libc::SYS_mount, [0, target, 0, flags, 0]).map(drop)
-            }
-            Cover::Freeze | Cover::Pin => {
-                sys(libc::SYS_mount, [target, target, 0, (libc::MS_BIND | libc::MS_REC) as libc::c_long, 0])?;
-                if self.how == Cover::Pin {
-                    return Ok(());
-                }
-                // Read-only, keeping whatever the mount it sits on locks.
-                let flags = (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY) as libc::c_long;
-                sys(libc::SYS_mount, [0, target, 0, flags, 0])
-                    .or_else(|_| sys(libc::SYS_mount, [0, target, 0, flags | locked, 0]))
-                    .map(drop)
-            }
-        }
-    }
-}
-
-/// For one writable mount: each protected name that exists, frozen; the
-/// repository's hooks and config, frozen; and the mount root and `.git`,
-/// pinned. A name that does not exist yet is not covered on Linux — there is
-/// nothing to mount on — where macOS's rules cover one created later.
-fn protections(mount: &str, protect: &[String]) -> Vec<(String, Cover)> {
-    let mut covers = vec![(mount.to_string(), Cover::Pin)];
-    let exists = |path: &String| std::fs::symlink_metadata(path).map(|meta| !meta.file_type().is_symlink()).unwrap_or(false);
-    if let Some(git_dir) = crate::sandbox_profile::repository_dir(mount) {
-        let dot_git = format!("{mount}/.git");
-        if exists(&dot_git) && std::path::Path::new(&dot_git).is_dir() {
-            covers.push((dot_git, Cover::Pin));
-        }
-        for part in ["hooks", "config"] {
-            let path = format!("{git_dir}/{part}");
-            if exists(&path) {
-                covers.push((path, Cover::Freeze));
-            }
-        }
-    }
-    for name in protect {
-        let path = format!("{mount}/{name}");
-        if exists(&path) {
-            covers.push((path, Cover::Freeze));
-        }
-    }
-    covers
-}
-
 fn write_file(path: &[u8], contents: &[u8]) -> io::Result<()> {
     let flags = (libc::O_WRONLY | libc::O_CLOEXEC) as libc::c_long;
     let fd = sys(libc::SYS_openat, [libc::AT_FDCWD as libc::c_long, ptr(path.as_ptr()), flags, 0, 0])? as RawFd;
@@ -383,110 +282,5 @@ fn close_all_above_stderr_except(keep: RawFd) {
         if low <= high {
             let _ = sys(libc::SYS_close_range, [low, high, 0, 0, 0]);
         }
-    }
-}
-
-/// B, pid 1 inside: reaps until the command ends, then hands its wait status
-/// to A. Exiting ends everything else left in the namespace.
-fn reap_until(command: libc::pid_t, status_write: RawFd) -> ! {
-    loop {
-        match waitpid(-1) {
-            Ok((pid, status)) if pid == command => {
-                let _ = write_all(status_write, &status.to_ne_bytes());
-                exit(0)
-            }
-            Ok(_) => continue,
-            Err(_) => exit(125),
-        }
-    }
-}
-
-fn set_disposition(signal: libc::c_int, handler: libc::sighandler_t) {
-    // The kernel's struct sigaction: handler, flags, restorer, mask.
-    let action: [libc::c_ulong; 4] = [handler as libc::c_ulong, 0, 0, 0];
-    let _ = sys(libc::SYS_rt_sigaction, [signal as libc::c_long, ptr(action.as_ptr()), 0, 8, 0]);
-}
-
-const GROUP_SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
-
-/// A, outside: waits for the command's wait status from B, or for B's own if B
-/// died without sending it, and ends the same way.
-fn relay(init: libc::pid_t, status_read: RawFd) -> ! {
-    // Signals meant for the command reach A too, as a member of its process
-    // group. A outlives them to report how the command ended; a SIGKILL still
-    // ends it, and B and C with it.
-    for signal in GROUP_SIGNALS {
-        set_disposition(signal, libc::SIG_IGN);
-    }
-    let mut bytes = [0u8; 4];
-    let from_init = read_all(status_read, &mut bytes) == bytes.len();
-    let init_status = waitpid(init).map(|(_, status)| status).unwrap_or(0);
-    end_as(if from_init { libc::c_int::from_ne_bytes(bytes) } else { init_status })
-}
-
-/// Exits with `status`'s code, or dies of its signal without a core dump.
-fn end_as(status: libc::c_int) -> ! {
-    if libc::WIFEXITED(status) {
-        exit(libc::WEXITSTATUS(status))
-    }
-    if !libc::WIFSIGNALED(status) {
-        exit(125)
-    }
-    let signal = libc::WTERMSIG(status);
-    let no_core = [0 as libc::c_ulong; 2];
-    let _ = sys(libc::SYS_prlimit64, [0, libc::RLIMIT_CORE as libc::c_long, ptr(no_core.as_ptr()), 0, 0]);
-    set_disposition(signal, libc::SIG_DFL);
-    let pid = sys(libc::SYS_getpid, [0; 5]).unwrap_or(0);
-    let _ = sys(libc::SYS_kill, [pid, signal as libc::c_long, 0, 0, 0]);
-    exit(128 + signal)
-}
-
-/// Whether this host lets an unprivileged process have the namespaces, asked
-/// once by trying: a child enters them and its child mounts a procfs. `Err`
-/// says why not.
-pub(crate) fn available() -> Result<(), &'static str> {
-    static ANSWER: OnceLock<Result<(), &'static str>> = OnceLock::new();
-    *ANSWER.get_or_init(probe)
-}
-
-const PROBE_REFUSALS: [&str; 3] = [
-    "this host refuses an unprivileged user namespace (a container's seccomp profile, user.max_user_namespaces=0, or kernel.unprivileged_userns_clone=0)",
-    "this host gives an unprivileged user namespace no rights to mount in (on Ubuntu, kernel.apparmor_restrict_unprivileged_userns=1: scripts/apparmor-userns.sh grants porta alone)",
-    "a fresh /proc cannot be mounted here (the host's /proc has mounts over parts of it, as in most containers)",
-];
-
-fn probe() -> Result<(), &'static str> {
-    let Ok((isolation, _)) = Isolation::prepare(false, true) else { return Err(PROBE_REFUSALS[0]) };
-    match fork() {
-        Ok(0) => exit(probe_child(&isolation)),
-        Ok(child) => match waitpid(child) {
-            Ok((_, 0)) => Ok(()),
-            Ok((_, status)) if libc::WIFEXITED(status) && (1..=3).contains(&libc::WEXITSTATUS(status)) => {
-                Err(PROBE_REFUSALS[libc::WEXITSTATUS(status) as usize - 1])
-            }
-            _ => Err(PROBE_REFUSALS[0]),
-        },
-        Err(_) => Err(PROBE_REFUSALS[0]),
-    }
-}
-
-/// The probe's child: 0 when everything worked, otherwise the stage that
-/// failed. Raw system calls only; it runs after a fork of a threaded process.
-fn probe_child(isolation: &Isolation) -> libc::c_int {
-    // The network namespace is asked for too, so an answer of yes holds for
-    // --no-net as well.
-    if sys(libc::SYS_unshare, [NAMESPACES | NETWORK, 0, 0, 0, 0]).is_err() {
-        return 1;
-    }
-    if isolation.map_and_privatise().is_err() || loopback_up().is_err() {
-        return 2;
-    }
-    match fork() {
-        Ok(0) => exit(if mount_proc().is_ok() { 0 } else { 3 }),
-        Ok(grandchild) => match waitpid(grandchild) {
-            Ok((_, status)) if libc::WIFEXITED(status) => libc::WEXITSTATUS(status),
-            _ => 3,
-        },
-        Err(_) => 3,
     }
 }

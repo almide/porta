@@ -133,33 +133,39 @@ def measure(porta, tools, workspace, runs):
     plans = variants(porta, tools, workspace)
     table = {}
     for name, cmd, args in commands(workspace):
-        samples, failures = sample(plans, cmd, args, workspace, runs)
+        samples, failures = sample(plans, (cmd, args), workspace, runs)
         bare = statistics.median(samples["bare"])
         table[name] = {label: tabulate(values, bare, failures.get(label)) for label, values in samples.items()}
     return table
 
 
-def sample(plans, cmd, args, workspace, runs):
-    """Timings per variant, and why a variant produced none."""
+def sample(plans, workload, workspace, runs):
+    """Timings per variant, and why a variant produced none. `workload` is the
+    command and its arguments."""
     samples = {label: [] for label, _ in plans}
     failures = {}
     for round_ in range(runs + 3):
         for label, build in plans:
-            argv = build(cmd, args)
+            argv = build(*workload)
             if argv is None or label in failures:
                 continue
-            try:
-                elapsed = timed(argv, cwd=workspace)
-            except Failed as reason:
-                if label == "bare":
-                    raise SystemExit(f"{cmd} fails with no sandbox at all: {reason}")
-                # A command the sandbox's policy stops is not a timing; it is
-                # reported, and the row left empty.
-                failures[label] = str(reason)
-                continue
-            if round_ >= 3:
+            elapsed = time_or_fail(label, argv, workload[0], workspace)
+            if isinstance(elapsed, str):
+                failures[label] = elapsed
+            elif round_ >= 3:
                 samples[label].append(elapsed)
     return samples, failures
+
+
+def time_or_fail(label, argv, cmd, workspace):
+    """One timing, or the reason the variant failed. A command the sandbox's
+    policy stops is not a timing; it is reported, and the row left empty."""
+    try:
+        return timed(argv, cwd=workspace)
+    except Failed as reason:
+        if label == "bare":
+            raise SystemExit(f"{cmd} fails with no sandbox at all: {reason}")
+        return str(reason)
 
 
 def tabulate(values, bare, failure):

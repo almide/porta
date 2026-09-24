@@ -7,6 +7,12 @@
 //! every block below is ordered as "grant, then the denies that grant must not
 //! reopen".
 
+mod files;
+pub(crate) use files::{readable_roots, repository_dir};
+use files::{closed_read_rules, read_rules, write_rules};
+mod network;
+use network::{network_rules, socket_rules, NO_NETWORK_RULES};
+
 /// Writable roots the macOS profile grants on every run. `/tmp` is reached
 /// through `/private/tmp` there, so the profile has to name both spellings.
 pub(crate) const PROFILE_WRITABLE: [&str; 3] = ["/tmp", "/private/tmp", "/dev"];
@@ -55,11 +61,6 @@ const HOST_CONTROL_SERVICES: [&str; 4] = [
     "com.apple.NetAuthSysAgent",
     "com.apple.appleeventsd",
 ];
-
-/// The socket every macOS resolver call goes through. `getaddrinfo` does not
-/// send DNS itself; it asks mDNSResponder over this path, and that daemon —
-/// outside the sandbox — does the lookup.
-const RESOLVER_SOCKET: &str = "/private/var/run/mDNSResponder";
 
 /// Every root writable on every run. The caller's own `TMPDIR` under
 /// `/private/var/folders` is deliberately not among them, and `TMPDIR` is not
@@ -182,209 +183,6 @@ pub(crate) fn build_sandbox_profile_rs(
         closures: &closures,
         tag: "",
     })
-}
-
-/// Writes are denied first and reopened only for the granted mounts, so an
-/// empty mount list leaves nothing writable but the always-writable roots.
-/// After the grants come the denies a grant must not reopen: the files at a
-/// mount's root a host tool trusts, the existing repository's hooks and
-/// config, and the mount root itself, which stays where the policy put it.
-fn write_rules(allowed_dirs: &[String], protect: &[String]) -> String {
-    let mut rules = String::from("(deny file-write*)\n");
-    let writable: Vec<&str> =
-        allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).map(|dir| dir.as_str()).collect();
-    for dir in &writable {
-        rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(dir)));
-    }
-    for always in always_writable() {
-        rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(&always)));
-    }
-    for dir in &writable {
-        rules.push_str(&mount_protection_rules(dir, protect));
-    }
-    rules
-}
-
-/// What stays closed inside one writable mount. Emitted after the grant.
-///
-/// A protected path can be swapped as well as written — renamed aside, a
-/// replacement created, renamed back — so every ancestor of a protected path
-/// up to the mount root is pinned against unlink and rename, and the mount
-/// root is pinned too. A `.git` that does not exist yet is not protected: it
-/// is the operator's repository this guards, not one the command creates.
-fn mount_protection_rules(dir: &str, protect: &[String]) -> String {
-    let mut rules = String::new();
-    let mut pinned: Vec<String> = vec![dir.to_string()];
-    // `subpath` covers a file as well as a directory and all beneath it, so
-    // one rule serves either, and one created later is covered too.
-    for name in protect {
-        rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{dir}/{name}"))));
-        let mut parent = std::path::Path::new(name.as_str()).parent();
-        while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
-            pinned.push(format!("{dir}/{}", path.display()));
-            parent = path.parent();
-        }
-    }
-    if let Some(git_dir) = repository_dir(dir) {
-        rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{git_dir}/hooks"))));
-        rules.push_str(&format!("(deny file-write* (literal \"{}\"))\n", sandbox_literal(&format!("{git_dir}/config"))));
-        pinned.push(git_dir.clone());
-        pinned.push(format!("{dir}/.git"));
-    }
-    for path in pinned {
-        rules.push_str(&format!("(deny file-write-unlink (literal \"{}\"))\n", sandbox_literal(&path)));
-    }
-    rules
-}
-
-/// The repository directory a mount root belongs to, if it has one: `.git`
-/// itself, or the directory a `.git` pointer file names (a worktree or a
-/// submodule), resolved as the kernel will see it.
-pub(crate) fn repository_dir(dir: &str) -> Option<String> {
-    let dot_git = std::path::Path::new(dir).join(".git");
-    let metadata = std::fs::symlink_metadata(&dot_git).ok()?;
-    let target = if metadata.is_dir() {
-        dot_git
-    } else {
-        let pointer = std::fs::read_to_string(&dot_git).ok()?;
-        let relative = pointer.trim().strip_prefix("gitdir:")?.trim();
-        std::path::Path::new(dir).join(relative)
-    };
-    Some(std::fs::canonicalize(target).ok()?.to_string_lossy().to_string())
-}
-
-fn read_rules(allowed_dirs: &[String], read_policy: &str) -> String {
-    if read_policy == "strict" { confined_read_rules(allowed_dirs) } else { String::new() }
-}
-
-/// The paths the preset and the caller close to reads, in every mode and
-/// after every grant, so a mount cannot reopen them. `file-read*` rather than
-/// `file-read-data`: listing a key directory already says which hosts and
-/// accounts exist.
-fn closed_read_rules(deny_read: &[String]) -> String {
-    let mut rules = String::new();
-    for path in deny_read {
-        rules.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", sandbox_literal(path)));
-    }
-    // The system keychain holds trust roots and nothing of the caller's, and
-    // TLS needs it; the rest of that directory is other users' keychains.
-    rules.push_str("(deny file-read* (subpath \"/Library/Keychains\"))\n");
-    rules.push_str("(allow file-read* (literal \"/Library/Keychains/System.keychain\"))\n");
-    rules
-}
-
-/// Reads are denied first and reopened for the granted mounts, the roots this
-/// profile always makes writable, and the platform's own directories. Anything
-/// the command needs beyond those — a language runtime's package directory,
-/// say — is a mount the caller grants, not a hole this list leaves open.
-fn confined_read_rules(allowed_dirs: &[String]) -> String {
-    let mut rules = String::from("(deny file-read*)\n");
-    let always = always_writable();
-    let granted = allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir));
-    for dir in granted.chain(always.iter().map(String::as_str)).chain(PROFILE_READABLE) {
-        rules.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", sandbox_literal(dir)));
-    }
-    for path in PROFILE_READABLE_LITERALS {
-        rules.push_str(&format!("(allow file-read* (literal \"{}\"))\n", path));
-    }
-    // A tool resolving its own path walks the ancestors of every mount with
-    // stat(2); metadata on those, and only metadata, stays readable.
-    for dir in allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir)) {
-        let mut ancestor = std::path::Path::new(dir).parent();
-        while let Some(path) = ancestor {
-            if path.as_os_str().is_empty() || path == std::path::Path::new("/") { break; }
-            rules.push_str(&format!(
-                "(allow file-read-metadata (literal \"{}\"))\n",
-                sandbox_literal(&path.to_string_lossy())
-            ));
-            ancestor = path.parent();
-        }
-    }
-    rules
-}
-
-/// Everything a strict read policy leaves readable: nothing else on this host
-/// can be opened, including the command porta is being asked to start. The
-/// single-path literals are left out — a command is never one of them.
-pub(crate) fn readable_roots(allowed_dirs: &[String]) -> Vec<String> {
-    allowed_dirs
-        .iter()
-        .map(|dir| dir.strip_suffix(":ro").unwrap_or(dir).to_string())
-        .chain(always_writable())
-        .chain(PROFILE_READABLE.iter().map(|dir| dir.to_string()))
-        .collect()
-}
-
-/// `--no-net`: no outbound, no listening, no inbound, and no resolver. The
-/// Unix sockets `--allow-unix` names are reopened after this, as in every mode.
-const NO_NETWORK_RULES: &str = "(deny network-outbound)\n(deny network-bind)\n(deny network-inbound)\n";
-
-/// The network is open like Docker's until `--allow-net` names a port, which
-/// then closes everything else. Only the port is filtered, not the host.
-///
-/// Closing everything else also closes the resolver socket, and a command
-/// that cannot resolve a name cannot use the port it was granted: `curl
-/// --allow-net '*:443' https://example.com` failed with "Could not resolve
-/// host" for exactly as long as this rule was missing. Reopening it gives up
-/// nothing the port grant did not already give — the host part of
-/// `--allow-net` is not enforced, so any address on that port was already
-/// reachable, by number. Proxy mode is different: there the child needs no
-/// name lookups of its own, because the proxy resolves the CONNECT target,
-/// and the invariant is that the proxy is the only egress. So the socket stays
-/// closed there.
-///
-/// Once outbound is filtered, listening is too: a granted port is a port to
-/// reach, not a port to serve on, and `--allow-bind` names the ones to serve.
-fn network_rules(allowed_net: &[String], proxy: bool, bind_ports: &[u16]) -> String {
-    if allowed_net.is_empty() { return String::new(); }
-    let mut rules = String::from("(deny network-outbound)\n(deny network-bind)\n(deny network-inbound)\n");
-    if !proxy {
-        rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", RESOLVER_SOCKET));
-    }
-    for host in allowed_net {
-        let Some((address, port)) = host.rsplit_once(':') else { continue };
-        if port != "*" && !port.parse::<u16>().is_ok_and(|port| port > 0) { continue; }
-        let address = if address == "127.0.0.1" || address == "localhost" { "localhost" } else { "*" };
-        rules.push_str(&format!("(allow network-outbound (remote tcp \"{}:{}\"))\n", address, port));
-    }
-    for port in bind_ports {
-        rules.push_str(&format!(
-            "(allow network-bind (local tcp \"*:{port}\"))\n(allow network-inbound (local tcp \"*:{port}\"))\n"
-        ));
-    }
-    rules
-}
-
-/// Credential-bearing Unix sockets are closed to connects in every mode, and
-/// reopened only for the paths the caller names. Under `--allow-net` the
-/// blanket outbound deny already closes them; here is where the open-network
-/// default closes them too.
-fn socket_rules(deny_unix: &[String], allowed_unix: &[String]) -> String {
-    let mut rules = String::new();
-    // The patterns are regex source, not strings: a backslash in them is the
-    // regex's own escape and must reach the kernel as written. A quote would
-    // end the regex literal, so a pattern holding one is escaped as the
-    // profile's strings are.
-    for pattern in deny_unix {
-        let pattern = pattern.replace('"', "\\\"");
-        rules.push_str(&format!("(deny network-outbound (regex #\"{}\"))\n", pattern));
-    }
-    for path in allowed_unix {
-        // The kernel matches against the path it resolved, so a socket reached
-        // through a symlinked directory — `/var/run` is `/private/var/run` —
-        // must be allowed by its resolved name, or the allow never fires and
-        // the credential-socket deny above stands. Both spellings are emitted:
-        // the resolved one for the match, the given one in case the socket
-        // does not exist yet at profile-build time.
-        rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", sandbox_literal(path)));
-        if let Ok(resolved) = std::fs::canonicalize(path) {
-            let resolved = resolved.to_string_lossy();
-            if resolved != *path {
-                rules.push_str(&format!("(allow network-outbound (literal \"{}\"))\n", sandbox_literal(&resolved)));
-            }
-        }
-    }
-    rules
 }
 
 /// Host facilities a confined command has no reason to reach, closed in every

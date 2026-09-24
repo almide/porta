@@ -81,19 +81,23 @@ pub fn parse(log: &str, tag: &str) -> Vec<Denial> {
 
 /// The flag that would have allowed one denial, or why none would. Each
 /// operation class has its own helper; this only routes to them.
+/// A refused connection or listen: which port or host flag would have let it.
+fn network_advice(operation: &str, target: &str) -> String {
+    match (operation, target.rsplit_once(':')) {
+        ("network-outbound", _) => outbound_advice(target),
+        ("network-bind" | "network-inbound", Some((_, port))) => format!("--allow-bind {port}"),
+        ("network-bind" | "network-inbound", None) => "--allow-bind <port>".to_string(),
+        _ => "not something a flag grants".to_string(),
+    }
+}
+
 pub fn advice(denial: &Denial, closures: &Closures) -> String {
     let operation = denial.operation.as_str();
     if operation.starts_with("file-write") || operation.starts_with("file-read") {
         return file_advice(operation, &denial.target, closures);
     }
-    if operation == "network-outbound" {
-        return outbound_advice(&denial.target);
-    }
-    if operation == "network-bind" || operation == "network-inbound" {
-        return match denial.target.rsplit_once(':') {
-            Some((_, port)) => format!("--allow-bind {port}"),
-            None => "--allow-bind <port>".to_string(),
-        };
+    if operation.starts_with("network-") {
+        return network_advice(operation, &denial.target);
     }
     match operation {
         "mach-lookup" => "a host service porta closes (Keychain, Launch Services, disks); no flag opens it".to_string(),

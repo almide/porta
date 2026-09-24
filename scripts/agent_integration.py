@@ -68,7 +68,9 @@ try:
         (root / 'secret.txt').write_text('outside-secret')
         (workspace / 'escape').symlink_to(root / 'secret.txt')
 
-        def config(name='add', read_only=True, wasm=agent, limits='', extra=''):
+        def config(name='add', read_only=True, **sections):
+            # wasm, limits and extra override the agent, [limits] and the tail.
+            wasm, limits, extra = sections.get('wasm', agent), sections.get('limits', ''), sections.get('extra', '')
             path = root / 'agent.toml'
             mount = '' if name == 'add' else f'mounts = [{{host="workspace",guest=".",read_only={str(read_only).lower()}}}]\n'
             path.write_text(f'''version = 1

@@ -6,6 +6,9 @@
 //! that is not applied must fail the run, never run it unrestricted.
 #![cfg(target_os = "linux")]
 
+mod reads;
+use reads::{allow_reads, open_except};
+
 const SYS_CREATE_RULESET: libc::c_long = 444;
 const SYS_ADD_RULE: libc::c_long = 445;
 const SYS_RESTRICT_SELF: libc::c_long = 446;
@@ -224,37 +227,6 @@ fn allow_tcp_port(ruleset: &Ruleset, port: u16, access: u64) -> Result<(), Strin
     Ok(())
 }
 
-/// Listing a directory, and nothing beneath it.
-const ACCESS_FS_READ_DIR: u64 = 1 << 3;
-
-/// Reads everywhere except beneath `closed`. Landlock is an allow-list and a
-/// grant covers everything under it, so the walk descends only along closed
-/// paths: a subtree holding none is granted whole, a directory holding one is
-/// granted listing only and its entries visited, a closed path is skipped. A
-/// symlink is never granted: the kernel checks the path it resolves to, which
-/// has its own place in the walk. An entry that cannot be opened, or appears
-/// after the walk in a directory on a closed path, stays closed.
-fn open_except(ruleset: &Ruleset, dir: &std::path::Path, closed: &[String]) -> Result<(), String> {
-    let here = dir.to_string_lossy();
-    let prefix = if here == "/" { "/".to_string() } else { format!("{here}/") };
-    if closed.iter().any(|path| *path == here) {
-        return Ok(());
-    }
-    if !closed.iter().any(|path| path.starts_with(&prefix)) {
-        let _ = allow_path(ruleset, &here, READ_RIGHTS_ABI1);
-        return Ok(());
-    }
-    allow_path(ruleset, &here, ACCESS_FS_READ_DIR)?;
-    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
-    for entry in entries.flatten() {
-        if entry.file_type().map(|kind| kind.is_symlink()).unwrap_or(true) {
-            continue;
-        }
-        open_except(ruleset, &entry.path(), closed)?;
-    }
-    Ok(())
-}
-
 /// Builds the ruleset for a policy, or explains which rule this kernel refuses.
 pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
     let abi = abi_version()?;
@@ -278,22 +250,17 @@ pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
     } else if carve {
         open_except(&ruleset, std::path::Path::new("/"), &policy.open_reads_except)?;
     }
-    for port in &policy.tcp_ports {
-        allow_tcp_port(&ruleset, *port, ACCESS_NET_CONNECT_TCP)?;
-    }
-    for port in &policy.bind_ports {
-        allow_tcp_port(&ruleset, *port, ACCESS_NET_BIND_TCP)?;
-    }
+    allow_ports(&ruleset, policy)?;
     Ok(ruleset)
 }
 
-/// Reading is handled all-or-nothing: with reads restricted, a path no rule
-/// names is closed, so the platform's own directories have to be named too.
-fn allow_reads(ruleset: &Ruleset, policy: &Policy) -> Result<(), String> {
-    let present = |path: &&String| std::path::Path::new(path.as_str()).exists();
-    let system = policy.system_dirs.iter().chain(&policy.system_files).filter(present);
-    for path in policy.readable_dirs.iter().chain(system) {
-        allow_path(ruleset, path, READ_RIGHTS_ABI1)?;
+/// The TCP ports the command may connect to, then those it may listen on.
+fn allow_ports(ruleset: &Ruleset, policy: &Policy) -> Result<(), String> {
+    for port in &policy.tcp_ports {
+        allow_tcp_port(ruleset, *port, ACCESS_NET_CONNECT_TCP)?;
+    }
+    for port in &policy.bind_ports {
+        allow_tcp_port(ruleset, *port, ACCESS_NET_BIND_TCP)?;
     }
     Ok(())
 }
