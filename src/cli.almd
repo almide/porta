@@ -5,7 +5,6 @@ import self.dispatch
 import self.sandbox
 import self.manifest
 import self.util
-// --- Options ---
 type Options = {
   path: String,
   entry: String,
@@ -49,12 +48,11 @@ type Options = {
   max_file_size: Int,
   // Resident MiB for the whole run: a cgroup v2 ceiling on Linux, supervised on macOS. 0 unsets.
   max_memory_mb: Int,
-  // Emit machine-readable JSON instead of prose, for `explain` and `check`.
+  // explain/check --json and explain --save <path>; run --why (say what was refused) and --snapshot.
   json: Bool,
-  // Where `explain --save` writes a porta.toml of the policy in these flags.
   save_path: String,
-  // Say afterwards what the sandbox refused and which flag would allow it.
   why: Bool,
+  snapshot: Bool,
 }
 
 fn default_options() -> Options = {
@@ -95,6 +93,7 @@ fn default_options() -> Options = {
   json: false,
   save_path: "",
   why: false,
+  snapshot: false,
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -135,6 +134,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--allow-root" => flag({...opts, allow_root: true}),
     "--no-net" => flag({...opts, no_net: true}),
     "--why" => flag({...opts, why: true}),
+    "--snapshot" => flag({...opts, snapshot: true}),
     "--preset" => valued({...opts, preset: next}),
     "--deny-read" => valued({...opts, deny_read: opts.deny_read + [next]}),
     "--protect" => valued({...opts, protect: opts.protect + [next]}),

@@ -12,7 +12,6 @@ import self.wasm_rt
 import self.manifest
 import self.mcp
 import self.proxy
-
 // --- Serve ---
 effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
   let manifest_path = if opts.manifest_path != "" then opts.manifest_path
@@ -94,6 +93,7 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
     bind: opts.allow_bind,
     no_net: opts.no_net,
     why: opts.why,
+    snapshot: opts.snapshot,
     preset: opts.preset,
     deny_read: opts.deny_read,
     protect: opts.protect,

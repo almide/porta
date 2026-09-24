@@ -30,15 +30,16 @@
 
 ## Done
 
-27 items
+28 items
 
 <details>
-<summary>Show all 27 completed items</summary>
+<summary>Show all 28 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
 | 2026-09-24 | [Why a run was refused, on Linux](done/10-why-on-linux.md) | --why: what the sandbox refused, on Linux too, traced with strace |
 | 2026-09-24 | [Recipes for the coding agents people run](done/11-agent-recipes.md) | porta init claude / codex: a porta.toml measured to what each agent needs |
+| 2026-09-24 | [Putting a run's writes back](done/12-snapshot-rollback.md) | --snapshot and porta rollback: see what a run changed, and put it back |
 | 2026-09-24 | [Credential sockets and UDP on Linux](done/09-linux-sockets-and-udp.md) | Linux closes credential sockets and, under --allow-net, UDP |
 | 2026-09-24 | [Closures as a preset](done/08-policy-preset.md) | What a run closes is a preset (data), not paths written into the core |
 | 2026-09-23 | [Own PID namespace on Linux](done/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |

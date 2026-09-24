@@ -140,6 +140,7 @@ effect fn run_exec(config: dispatch.InstanceConfig, args: Value) -> Result[Value
     // The caller's allow-list decides MCP exec's network.
     no_net: false,
     why: false,
+    snapshot: false,
     // MCP exec closes what the default preset closes.
     preset: "",
     deny_read: [],

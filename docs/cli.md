@@ -14,6 +14,7 @@ line, never dropped.
 
 | Command | Description |
 |---------|-------------|
+| `porta rollback [id] [--yes]` | Show what a `--snapshot` run changed (the latest when no id) and, with `--yes`, put each mount back |
 | `porta init <recipe>` | Write a ready-made porta.toml for a coding agent: `claude`, `codex` |
 | `porta init [native\|wasm] [cmd]` | Create porta.toml |
 | `porta up [-- args...]` | Run from porta.toml |
@@ -67,6 +68,7 @@ line, never dropped.
 | `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
 | `--allow-unix <path>` | Let the command connect to this Unix socket, although the preset closes it: by default the SSH agent, gpg-agent and the container runtimes' sockets (repeatable) |
+| `--snapshot` | Copy the writable mounts before the run (a clone on APFS, a reflink or copy on Linux) and say afterwards what the run changed; `porta rollback` puts them back |
 | `--why` | Say afterwards what the sandbox refused and which flag would allow it, even when the run succeeded. On Linux the run is traced with `strace` |
 | `--no-net` | No network at all: no TCP or UDP to anywhere, and not the host's loopback either. On Linux the command gets a network namespace of its own holding only a loopback interface it can use itself; where the host refuses one, Landlock closes every TCP port and seccomp every other socket family, and a kernel that can do neither refuses the run. Refused beside `--allow-net`, `--allow-bind` or a proxy |
 | `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `native/presets/default.toml`), `none`, or a TOML file of the same shape |

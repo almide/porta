@@ -505,6 +505,26 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode == 0 and 'home-mounted' in result.stdout, result
     print('PASS: porta init writes the claude and codex recipes, and ~/ mounts resolve')
 
+    # --snapshot copies the writable mounts first; porta rollback shows what
+    # the run changed and, with --yes, puts it back. The copies are outside
+    # every mount, so the run cannot rewrite its own undo.
+    work = pathlib.Path(tempfile.mkdtemp(prefix='porta-snap-', dir=pathlib.Path.home()))
+    (work / 'kept.txt').write_text('before\n')
+    (work / 'dir').mkdir()
+    (work / 'dir' / 'gone.txt').write_text('was here\n')
+    snapshots = pathlib.Path.home() / '.porta' / 'snapshots'
+    result = run('run', '/bin/sh', '-v', str(work), '--snapshot', '--', '-c',
+                 f'echo after > kept.txt; rm -r dir; echo new > added.txt; '
+                 f'for s in "{snapshots}"/*/; do echo x > "$s/tampered" 2>/dev/null && echo TAMPERED; done; true')
+    assert result.returncode == 0 and 'TAMPERED' not in result.stdout, result
+    assert '+ added.txt' in result.stderr and '~ kept.txt' in result.stderr and '- dir/gone.txt' in result.stderr, result.stderr
+    result = run('rollback', '--yes')
+    assert result.returncode == 0 and 'put back' in result.stdout, result
+    assert (work / 'kept.txt').read_text() == 'before\n' and (work / 'dir' / 'gone.txt').is_file(), list(work.iterdir())
+    assert not (work / 'added.txt').exists(), list(work.iterdir())
+    shutil.rmtree(work, ignore_errors=True)
+    print('PASS: --snapshot reports what a run changed, rollback --yes puts it back, and the run cannot reach its snapshot')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

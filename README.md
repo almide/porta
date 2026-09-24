@@ -90,7 +90,8 @@ read `~/.ssh`, `~/.aws` or the Keychain. The recipe is a commented
 `porta.toml`, measured to what the agent needs; on macOS it takes its login
 as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
 since the Keychain is closed. No Docker daemon, no image, no change to the
-agent.
+agent. Add `--snapshot` and porta lists what the session changed afterwards;
+`porta rollback --yes` puts it back.
 
 ### Give a tool one API, and log every attempt
 

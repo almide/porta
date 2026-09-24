@@ -93,6 +93,8 @@ struct SandboxRequest {
     /// Say afterwards what the sandbox refused, even when the run succeeded.
     /// On Linux this runs the command under `strace` (see `why`).
     #[serde(default)] why: bool,
+    /// Copy the writable mounts first, so `porta rollback` can put them back.
+    #[serde(default)] snapshot: bool,
     /// The document this request was read from, for the copy of porta that
     /// `--why` starts under `strace` to apply it to itself.
     #[serde(skip)] raw: String,
@@ -237,11 +239,26 @@ fn replace_with_sandboxed(_request: &SandboxRequest) -> String {
 /// reason the run was refused before it started.
 pub fn wt_exec_supervised(request_json: impl AsRef<str>) -> String {
     match SandboxRequest::parse(request_json.as_ref()) {
-        Ok(request) => match supervise_sandboxed(&request) {
+        Ok(request) => match request.supervise_with_snapshot() {
             Ok(code) => format!("{{\"exit_code\":{code}}}"),
             Err(reason) => json_error(&reason),
         },
         Err(reason) => json_error(&reason),
+    }
+}
+
+impl SandboxRequest {
+    /// The run, after a snapshot of its writable mounts when one was asked
+    /// for, and then what it changed there.
+    fn supervise_with_snapshot(&self) -> Result<i64, String> {
+        if !self.snapshot {
+            return supervise_sandboxed(self);
+        }
+        let mounts: Vec<String> = self.allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).cloned().collect();
+        let id = crate::snapshot::take(&mounts, &self.rerun_line())?;
+        let code = supervise_sandboxed(self);
+        eprint!("{}", crate::snapshot::after_run(&id, &mounts));
+        code
     }
 }
 

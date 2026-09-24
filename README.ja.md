@@ -81,7 +81,8 @@ porta up -- -p "main.rs のバグを直して"
 Keychain は読めません。レシピは必要なものを実測したコメント付きの `porta.toml`
 です。macOS では Keychain を閉じているため、ログインは `ANTHROPIC_API_KEY` か
 `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token` で発行）で渡します。Docker も
-イメージも、エージェント本体の変更も不要。
+イメージも、エージェント本体の変更も不要。`--snapshot` を付ければ、終わったあとに
+セッションが変えたものを一覧し、`porta rollback --yes` で元に戻せます。
 
 ### ツールに API を1本だけ許し、全試行を記録する
 
