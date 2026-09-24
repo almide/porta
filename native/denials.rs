@@ -10,18 +10,8 @@
 //! nothing would, because it is one of the things porta never grants.
 #![cfg(target_os = "macos")]
 
-use crate::policy_preset::Closures;
+pub use crate::denial_advice::*;
 use std::collections::BTreeSet;
-
-/// One refusal, as the kernel recorded it.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Denial {
-    /// The Seatbelt operation: `file-write-create`, `network-outbound`, …
-    pub operation: String,
-    /// What it was tried on: a path, `remote:*:443`, a mach service name, or
-    /// nothing for a bare network deny.
-    pub target: String,
-}
 
 use crate::sandbox_profile::message_tag;
 
@@ -79,99 +69,6 @@ pub fn parse(log: &str, tag: &str) -> Vec<Denial> {
         .collect()
 }
 
-/// The flag that would have allowed one denial, or why none would. Each
-/// operation class has its own helper; this only routes to them.
-pub fn advice(denial: &Denial, closures: &Closures) -> String {
-    let operation = denial.operation.as_str();
-    if operation.starts_with("file-write") || operation.starts_with("file-read") {
-        return file_advice(operation, &denial.target, closures);
-    }
-    if operation == "network-outbound" {
-        return outbound_advice(&denial.target);
-    }
-    if operation == "network-bind" || operation == "network-inbound" {
-        return match denial.target.rsplit_once(':') {
-            Some((_, port)) => format!("--allow-bind {port}"),
-            None => "--allow-bind <port>".to_string(),
-        };
-    }
-    match operation {
-        "mach-lookup" => "a host service porta closes (Keychain, Launch Services, disks); no flag opens it".to_string(),
-        "lsopen" => "open(1) would start a program outside the sandbox; porta never grants it".to_string(),
-        op if op.starts_with("sysctl") || op.starts_with("process-info") => "another process's details; porta never grants them".to_string(),
-        _ => "not something a flag grants".to_string(),
-    }
-}
-
-/// The `-v` grant for a denied read or write, or why none is offered.
-fn file_advice(operation: &str, target: &str, closures: &Closures) -> String {
-    let under = |path: &str| target == path || target.starts_with(&format!("{path}/"));
-    if operation.starts_with("file-read") && closures.deny_read.iter().any(|path| under(path)) {
-        return "closed by the preset or --deny-read; no mount reopens it (--preset none, or a preset without it, does)".to_string();
-    }
-    let git = ["/.git/hooks", "/.git/config"];
-    if git.iter().any(|name| target.contains(name)) || closures.protect.iter().any(|name| target.contains(&format!("/{name}"))) {
-        return "protected inside the mount by the preset or --protect; no mount reopens it".to_string();
-    }
-    let dir = grantable_directory(target);
-    if operation.starts_with("file-write") { format!("-v {dir}") } else { format!("-v {dir}:ro") }
-}
-
-/// The network flag for a denied outbound connection.
-fn outbound_advice(target: &str) -> String {
-    match target.strip_prefix("remote:") {
-        Some(endpoint) => match endpoint.rsplit_once(':') {
-            Some((_, port)) => format!("--allow-net '*:{port}'"),
-            None => format!("--allow-net '{endpoint}'"),
-        },
-        None if target.starts_with('/') => format!("--allow-unix {target}"),
-        None => "the network is closed by --allow-net; name the port to reach".to_string(),
-    }
-}
-
-/// The directory a `-v` grant would name for a denied path: the path itself
-/// when it is a directory, otherwise the directory it is in.
-fn grantable_directory(target: &str) -> String {
-    let path = std::path::Path::new(target);
-    if path.is_dir() {
-        return target.to_string();
-    }
-    path.parent().map(|parent| parent.to_string_lossy().to_string()).filter(|parent| !parent.is_empty()).unwrap_or_else(|| "/".to_string())
-}
-
-/// The footer porta prints after a run that was denied something: each
-/// refusal with the flag it needed, then the command line to run again with
-/// every grantable one added. `rerun` is that command line without them.
-pub fn footer(denials: &[Denial], rerun: &str, closures: &Closures) -> String {
-    if denials.is_empty() {
-        return String::new();
-    }
-    let noun = if denials.len() == 1 { "time" } else { "times" };
-    let mut text = format!("[porta] the sandbox refused this run {} {noun}; what each would have needed:\n", denials.len());
-    let mut grants: Vec<String> = Vec::new();
-    for denial in denials {
-        let what = if denial.target.is_empty() { denial.operation.clone() } else { format!("{} {}", denial.operation, denial.target) };
-        let advice = advice(denial, closures);
-        text.push_str(&format!("  {what}\n    → {advice}\n"));
-        if advice.starts_with('-') && !grants.contains(&advice) {
-            grants.push(advice);
-        }
-    }
-    if !grants.is_empty() && !rerun.is_empty() {
-        text.push_str(&format!("  to run again with those granted:\n    {}\n", with_grants(rerun, &grants)));
-    }
-    text
-}
-
-/// `rerun` with `grants` inserted before its `--`, or at its end.
-fn with_grants(rerun: &str, grants: &[String]) -> String {
-    let added = grants.join(" ");
-    match rerun.split_once(" -- ") {
-        Some((head, tail)) => format!("{head} {added} -- {tail}"),
-        None => format!("{rerun} {added}"),
-    }
-}
-
 /// The instant a run started, as `log show --start` wants it: local time,
 /// to the second.
 pub fn now_for_log() -> String {
@@ -193,6 +90,7 @@ pub fn now_for_log() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy_preset::Closures;
 
     #[test]
     fn picks_only_this_runs_denials() {

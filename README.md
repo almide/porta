@@ -68,6 +68,15 @@ Wasmtime). Building by hand is in
 run` takes either a native command or a `.wasm` module, so anything that
 compiles to WASI runs under it.
 
+In a GitHub Actions workflow, the action installs a release the same checked
+way and, on Ubuntu runners, loads the AppArmor profile that gives porta the
+user namespaces the runner otherwise withholds:
+
+```yaml
+- uses: almide/porta@v0.6.12
+- run: porta run ./scripts/untrusted-step.sh -v .
+```
+
 ## Use it for
 
 Everything before `--` is porta's; everything after belongs to the command.
@@ -78,13 +87,20 @@ The agent installs deps, runs tests, edits files — on the machine that holds
 your keys. Give it one directory and one host, and close the rest.
 
 ```bash
-porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME" \
-  -- --print "Fix the bug in main.rs"
+cd project
+porta init claude          # or: porta init codex
+porta up -- -p "Fix the bug in main.rs"
 ```
 
-`claude` runs unchanged, but it can write only inside `./project`, reach only
-the host you listed, and it cannot read `~/.ssh`, `~/.aws` or the Keychain. No
-Docker daemon, no image, no change to the agent.
+`claude` runs unchanged, but it can write only inside the project and its own
+`~/.claude` — where its settings, commands and global `CLAUDE.md` stay
+unwritable, so one session cannot plant hooks for the next — and it cannot
+read `~/.ssh`, `~/.aws` or the Keychain. The recipe is a commented
+`porta.toml`, measured to what the agent needs; on macOS it takes its login
+as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
+since the Keychain is closed. No Docker daemon, no image, no change to the
+agent. Add `--snapshot` and porta lists what the session changed afterwards;
+`porta rollback --yes` puts it back.
 
 ### Give a tool one API, and log every attempt
 
@@ -146,8 +162,8 @@ pins](docs/artifact-pins.md) that bind WASM to a reviewed SHA-256.
 ### Keep the settings as project config
 
 ```bash
-porta init native claude                 # writes porta.toml
-porta up -- --print "Fix the bug in main.rs"
+porta init native mytool                 # writes a porta.toml to edit
+porta up -- --some-flag
 ```
 
 Or let a working invocation write its own: `porta explain claude … --save
@@ -165,7 +181,8 @@ porta run curl --allow-net '*:80'  -- https://example.com # → exit 7, port 443
 
 A refused run does not leave you guessing: after a non-zero exit, porta reads
 the kernel's denial records and prints which flag each refusal would have
-needed (macOS today; Linux needs Landlock ABI 7). Exit codes tell a script
+needed (on macOS after every failed run; on Linux with `--why`, which traces
+the run with `strace`). Exit codes tell a script
 apart a command that failed from one that never ran — see
 [the CLI reference](docs/cli.md#when-a-run-is-refused).
 

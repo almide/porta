@@ -116,8 +116,10 @@ not stop one of them is accurate and not a vulnerability.
   any host. A resolver that ignores the variable — musl, a static Go binary,
   c-ares — fails to resolve rather than leaking over UDP.
 - **The denial footer.** After a failed run porta names the flag each refusal
-  needed. On macOS it reads this from the unified log; on Linux the equivalent
-  needs Landlock ABI 7 audit records and is not there yet.
+  needed. On macOS it reads this from the unified log. On Linux it comes only
+  under `--why`, from a `strace` of the run, and a refusal is told from a
+  permission error by porta asking the same question outside; a path whose
+  permissions changed during the run can be misattributed.
 - **Signal and abstract-socket scoping.** Closed on Linux only from Landlock ABI
   6; on older kernels a confined process can still signal the operator's other
   processes and reach their abstract sockets. `porta check` reports whether the

@@ -60,6 +60,15 @@ almide install github.com/almide/porta --branch main
 [CLI リファレンス](docs/cli.md#build-from-source)。`porta run` はネイティブ
 コマンドでも `.wasm` でも取れるので、WASI にコンパイルできるものは何でも動きます。
 
+GitHub Actions では action が同じ検証つきでリリースを入れ、Ubuntu ランナーでは
+ランナーが本来与えない user namespace を porta にだけ許す AppArmor プロファイルも
+読み込みます:
+
+```yaml
+- uses: almide/porta@v0.6.12
+- run: porta run ./scripts/untrusted-step.sh -v .
+```
+
 ## こう使う
 
 `--` の前は porta のオプション、後ろはコマンドの引数です。
@@ -70,13 +79,19 @@ almide install github.com/almide/porta --branch main
 1つのディレクトリと1つのホストだけ与え、残りは閉じる。
 
 ```bash
-porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME" \
-  -- --print "main.rs のバグを直して"
+cd project
+porta init claude          # または porta init codex
+porta up -- -p "main.rs のバグを直して"
 ```
 
-`claude` はそのまま動きますが、書けるのは `./project` の中だけ、繋がるのは
-指定したホストだけ。`~/.ssh`・`~/.aws`・Keychain は読めません。Docker も
-イメージも、エージェント本体の変更も不要。
+`claude` はそのまま動きますが、書けるのはプロジェクトと自身の `~/.claude` だけ。
+そこでも settings・commands・グローバルな `CLAUDE.md` は書けないので、ある
+セッションが次のセッションにフックを仕込むことはできません。`~/.ssh`・`~/.aws`・
+Keychain は読めません。レシピは必要なものを実測したコメント付きの `porta.toml`
+です。macOS では Keychain を閉じているため、ログインは `ANTHROPIC_API_KEY` か
+`CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token` で発行）で渡します。Docker も
+イメージも、エージェント本体の変更も不要。`--snapshot` を付ければ、終わったあとに
+セッションが変えたものを一覧し、`porta rollback --yes` で元に戻せます。
 
 ### ツールに API を1本だけ許し、全試行を記録する
 
@@ -136,8 +151,8 @@ porta agent-journal run.jsonl              # 読み取り専用メタデータ�
 ### 設定をプロジェクト設定として残す
 
 ```bash
-porta init native claude                 # porta.toml を生成
-porta up -- --print "main.rs のバグを直して"
+porta init native mytool                 # 編集用の porta.toml を生成
+porta up -- --some-flag
 ```
 
 うまくいった起動をそのまま書き出すこともできます: `porta explain claude … --save porta.toml`。
@@ -153,8 +168,8 @@ porta run curl --allow-net '*:80'  -- https://example.com # → 終了 7、443 �
 ```
 
 拒否された実行は当て推量を残しません。非ゼロ終了のあと、porta はカーネルの拒否
-記録を読み、どのフラグが要ったかを出します（現状 macOS。Linux は Landlock
-ABI 7 が必要）。終了コードで「失敗したコマンド」と「そもそも走らなかった」を
+記録を読み、どのフラグが要ったかを出します（macOS は失敗のたびに、Linux は
+`--why` を付けると `strace` で実行を追って）。終了コードで「失敗したコマンド」と「そもそも走らなかった」を
 区別できます —— [CLI リファレンス](docs/cli.md#when-a-run-is-refused)。
 
 ## 証拠

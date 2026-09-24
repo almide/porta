@@ -23,6 +23,7 @@ at a competitor. The list is drawn from the escape tests of the tools compared
 in docs/roadmap/active/04-production-sandbox.md and from what porta's own suite
 found, and grows whenever either finds something new.
 """
+import dataclasses
 import json
 import os
 import pathlib
@@ -53,21 +54,21 @@ class HarnessError(Exception):
     corpus whose runs silently did nothing would report every row held."""
 
 
+@dataclasses.dataclass
 class Attempt:
-    """One way out. `run` returns a Result; the harness supplies the porta
+    """One way out. `probe` returns a Result; the harness supplies the porta
     binary and the two directories every attempt shares."""
 
-    def __init__(self, name, category, platforms, run):
-        self.name = name
-        self.category = category
-        self.platforms = platforms  # None = every platform
-        self._run = run
+    name: str
+    category: str
+    platforms: list | None  # None = every platform
+    probe: object
 
     def applies(self):
         return self.platforms is None or SYSTEM in self.platforms
 
     def run(self, ctx):
-        return self._run(ctx)
+        return self.probe(ctx)
 
 
 class ProbeDidNotStart(Exception):

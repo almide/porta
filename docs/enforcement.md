@@ -30,7 +30,7 @@ does not show you where.
 | **Write** | denied outside `-v` mounts, `/tmp`, `/dev` | denied outside `-v` mounts, `/tmp`, `/dev` |
 | **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the names the preset protects (shell rc files, `.gitconfig`, `.mcp.json`, `.envrc`, `.claude/commands`, `.vscode`, `porta.toml`, …) stay unwritable; the mount root and those paths cannot be renamed away | same, each bind-mounted read-only onto itself in the command's mount namespace; where the host refuses one, not protected (the run says so) |
 | **Read, default** | what the preset closes denied — by default credential stores: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, Keychains, browser profiles, …; everything else readable | same, each covered by an empty mount in the command's mount namespace; where the host refuses one, Landlock grants reads everywhere else, and a closed path inside a grant (`-v ~`, `/tmp`) refuses the run |
-| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass` | same |
+| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass`; and `SSL_CERT_FILE=/etc/ssl/cert.pem`, since the Keychain a tool would list its roots from is closed | same, without `SSL_CERT_FILE`; under `--allow-net`, `RES_OPTIONS=use-vc` |
 | **Other processes** | their arguments and environment unreadable (`procargs`, `proc_pidinfo`); signals to them not restricted | invisible: the command runs in PID, mount and user namespaces of its own with a fresh `/proc`, where the host allows unprivileged user namespaces (otherwise porta says so and only `strict` closes `/proc`); signals and abstract sockets scoped to the sandbox on Landlock ABI 6 |
 | **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
 | **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
@@ -140,7 +140,8 @@ host execution and HTTP requests go through the checked MCP built-in tools.
   There porta runs without them and says so, `porta check` shows it, and
   `--no-net` falls back to Landlock and seccomp. On Ubuntu,
   `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
-  profile Ubuntu documents for a program that needs them, for porta alone.
+  profile Ubuntu documents for a program that needs them, for porta alone;
+  in GitHub Actions, `uses: almide/porta@<tag>` does it for the runner.
 - **Linux protects inside a mount, and closes credential sockets, only in a
   mount namespace.** Landlock grants a directory whole and has no rule over a
   Unix socket's `connect`, so both need the namespace; where the host refuses

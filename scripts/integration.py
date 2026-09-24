@@ -474,6 +474,63 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     shutil.rmtree(fake_home, ignore_errors=True)
     print('PASS: the default preset closes credential stores; --preset none, --deny-read and explain work on it')
 
+    # --why says what the sandbox refused even when the run went on: macOS
+    # from the unified log, Linux by tracing the run with strace from outside.
+    if platform.system() == 'Darwin' or shutil.which('strace'):
+        outside = pathlib.Path(tempfile.mkdtemp(prefix='porta-why-', dir=pathlib.Path.home()))
+        # On macOS the footer comes from the unified log, which lags on a busy
+        # runner (see the footer test below): three runs, not one.
+        for attempt in range(3):
+            result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
+                         '-c', f'echo x > "{outside}/refused"; exit 3')
+            if 'the sandbox refused this run' in result.stderr:
+                break
+            time.sleep(2)
+        shutil.rmtree(outside, ignore_errors=True)
+        assert result.returncode == 3, result
+        assert 'the sandbox refused this run' in result.stderr and f'-v {outside.resolve()}' in result.stderr, result.stderr
+        result = run('run', '/bin/echo', '-v', str(elsewhere), '--why', '--', 'fine')
+        assert result.returncode == 0 and 'refused nothing' in result.stderr, result.stderr
+        print('PASS: --why names each refusal and the flag it needed, and says when there was none')
+    else:
+        print('PASS: --why not exercised (no strace on this Linux host)')
+
+    # A recipe is a porta.toml for one coding agent, written by `porta init`;
+    # its ~/ mounts and protected paths resolve against the home.
+    with tempfile.TemporaryDirectory() as recipe_dir:
+        for name, mount in (('claude', '~/.claude'), ('codex', '~/.codex')):
+            result = run('init', name, cwd=recipe_dir)
+            text = (pathlib.Path(recipe_dir) / 'porta.toml').read_text()
+            assert result.returncode == 0 and mount in text and 'protect' in text, (result, text)
+            (pathlib.Path(recipe_dir) / 'porta.toml').unlink()
+    # Not the whole home: on Linux without namespaces that grant would hold
+    # the preset's closed paths, and the run would rightly be refused.
+    under_home = pathlib.Path(tempfile.mkdtemp(prefix='porta-tilde-', dir=pathlib.Path.home()))
+    result = run('run', '/bin/sh', '-v', f'~/{under_home.name}', '--', '-c', f'echo x > "{under_home}/written" && echo home-mounted')
+    shutil.rmtree(under_home, ignore_errors=True)
+    assert result.returncode == 0 and 'home-mounted' in result.stdout, result
+    print('PASS: porta init writes the claude and codex recipes, and ~/ mounts resolve')
+
+    # --snapshot copies the writable mounts first; porta rollback shows what
+    # the run changed and, with --yes, puts it back. The copies are outside
+    # every mount, so the run cannot rewrite its own undo.
+    work = pathlib.Path(tempfile.mkdtemp(prefix='porta-snap-', dir=pathlib.Path.home()))
+    (work / 'kept.txt').write_text('before\n')
+    (work / 'dir').mkdir()
+    (work / 'dir' / 'gone.txt').write_text('was here\n')
+    snapshots = pathlib.Path.home() / '.porta' / 'snapshots'
+    result = run('run', '/bin/sh', '-v', str(work), '--snapshot', '--', '-c',
+                 f'echo after > kept.txt; rm -r dir; echo new > added.txt; '
+                 f'for s in "{snapshots}"/*/; do echo x > "$s/tampered" 2>/dev/null && echo TAMPERED; done; true')
+    assert result.returncode == 0 and 'TAMPERED' not in result.stdout, result
+    assert '+ added.txt' in result.stderr and '~ kept.txt' in result.stderr and '- dir/gone.txt' in result.stderr, result.stderr
+    result = run('rollback', '--yes')
+    assert result.returncode == 0 and 'put back' in result.stdout, result
+    assert (work / 'kept.txt').read_text() == 'before\n' and (work / 'dir' / 'gone.txt').is_file(), list(work.iterdir())
+    assert not (work / 'added.txt').exists(), list(work.iterdir())
+    shutil.rmtree(work, ignore_errors=True)
+    print('PASS: --snapshot reports what a run changed, rollback --yes puts it back, and the run cannot reach its snapshot')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

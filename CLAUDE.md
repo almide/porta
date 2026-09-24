@@ -18,10 +18,12 @@ as a definition does.
 | `wasmtime_bridge.rs` + `wasmtime_bridge/{load,run}.rs` | WASM instance lifecycle and the FFI surface; `load` reads a file as a core module or a WASI 0.2 / 0.3 component, `run` executes it |
 | `policy_preset.rs` + `presets/default.toml` | what a run closes beyond its grants, as data: reads denied, names protected inside mounts, sockets refused; extended by `--deny-read`, `--protect`, `--deny-unix`, replaced by `--preset` |
 | `unix_sockets.rs` | on Linux, the credential sockets bound now that the preset closes, from `/proc/net/unix` |
-| `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
-| `pid_namespace.rs` | the command's own user, PID and mount namespace on Linux, a fresh `/proc` in it, and the pid-1 helper that reports how the command ended; where the host refuses them the run goes ahead and says so |
+| `sandbox_exec.rs` + `sandbox_exec/{checks,command,explain,linux,macos,why}.rs`; `sandbox_profile.rs` + `sandbox_profile/{files,network}.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` + `seccomp/assembler.rs` | native OS enforcement: one request (its checks, its command, its explanation, and how each platform runs it), the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
+| `pid_namespace.rs` + `pid_namespace/{covers,pid_one,probe}.rs` | the command's own user, PID and mount namespace on Linux, a fresh `/proc` in it, and the pid-1 helper that reports how the command ended; where the host refuses them the run goes ahead and says so |
 | `ceilings.rs`, `memory_ceiling.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU or memory ceiling; on Linux the memory ceiling is a cgroup v2 scope asked of the systemd user manager |
-| `denials.rs`, `sandbox_check.rs` | what the kernel refused during a run and which flag would have allowed it (macOS, from the unified log via a per-run tag on every deny rule); what this host can enforce, for `porta check` |
+| `denials.rs`, `denial_advice.rs`, `sandbox_check.rs` | what the kernel refused during a run (macOS, from the unified log via a per-run tag on every deny rule; Linux, under `--why`, from a `strace` of the run in `sandbox_exec/why.rs`) and which flag would have allowed it; what this host can enforce, for `porta check` |
+| `snapshot.rs` | `--snapshot`: the writable mounts copied before a run to `~/.porta/snapshots`, what the run changed, and `porta rollback` |
+| `recipes.rs` + `recipes/*.toml` | `porta init claude` / `codex`: a `porta.toml` measured to what each agent needs |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
 | `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
@@ -118,6 +120,10 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - What the preset closes to reads stays closed in every mode on both
   platforms; on Linux without a mount namespace, a closed path inside a grant
   refuses the run. The Keychain is closed by its mach services as well.
+- `--why` traces from outside the sandbox: the traced process applies the
+  same request to itself, so the policy is the one an untraced run gets.
+- Snapshots live outside every mount; a mount that holds them refuses
+  `--snapshot`, so a run cannot rewrite its own undo.
 - `run`, `up`, and MCP execution must share native policy generation.
 - Proxy mode permits only the loopback proxy endpoint, without UDP, Unix
   sockets or any other egress channel — including a ring that would open a

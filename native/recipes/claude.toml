@@ -1,0 +1,33 @@
+# porta.toml for Claude Code. `porta up` starts it here, confined to this
+# directory; `porta up -- -p "…"` passes arguments on.
+#
+# Claude Code keeps its sessions, history and plugin cache under ~/.claude,
+# so that is writable too; its settings, commands, agents and global
+# CLAUDE.md there stay unwritable, so one session cannot give the next hooks
+# or instructions. Everything else under the home is readable but not
+# writable, and the credential stores in porta's preset stay closed.
+#
+# On macOS Claude Code keeps its login in the Keychain, which porta closes.
+# Pass a token instead: ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from
+# `claude setup-token`, exported in the shell you run `porta up` from.
+
+[runtime]
+type = "native"
+command = "claude"
+
+[sandbox]
+mounts = [".", "~/.claude"]
+env-pass = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
+protect = [
+  "~/.claude/settings.json",
+  "~/.claude/settings.local.json",
+  "~/.claude/commands",
+  "~/.claude/agents",
+  "~/.claude/CLAUDE.md",
+]
+# The network is open, as it is for Claude Code outside porta. To allow only
+# the API and the package registries a coding session reaches, use the proxy:
+# [proxy]
+# allow = ["*.anthropic.com", "claude.ai", "github.com", "*.github.com",
+#          "*.githubusercontent.com", "registry.npmjs.org", "pypi.org",
+#          "files.pythonhosted.org", "crates.io", "*.crates.io"]

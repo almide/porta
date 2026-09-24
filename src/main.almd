@@ -68,6 +68,17 @@ effect fn main() -> Result[Unit, String] = {
       help.print_help("")
       ok(())
     },
+    "rollback" => {
+      let rest = list.drop(args, 2)
+      let id = list.find(rest, (a) => a != "--yes") ?? ""
+      println(wasm_rt.wt_rollback(id, list.any(rest, (a) => a == "--yes")))
+      ok(())
+    },
+    "__sandboxed" => {
+      eprintln("Error: ${wasm_rt.wt_exec_inner(list.get(args, 2) ?? "")}")
+      process.exit(125)
+      ok(())
+    },
     "agent-journal" => agent.journal_info(list.drop(args, 2)),
     "agent-check" => agent.inspect_config(list.drop(args, 2)),
     "agent" => agent.command(list.drop(args, 2), "run"),
@@ -100,7 +111,9 @@ effect fn main() -> Result[Unit, String] = {
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
       let command = list.get(args, 3) ?? ""
-      if command == "" then { help.print_help("init"); ok(()) }
+      let recipe = wasm_rt.wt_recipe(runtime_type)
+      if recipe != "" then project.porta_init_recipe(runtime_type, recipe)
+      else if command == "" then { help.print_help("init"); ok(()) }
       else project.porta_init(runtime_type, command)
     },
     // Alias: porta run-native is equivalent to porta run <non-wasm>

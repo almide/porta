@@ -61,6 +61,23 @@ fn wt_exec_replace(request_json: String) -> String
 @extern(rs, "wasmtime_bridge", "wt_exec_supervised")
 fn wt_exec_supervised(request_json: String) -> String
 
+// The copy of porta `--why` starts under strace on Linux: applies the
+// request to itself and becomes the command; returns only why it could not.
+@extern(rs, "wasmtime_bridge", "wt_exec_inner")
+fn wt_exec_inner(request_json: String) -> String
+
+// What changed since a --snapshot run (the latest when id is ""), and with
+// apply, each mount put back.
+@extern(rs, "wasmtime_bridge", "wt_rollback")
+fn wt_rollback(id: String, apply: Bool) -> String
+
+// A ready-made porta.toml for a coding agent, or "" when there is none.
+@extern(rs, "wasmtime_bridge", "wt_recipe")
+fn wt_recipe(name: String) -> String
+
+@extern(rs, "wasmtime_bridge", "wt_recipe_names")
+fn wt_recipe_names() -> String
+
 // The policy a request would apply, in words, without applying it.
 @extern(rs, "wasmtime_bridge", "wt_sandbox_explain")
 fn wt_sandbox_explain(request_json: String) -> String
