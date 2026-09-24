@@ -10,6 +10,7 @@
 //! nothing would, because it is one of the things porta never grants.
 #![cfg(target_os = "macos")]
 
+use crate::policy_preset::Closures;
 use std::collections::BTreeSet;
 
 /// One refusal, as the kernel recorded it.
@@ -78,25 +79,12 @@ pub fn parse(log: &str, tag: &str) -> Vec<Denial> {
         .collect()
 }
 
-/// Paths under the home porta closes in every mode, mirrored from the
-/// profile so the advice matches the rule.
-const NEVER_GRANTED_UNDER_HOME: [&str; 10] = [
-    ".ssh", ".gnupg", ".aws", ".config/gcloud", ".docker", ".kube", "Library/Keychains", "Library/Cookies",
-    "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
-];
-
-/// Names inside a writable mount that porta never lets a command write.
-const PROTECTED_NAMES: [&str; 14] = [
-    "/.git/hooks", "/.git/config", "/.bashrc", "/.bash_profile", "/.zshrc", "/.zprofile", "/.profile",
-    "/.gitconfig", "/.mcp.json", "/.npmrc", "/porta.toml", "/.porta.toml", "/.claude/commands", "/.claude/agents",
-];
-
 /// The flag that would have allowed one denial, or why none would. Each
 /// operation class has its own helper; this only routes to them.
-pub fn advice(denial: &Denial) -> String {
+pub fn advice(denial: &Denial, closures: &Closures) -> String {
     let operation = denial.operation.as_str();
     if operation.starts_with("file-write") || operation.starts_with("file-read") {
-        return file_advice(operation, &denial.target);
+        return file_advice(operation, &denial.target, closures);
     }
     if operation == "network-outbound" {
         return outbound_advice(&denial.target);
@@ -116,13 +104,14 @@ pub fn advice(denial: &Denial) -> String {
 }
 
 /// The `-v` grant for a denied read or write, or why none is offered.
-fn file_advice(operation: &str, target: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if NEVER_GRANTED_UNDER_HOME.iter().any(|dir| target.starts_with(&format!("{home}/{dir}"))) {
-        return "a credential store; porta never grants it".to_string();
+fn file_advice(operation: &str, target: &str, closures: &Closures) -> String {
+    let under = |path: &str| target == path || target.starts_with(&format!("{path}/"));
+    if operation.starts_with("file-read") && closures.deny_read.iter().any(|path| under(path)) {
+        return "closed by the preset or --deny-read; no mount reopens it (--preset none, or a preset without it, does)".to_string();
     }
-    if PROTECTED_NAMES.iter().any(|name| target.contains(name)) {
-        return "protected inside the mount; porta never grants it".to_string();
+    let git = ["/.git/hooks", "/.git/config"];
+    if git.iter().any(|name| target.contains(name)) || closures.protect.iter().any(|name| target.contains(&format!("/{name}"))) {
+        return "protected inside the mount by the preset or --protect; no mount reopens it".to_string();
     }
     let dir = grantable_directory(target);
     if operation.starts_with("file-write") { format!("-v {dir}") } else { format!("-v {dir}:ro") }
@@ -153,7 +142,7 @@ fn grantable_directory(target: &str) -> String {
 /// The footer porta prints after a run that was denied something: each
 /// refusal with the flag it needed, then the command line to run again with
 /// every grantable one added. `rerun` is that command line without them.
-pub fn footer(denials: &[Denial], rerun: &str) -> String {
+pub fn footer(denials: &[Denial], rerun: &str, closures: &Closures) -> String {
     if denials.is_empty() {
         return String::new();
     }
@@ -162,7 +151,7 @@ pub fn footer(denials: &[Denial], rerun: &str) -> String {
     let mut grants: Vec<String> = Vec::new();
     for denial in denials {
         let what = if denial.target.is_empty() { denial.operation.clone() } else { format!("{} {}", denial.operation, denial.target) };
-        let advice = advice(denial);
+        let advice = advice(denial, closures);
         text.push_str(&format!("  {what}\n    → {advice}\n"));
         if advice.starts_with('-') && !grants.contains(&advice) {
             grants.push(advice);
@@ -219,20 +208,21 @@ porta:other
         let denials = parse(log, "porta:abc");
         assert_eq!(denials.len(), 2);
         assert_eq!(denials[0].operation, "file-write-create");
-        assert_eq!(advice(&denials[0]), "-v /Users/x");
-        assert_eq!(advice(&denials[1]), "--allow-net '*:443'");
+        let closures = Closures::default();
+        assert_eq!(advice(&denials[0], &closures), "-v /Users/x");
+        assert_eq!(advice(&denials[1], &closures), "--allow-net '*:443'");
     }
 
     #[test]
     fn never_granted_things_say_so() {
-        std::env::set_var("HOME", "/Users/x");
+        let closures = crate::policy_preset::resolve("default", &Closures::default(), Some("/Users/x")).unwrap();
         let keys = Denial { operation: "file-read-data".into(), target: "/Users/x/.ssh/id_ed25519".into() };
-        assert!(advice(&keys).contains("never grants"));
+        assert!(advice(&keys, &closures).contains("closed by the preset"));
         let hook = Denial { operation: "file-write-create".into(), target: "/w/repo/.git/hooks/pre-commit".into() };
-        assert!(advice(&hook).contains("protected inside the mount"));
+        assert!(advice(&hook, &closures).contains("protected inside the mount"));
         let agent = Denial { operation: "network-outbound".into(), target: "/private/tmp/com.apple.launchd.x/Listeners".into() };
-        assert_eq!(advice(&agent), "--allow-unix /private/tmp/com.apple.launchd.x/Listeners");
+        assert_eq!(advice(&agent, &closures), "--allow-unix /private/tmp/com.apple.launchd.x/Listeners");
         let bind = Denial { operation: "network-bind".into(), target: "local:*:8080".into() };
-        assert_eq!(advice(&bind), "--allow-bind 8080");
+        assert_eq!(advice(&bind, &closures), "--allow-bind 8080");
     }
 }

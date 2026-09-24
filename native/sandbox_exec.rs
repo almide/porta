@@ -43,6 +43,14 @@ struct SandboxRequest {
     /// otherwise Landlock refuses every TCP port and seccomp every other
     /// family. A kernel that can do neither refuses the run.
     #[serde(rename = "no_net", default)] no_network: bool,
+    /// The preset this run starts from: `default`, `none`, or a preset file.
+    /// It and the three lists after it are what the run closes beyond its
+    /// grants; `closures` is them resolved (see `policy_preset`).
+    #[serde(default)] preset: String,
+    #[serde(default)] deny_read: Vec<String>,
+    #[serde(default)] protect: Vec<String>,
+    #[serde(default)] deny_unix: Vec<String>,
+    #[serde(skip)] closures: crate::policy_preset::Closures,
     /// Unix socket paths the command may connect to although they hold a
     /// credential agent. Empty by default: the SSH agent, gpg-agent and the
     /// container runtimes are closed unless named.
@@ -169,6 +177,12 @@ impl SandboxRequest {
         let mut request: Self = serde_json::from_str(request_json)
             .map_err(|error| format!("invalid sandbox request: {error}"))?;
         request.tag = run_tag();
+        let own = crate::policy_preset::Closures {
+            deny_read: request.deny_read.clone(),
+            protect: request.protect.clone(),
+            deny_unix: request.deny_unix.clone(),
+        };
+        request.closures = crate::policy_preset::resolve(&request.preset, &own, std::env::var("HOME").ok().as_deref())?;
         if !READ_POLICIES.contains(&request.read_policy.as_str()) {
             return Err(format!("unknown read policy: {}; use open or strict", request.read_policy));
         }
@@ -329,6 +343,7 @@ impl SandboxRequest {
             proxy: self.proxy,
             no_network: self.no_network,
             bind_ports: &bind_ports(&self.allowed_bind).unwrap_or_default(),
+            closures: &self.closures,
             allowed_unix: &self.allowed_unix,
             tag: &self.tag,
         })
@@ -354,6 +369,7 @@ impl SandboxRequest {
         if !self.allowed_unix.is_empty() {
             text.push_str(&format!("unix sockets {}\n", self.allowed_unix.join(", ")));
         }
+        text.push_str(&self.explain_closures());
         text.push_str(&format!(
             "time limit   {}\n",
             if self.timeout == 0 { "none".to_string() } else { format!("{}s, then killed with its process group", self.timeout) }
@@ -364,6 +380,17 @@ impl SandboxRequest {
         inherited.extend(named.iter().copied());
         text.push_str(&format!("environment  {}\n", inherited.join(" ")));
         text.push_str(&self.explain_enforcement());
+        text
+    }
+
+    /// What the preset and the caller close, in words.
+    fn explain_closures(&self) -> String {
+        let preset = if self.preset.is_empty() { "default" } else { &self.preset };
+        let closures = &self.closures;
+        let mut text = format!("preset       {preset} (--preset none drops it; --deny-read, --protect, --deny-unix add)\n");
+        text.push_str(&format!("closed reads {}\n", if closures.deny_read.is_empty() { "none".to_string() } else { closures.deny_read.join("\n             ") }));
+        text.push_str(&format!("protected    {}\n", if closures.protect.is_empty() { "none".to_string() } else { closures.protect.join(", ") }));
+        text.push_str(&format!("closed unix  {}\n", if closures.deny_unix.is_empty() { "none".to_string() } else { closures.deny_unix.join("  ") }));
         text
     }
 
@@ -391,7 +418,7 @@ impl SandboxRequest {
             "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
 \"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
 \"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{},\"memory_mib\":{}}},\
-\"enforcement\":{}}}",
+\"preset\":{},\"closed\":{{\"read\":{},\"protect\":{},\"unix\":{}}},\"enforcement\":{}}}",
             quoted(&self.cmd),
             array(&self.args),
             quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
@@ -406,6 +433,10 @@ impl SandboxRequest {
             self.max_procs,
             self.max_file_size,
             self.max_memory_mb,
+            quoted(if self.preset.is_empty() { "default" } else { &self.preset }),
+            array(&self.closures.deny_read),
+            array(&self.closures.protect),
+            array(&self.closures.deny_unix),
             quoted(self.enforcement_backend()),
         )
     }
@@ -491,7 +522,10 @@ impl SandboxRequest {
             // is there to reach, and a test suite may serve on it.
             closed: self.no_network && !self.network_isolated(),
         };
-        crate::landlock_policy::ruleset(&self.allowed_dirs, network, &self.read_policy)
+        // With a mount namespace the command's own, the closed paths are
+        // covered there; without one, Landlock has to leave them out.
+        let closed: &[String] = if crate::pid_namespace::available().is_ok() { &[] } else { &self.closures.deny_read };
+        crate::landlock_policy::ruleset(&self.allowed_dirs, network, &self.read_policy, closed)
     }
 
     /// Whether this run's network is a namespace of its own.
@@ -533,8 +567,10 @@ impl SandboxRequest {
         let stub = self.max_memory_mb > 0 && isolation.is_none();
         let mut command = self.bare_command(if stub { "/bin/sh" } else { &self.cmd });
         if let Some(isolation) = isolation {
+            let writable: Vec<String> = self.allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).cloned().collect();
+            let hidden = crate::pid_namespace::Hidden::prepare(&self.closures.deny_read, &writable, &self.closures.protect);
             unsafe {
-                command.pre_exec(move || isolation.enter());
+                command.pre_exec(move || isolation.enter(&hidden));
             }
         }
         // Inside the namespaces the kernel counts the namespace's processes
@@ -555,7 +591,8 @@ impl SandboxRequest {
 
     /// The namespaces for this run where the host gives them, with the gate
     /// porta holds under a memory ceiling. Where it does not, the run goes
-    /// without them and, when `/proc` is otherwise readable, says so once.
+    /// without them and says once what that leaves open: `/proc` when it is
+    /// otherwise readable, and a writable mount's hooks and protected names.
     #[cfg(target_os = "linux")]
     fn isolation(&self) -> Result<(Option<crate::pid_namespace::Isolation>, Option<crate::pid_namespace::Gate>), String> {
         use crate::pid_namespace::{available, Isolation};
@@ -565,10 +602,15 @@ impl SandboxRequest {
                 .map_err(|error| format!("cannot prepare the command's namespaces: {error}")),
             Err(reason) => {
                 static NOTED: std::sync::Once = std::sync::Once::new();
+                let mut open = Vec::new();
                 if self.read_policy != "strict" {
-                    NOTED.call_once(|| {
-                        eprintln!("porta: {reason}, so the command shares the host's process list; --read-policy strict closes /proc");
-                    });
+                    open.push("the command shares the host's process list (--read-policy strict closes /proc)");
+                }
+                if self.allowed_dirs.iter().any(|dir| !dir.ends_with(":ro")) {
+                    open.push("a writable mount's .git/hooks and protected names stay writable");
+                }
+                if !open.is_empty() {
+                    NOTED.call_once(|| eprintln!("porta: {reason}, so {}", open.join("; ")));
                 }
                 Ok((None, None))
             }
@@ -790,7 +832,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
             wait_within(child, request.timeout, request.max_cpu, request.max_memory_mb.saturating_mul(MIB))
                 .map_err(|error| format!("waiting for the command failed: {error}"))
         })?;
-    explain_denials(&request.tag, &started, code, &request.rerun_line());
+    explain_denials(request, &started, code);
     Ok(code)
 }
 
@@ -799,7 +841,7 @@ fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
 /// the log query costs most of a second, and a tool that met a refusal and
 /// carried on chose to. `PORTA_DENIALS=never` keeps the footer away entirely.
 #[cfg(target_os = "macos")]
-fn explain_denials(tag: &str, started: &str, code: i64, rerun: &str) {
+fn explain_denials(request: &SandboxRequest, started: &str, code: i64) {
     use crate::ceilings::{CPU_EXCEEDED, MEMORY_EXCEEDED, TIMED_OUT};
     let setting = std::env::var("PORTA_DENIALS").unwrap_or_default();
     // A run porta's own supervisor ended has nothing the kernel refused to
@@ -808,8 +850,8 @@ fn explain_denials(tag: &str, started: &str, code: i64, rerun: &str) {
     if setting == "never" || ((code == 0 || ended_by_porta) && setting != "always") {
         return;
     }
-    let denials = crate::denials::collect(tag, started);
-    eprint!("{}", crate::denials::footer(&denials, rerun));
+    let denials = crate::denials::collect(&request.tag, started);
+    eprint!("{}", crate::denials::footer(&denials, &request.rerun_line(), &request.closures));
 }
 
 /// `word` as a shell would need it typed: bare when it is plain, in single

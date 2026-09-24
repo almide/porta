@@ -1,11 +1,11 @@
 {
-  "tool": "nono",
-  "system": "Linux",
-  "machine": "aarch64",
-  "tried": 19,
-  "escaped": 2,
-  "hardening_gaps": 1,
-  "not_offered": 3,
+  "tool": "fence",
+  "system": "Darwin",
+  "machine": "arm64",
+  "tried": 13,
+  "escaped": 5,
+  "hardening_gaps": 0,
+  "not_offered": 7,
   "rows": [
     {
       "name": "write outside every mount",
@@ -16,14 +16,14 @@
     {
       "name": "rename the mount root away",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "rename refused"
     },
     {
       "name": "write a git hook inside a mount",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "hook write refused"
     },
     {
       "name": "write through a symlink pointing outside the mount",
@@ -40,20 +40,26 @@
     {
       "name": "inherit an open file descriptor from porta",
       "category": "processes",
-      "verdict": "n/a",
-      "detail": "nono hands the child its own supervisor socket by design"
+      "verdict": "held",
+      "detail": "no descriptor beyond stdio inherited"
     },
     {
       "name": "read an SSH private key",
       "category": "credentials",
-      "verdict": "held",
-      "detail": "read refused"
+      "verdict": "ESCAPED",
+      "detail": "secret read"
+    },
+    {
+      "name": "read the GitHub CLI token",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "secret read"
     },
     {
       "name": "read /etc/shadow under strict",
       "category": "credentials",
-      "verdict": "held",
-      "detail": "/etc/shadow closed"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "read another process's arguments",
@@ -64,26 +70,26 @@
     {
       "name": "read another process's arguments, default reads",
       "category": "processes",
-      "verdict": "ESCAPED",
-      "detail": "another process's arguments read"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "read the login Keychain",
       "category": "credentials",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "ESCAPED",
+      "detail": "the login keychain database is readable"
     },
     {
       "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
       "category": "processes",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "ESCAPED",
+      "detail": "Launch Services reachable: PROBE-STARTED; com.apple.lsd.mapdb REACHABLE; com.apple.lsd.modifydb denied 1100"
     },
     {
       "name": "reach a port the policy did not open",
       "category": "network",
-      "verdict": "held",
-      "detail": "443 refused under *:80"
+      "verdict": "not offered",
+      "detail": "fence has no port grants"
     },
     {
       "name": "reach anything under --no-net",
@@ -100,74 +106,74 @@
     {
       "name": "get a UDP answer from outside in proxy mode",
       "category": "network",
-      "verdict": "held",
-      "detail": "no UDP egress in proxy mode"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "open a socket without socket() via io_uring",
       "category": "network",
-      "verdict": "held",
-      "detail": "io_uring refused"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "exec a memory file (fileless)",
       "category": "processes",
-      "verdict": "held",
-      "detail": "fileless exec refused"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "attach to a process outside the sandbox (ptrace)",
       "category": "processes",
-      "verdict": "held",
-      "detail": "attach refused (yama ptrace_scope absent)"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "enter a new user namespace",
       "category": "hardening",
-      "verdict": "ESCAPED",
-      "detail": "unshare(CLONE_NEWUSER) permitted"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "reach the network over MPTCP",
       "category": "network",
-      "verdict": "held",
-      "detail": "MPTCP refused"
+      "verdict": "n/a",
+      "detail": "not applicable on Darwin"
     },
     {
       "name": "open a raw socket",
       "category": "network",
-      "verdict": "held",
-      "detail": "raw socket refused"
+      "verdict": "not offered",
+      "detail": "fence has no port grants"
     },
     {
       "name": "fork past --max-procs",
       "category": "resources",
-      "verdict": "held",
-      "detail": "every fork refused under --max-procs 1"
+      "verdict": "not offered",
+      "detail": "fence has no --max-procs"
     },
     {
       "name": "grow a file past --max-file-size",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "nono has no --max-file-size"
+      "detail": "fence has no --max-file-size"
     },
     {
       "name": "burn CPU past --max-cpu",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "nono has no --max-cpu"
+      "detail": "fence has no --max-cpu"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "nono has no --max-cpu"
+      "detail": "fence has no --max-cpu"
     },
     {
       "name": "allocate past --max-memory-mb",
       "category": "resources",
-      "verdict": "held",
-      "detail": "allocation past the ceiling was killed (exit 137)"
+      "verdict": "not offered",
+      "detail": "fence has no --max-memory-mb"
     }
   ]
 }

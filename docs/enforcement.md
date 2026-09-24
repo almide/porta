@@ -28,8 +28,8 @@ does not show you where.
 | Control | macOS (`sandbox-exec`) | Linux (Landlock + seccomp) |
 |---|---|---|
 | **Write** | denied outside `-v` mounts, `/tmp`, `/dev` | denied outside `-v` mounts, `/tmp`, `/dev` |
-| **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the root's shell rc files, `.gitconfig`, `.mcp.json`, `.npmrc`, `.claude/commands`, `.claude/agents`, `.vscode`, `.idea`, `porta.toml` stay unwritable; the mount root and those paths cannot be renamed away | not yet (Landlock grants a directory whole) |
-| **Read, default** | credential stores denied — `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, Keychains, browser profiles; everything else readable | not confined |
+| **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the names the preset protects (shell rc files, `.gitconfig`, `.mcp.json`, `.envrc`, `.claude/commands`, `.vscode`, `porta.toml`, …) stay unwritable; the mount root and those paths cannot be renamed away | same, each bind-mounted read-only onto itself in the command's mount namespace; where the host refuses one, not protected (the run says so) |
+| **Read, default** | what the preset closes denied — by default credential stores: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, Keychains, browser profiles, …; everything else readable | same, each covered by an empty mount in the command's mount namespace; where the host refuses one, Landlock grants reads everywhere else, and a closed path inside a grant (`-v ~`, `/tmp`) refuses the run |
 | **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass` | same |
 | **Other processes** | their arguments and environment unreadable (`procargs`, `proc_pidinfo`); signals to them not restricted | invisible: the command runs in PID, mount and user namespaces of its own with a fresh `/proc`, where the host allows unprivileged user namespaces (otherwise porta says so and only `strict` closes `/proc`); signals and abstract sockets scoped to the sandbox on Landlock ABI 6 |
 | **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
@@ -39,6 +39,13 @@ does not show you where.
 | **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
 | **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
+
+What the table calls the preset is data, not code: `native/presets/default.toml`,
+built into the binary. It lists the paths closed to reads, the names protected
+inside every writable mount and the Unix sockets refused, and `porta explain`
+prints what a run resolved it to. `--deny-read`, `--protect` and `--deny-unix`
+add to it; `--preset <file>` starts from another document and `--preset none`
+from nothing. The mechanisms are porta's; which paths deserve them is yours.
 
 Under `strict`, every home directory is closed — and so is the command itself if
 it lives outside those directories. A toolchain under `/opt` needs a mount on
@@ -133,9 +140,10 @@ host execution and HTTP requests go through the checked MCP built-in tools.
   `--no-net` falls back to Landlock and seccomp. On Ubuntu,
   `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
   profile Ubuntu documents for a program that needs them, for porta alone.
-- **Linux protects a mount as a whole.** The repository-hooks and trusted-file
-  protections inside a writable mount are macOS only until Landlock can express
-  a directory minus some of its files.
+- **Linux protects inside a mount only in a mount namespace.** Landlock grants
+  a directory whole, so the repository-hooks and trusted-file protections
+  inside a writable mount need the namespace; where the host refuses one they
+  are not applied, and the run says so.
 - **Resource ceilings are what an unprivileged process can place.**
   `--timeout`, `--max-cpu`, `--max-procs` and `--max-file-size` are a process
   group kill and rlimits the kernel enforces on every descendant, per process.

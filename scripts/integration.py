@@ -440,6 +440,40 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         assert 'LANDED' in result.stdout and (odd / 'in').exists(), (name, result)
     print('PASS: mounts named with a carriage return, a newline, quotes or ":ro" inside keep their grant')
 
+    # What a run closes beyond its grants is a preset, not code: the default
+    # names credential stores, --preset none drops it, --deny-read adds to it,
+    # and explain shows the result. A GitHub CLI token was not on the first,
+    # hard-coded list; on Linux the default read mode closed none of them.
+    # Under the real home, not /tmp: /tmp is granted to every run, and a
+    # closed path inside a grant is one Landlock alone cannot close (the run
+    # is refused then, which would test the refusal instead).
+    fake_home = pathlib.Path(tempfile.mkdtemp(prefix='porta-preset-', dir=pathlib.Path.home()))
+    token = fake_home / '.config' / 'gh' / 'hosts.yml'
+    token.parent.mkdir(parents=True)
+    token.write_text('oauth_token: MUST-NOT-LEAK\n')
+    own = fake_home / 'notes' / 'private.txt'
+    own.parent.mkdir()
+    own.write_text('MUST-NOT-LEAK-EITHER\n')
+    elsewhere = root / 'elsewhere'
+    elsewhere.mkdir()
+    as_home = {**os.environ, 'HOME': str(fake_home), 'PORTA_DENIALS': 'never'}
+    result = run('run', '/bin/cat', '-v', str(elsewhere), '--', str(token), env=as_home)
+    assert 'MUST-NOT-LEAK' not in result.stdout, result
+    result = run('run', '/bin/cat', '-v', str(elsewhere), '--preset', 'none', '--', str(token), env=as_home)
+    assert 'MUST-NOT-LEAK' in result.stdout, result
+    result = run('run', '/bin/cat', '-v', str(elsewhere), '--', str(own), env=as_home)
+    assert 'MUST-NOT-LEAK-EITHER' in result.stdout, result
+    result = run('run', '/bin/cat', '-v', str(elsewhere), '--deny-read', '~/notes', '--', str(own), env=as_home)
+    assert 'MUST-NOT-LEAK-EITHER' not in result.stdout, result
+    closed = json.loads(run('explain', '/bin/echo', '-v', str(elsewhere), '--deny-read', '~/notes', '--json', env=as_home).stdout)
+    assert closed['preset'] == 'default' and str(token.parent.resolve()) in closed['closed']['read'], closed
+    assert str(own.parent.resolve()) in closed['closed']['read'] and '.envrc' in closed['closed']['protect'], closed
+    for bad in (['--protect', '../outside'], ['--deny-read', 'relative/path'], ['--preset', str(root / 'no-such-preset.toml')]):
+        result = run('run', '/bin/echo', '-v', str(elsewhere), *bad, '--', 'must-not-run', env=as_home)
+        assert result.returncode == 125 and 'must-not-run' not in result.stdout, (bad, result)
+    shutil.rmtree(fake_home, ignore_errors=True)
+    print('PASS: the default preset closes credential stores; --preset none, --deny-read and explain work on it')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

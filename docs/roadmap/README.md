@@ -30,13 +30,14 @@
 
 ## Done
 
-23 items
+24 items
 
 <details>
-<summary>Show all 23 completed items</summary>
+<summary>Show all 24 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-09-24 | [Closures as a preset](done/08-policy-preset.md) | What a run closes is a preset (data), not paths written into the core |
 | 2026-09-23 | [Own PID namespace on Linux](done/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |
 | 2026-09-23 | [No network at all](done/07-no-network.md) | --no-net: no network at all, backed by a network namespace on Linux |
 | 2026-09-23 | [Memory Ceiling for Native Runs](done/05-memory-ceiling.md) | A resident-memory ceiling for native runs through cgroup v2, fail-closed |
