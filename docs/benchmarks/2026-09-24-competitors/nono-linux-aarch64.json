@@ -2,8 +2,8 @@
   "tool": "nono",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 22,
-  "escaped": 4,
+  "tried": 24,
+  "escaped": 5,
   "hardening_gaps": 1,
   "not_offered": 3,
   "rows": [
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "held",
       "detail": "no UDP egress in proxy mode"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no UDP egress under --allow-net"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "the SSH agent's socket accepted a connection"
     },
     {
       "name": "open a socket without socket() via io_uring",

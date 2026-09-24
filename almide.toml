@@ -14,5 +14,6 @@ sha2 = "0.10"
 jsonschema = { version = "=0.56.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 libc = "0.2"
+regex = "1"
 
 toml = "0.8"

@@ -521,6 +521,45 @@ def udp_under_allow_net(ctx):
     return Result(ESCAPED, "a UDP DNS query got an answer in proxy mode") if "ANSWERED" in result.stdout else Result(HELD, "no UDP egress in proxy mode")
 
 
+def udp_under_port_rule(ctx):
+    # The same question under --allow-net '*:443': a TCP port rule on Linux
+    # says nothing about UDP unless something else closes it. Until
+    # 2026-09-24 nothing did, and the threat model listed it as a gap.
+    control = subprocess.run([PYTHON, "-c", UDP_PROBE], capture_output=True, text=True, timeout=15)
+    if "ANSWERED" not in control.stdout:
+        return Result(NA, "this host gets no UDP answer from 1.1.1.1:53 unsandboxed")
+    result = ctx.py(UDP_PROBE, policy=["--allow-net", "*:443", "-v", str(ctx.workspace)])
+    return Result(ESCAPED, "a UDP DNS query got an answer under a TCP port rule") if "ANSWERED" in result.stdout else Result(HELD, "no UDP egress under --allow-net")
+
+
+AGENT_PROBE = (
+    "import socket,sys\n"
+    "try: socket.socket(socket.AF_UNIX).connect(sys.argv[1]); print('REACHED')\n"
+    "except OSError as e: print('refused', e)"
+)
+
+
+def reach_ssh_agent(ctx):
+    # An SSH agent signs with the caller's keys for whoever reaches its socket,
+    # so reaching it is using the key without reading it. The agent here is a
+    # listener at the path ssh-agent uses, ssh-XXXX/agent.<pid>, outside every
+    # mount; the command is not told where it is and is given nothing else.
+    # On Linux porta covers the socket in the command's mount namespace, and
+    # where the host gives none the run says the socket stays reachable.
+    if SYSTEM == "Linux" and not ctx.runner.gives_pid_namespaces(host_gives_pid_namespaces):
+        return Result(NA, "Linux closes a credential socket only in a mount namespace, and this host gives none")
+    agent_dir = pathlib.Path(tempfile.mkdtemp(prefix="ssh-", dir=ctx.ungranted))
+    path = agent_dir / "agent.4242"
+    agent = socket.socket(socket.AF_UNIX)
+    agent.bind(str(path))
+    agent.listen(4)
+    try:
+        result = ctx.py(AGENT_PROBE, str(path), policy=["-v", str(ctx.workspace)])
+    finally:
+        agent.close()
+    return Result(ESCAPED, "the SSH agent's socket accepted a connection") if "REACHED" in result.stdout else Result(HELD, "agent socket refused")
+
+
 def io_uring(ctx):
     if SYSTEM != "Linux":
         return Result(NA, "io_uring is Linux-only")
@@ -673,6 +712,8 @@ CORPUS = [
     Attempt("reach anything under --no-net", "network", None, no_network_at_all),
     Attempt("reach the cloud metadata endpoint via the proxy", "network", None, reach_cloud_metadata),
     Attempt("get a UDP answer from outside in proxy mode", "network", ["Linux"], udp_under_allow_net),
+    Attempt("get a UDP answer from outside under a TCP port rule", "network", None, udp_under_port_rule),
+    Attempt("reach the SSH agent's socket", "credentials", None, reach_ssh_agent),
     Attempt("open a socket without socket() via io_uring", "network", ["Linux"], io_uring),
     Attempt("exec a memory file (fileless)", "processes", ["Linux"], fileless_exec),
     Attempt("attach to a process outside the sandbox (ptrace)", "processes", ["Linux"], ptrace_sibling),

@@ -238,7 +238,8 @@ pub(crate) struct Hidden {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cover {
     /// Closed to reads: a directory under an empty tmpfs no one may enter, a
-    /// file under `/dev/null`.
+    /// file under `/dev/null`. A closed Unix socket is a file here too: a
+    /// `connect` to `/dev/null` is refused.
     HideDirectory,
     HideFile,
     /// Protected inside a writable mount: bound onto itself read-only, so it
@@ -253,9 +254,9 @@ enum Cover {
 
 impl Hidden {
     /// The paths of `deny_read` that exist, outermost only (one inside another
-    /// is covered with it, and could not be mounted on once it is), then the
-    /// protections for each writable mount.
-    pub(crate) fn prepare(deny_read: &[String], writable: &[String], protect: &[String]) -> Vec<Hidden> {
+    /// is covered with it, and could not be mounted on once it is), the closed
+    /// Unix sockets, then the protections for each writable mount.
+    pub(crate) fn prepare(deny_read: &[String], sockets: &[String], writable: &[String], protect: &[String]) -> Vec<Hidden> {
         let exists: Vec<(&String, std::fs::Metadata)> =
             deny_read.iter().filter_map(|path| std::fs::metadata(path).ok().map(|meta| (path, meta))).collect();
         let mut covers: Vec<(String, Cover)> = exists
@@ -263,6 +264,7 @@ impl Hidden {
             .filter(|(path, _)| !exists.iter().any(|(other, _)| other != path && path.starts_with(&format!("{other}/"))))
             .map(|(path, meta)| (path.to_string(), if meta.is_dir() { Cover::HideDirectory } else { Cover::HideFile }))
             .collect();
+        covers.extend(sockets.iter().map(|socket| (socket.clone(), Cover::HideFile)));
         for mount in writable {
             covers.extend(protections(mount, protect));
         }

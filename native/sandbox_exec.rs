@@ -170,6 +170,12 @@ fn missing_command(cmd: &str, cwd: &str) -> Option<String> {
     (!found).then(|| format!("command not found: {cmd} (not on PATH)"))
 }
 
+/// Under `--allow-net` on Linux, UDP is closed and a resolver asks over TCP:
+/// glibc reads its options from this variable as well as `resolv.conf`, and Go
+/// hands lookups to glibc when it is set. `-e` can override it.
+#[cfg(target_os = "linux")]
+const RESOLVER_OVER_TCP: (&str, &str) = ("RES_OPTIONS", "use-vc");
+
 impl SandboxRequest {
     /// Reads one request document. A document that does not parse refuses the
     /// run: an empty request would grant nothing but would also say nothing.
@@ -391,6 +397,8 @@ impl SandboxRequest {
         text.push_str(&format!("closed reads {}\n", if closures.deny_read.is_empty() { "none".to_string() } else { closures.deny_read.join("\n             ") }));
         text.push_str(&format!("protected    {}\n", if closures.protect.is_empty() { "none".to_string() } else { closures.protect.join(", ") }));
         text.push_str(&format!("closed unix  {}\n", if closures.deny_unix.is_empty() { "none".to_string() } else { closures.deny_unix.join("  ") }));
+        #[cfg(target_os = "linux")]
+        text.push_str(&format!("  bound now  {}\n", self.closed_sockets().join("\n             ")));
         text
     }
 
@@ -465,6 +473,7 @@ impl SandboxRequest {
     fn explain_enforcement(&self) -> String {
         let seccomp = match self.egress() {
             crate::seccomp::Egress::ProxyOnly => "baseline plus: socket() only for AF_INET SOCK_STREAM",
+            crate::seccomp::Egress::TcpPorts => "baseline plus: an AF_INET/AF_INET6 socket only as TCP (no UDP; names resolve over TCP 53)",
             _ => "baseline: ptrace, process_vm_*, mounts, namespaces, io_uring, raw/packet/vsock, MPTCP refused",
         };
         let ruleset = match self.ruleset() {
@@ -515,7 +524,7 @@ impl SandboxRequest {
         // Built here, in the parent, so the child has only to point at it.
         crate::seccomp::prepare(self.egress());
         let network = crate::landlock_policy::Network {
-            connect: &self.allowed_net,
+            connect: &self.connect_ports(),
             bind: &bind_ports(&self.allowed_bind)?,
             // Under --no-net without a namespace of its own, Landlock closes
             // every TCP port. With one, nothing but the command's own loopback
@@ -526,6 +535,24 @@ impl SandboxRequest {
         // covered there; without one, Landlock has to leave them out.
         let closed: &[String] = if crate::pid_namespace::available().is_ok() { &[] } else { &self.closures.deny_read };
         crate::landlock_policy::ruleset(&self.allowed_dirs, network, &self.read_policy, closed)
+    }
+
+    /// The credential sockets bound on this host now that the preset closes
+    /// and `--allow-unix` does not open. The patterns were checked at parse.
+    #[cfg(target_os = "linux")]
+    fn closed_sockets(&self) -> Vec<String> {
+        crate::unix_sockets::closed(&self.closures.deny_unix, &self.allowed_unix, &self.closures.deny_read).unwrap_or_default()
+    }
+
+    /// The ports `--allow-net` names, plus TCP 53 once UDP is closed: name
+    /// resolution then goes over TCP (see [`RESOLVER_OVER_TCP`]).
+    #[cfg(target_os = "linux")]
+    fn connect_ports(&self) -> Vec<String> {
+        let mut ports = self.allowed_net.clone();
+        if self.egress() == crate::seccomp::Egress::TcpPorts {
+            ports.push("*:53".to_string());
+        }
+        ports
     }
 
     /// Whether this run's network is a namespace of its own.
@@ -568,7 +595,7 @@ impl SandboxRequest {
         let mut command = self.bare_command(if stub { "/bin/sh" } else { &self.cmd });
         if let Some(isolation) = isolation {
             let writable: Vec<String> = self.allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).cloned().collect();
-            let hidden = crate::pid_namespace::Hidden::prepare(&self.closures.deny_read, &writable, &self.closures.protect);
+            let hidden = crate::pid_namespace::Hidden::prepare(&self.closures.deny_read, &self.closed_sockets(), &writable, &self.closures.protect);
             unsafe {
                 command.pre_exec(move || isolation.enter(&hidden));
             }
@@ -604,10 +631,14 @@ impl SandboxRequest {
                 static NOTED: std::sync::Once = std::sync::Once::new();
                 let mut open = Vec::new();
                 if self.read_policy != "strict" {
-                    open.push("the command shares the host's process list (--read-policy strict closes /proc)");
+                    open.push("the command shares the host's process list (--read-policy strict closes /proc)".to_string());
                 }
                 if self.allowed_dirs.iter().any(|dir| !dir.ends_with(":ro")) {
-                    open.push("a writable mount's .git/hooks and protected names stay writable");
+                    open.push("a writable mount's .git/hooks and protected names stay writable".to_string());
+                }
+                let sockets = self.closed_sockets();
+                if !sockets.is_empty() {
+                    open.push(format!("these sockets stay reachable: {}", sockets.join(", ")));
                 }
                 if !open.is_empty() {
                     NOTED.call_once(|| eprintln!("porta: {reason}, so {}", open.join("; ")));
@@ -647,6 +678,10 @@ impl SandboxRequest {
         }
         if !self.cwd.is_empty() && self.cwd != "." {
             command.current_dir(&self.cwd);
+        }
+        #[cfg(target_os = "linux")]
+        if self.egress() == crate::seccomp::Egress::TcpPorts {
+            command.env(RESOLVER_OVER_TCP.0, RESOLVER_OVER_TCP.1);
         }
         for (key, value) in &self.env_vars {
             command.env(key, value);

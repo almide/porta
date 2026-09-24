@@ -27,7 +27,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --preset <name|file>    What to close beyond the grants: default (credential stores etc.), none, or a file")
   println("  --deny-read <path>      Close this path to reads, on top of the preset (repeatable; ~/ allowed)")
   println("  --protect <name>        Keep this name inside every writable mount unwritable (repeatable)")
-  println("  --deny-unix <regex>     Refuse Unix sockets whose path matches (repeatable; macOS)")
+  println("  --deny-unix <regex>     Refuse Unix sockets whose path matches (repeatable)")
   println("  --timeout <secs>        Kill the command and all it started after this many seconds (exit 124)")
   println("  --max-cpu <secs>        CPU seconds per process before the kernel ends it (SIGXCPU)")
   println("  --max-procs <n>         Process ceiling for this user while the command runs; stops fork bombs")

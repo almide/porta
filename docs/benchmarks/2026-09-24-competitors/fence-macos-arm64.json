@@ -2,10 +2,10 @@
   "tool": "fence",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 13,
+  "tried": 14,
   "escaped": 5,
   "hardening_gaps": 0,
-  "not_offered": 7,
+  "not_offered": 8,
   "rows": [
     {
       "name": "write outside every mount",
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "n/a",
       "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "not offered",
+      "detail": "fence has no port grants"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "agent socket refused"
     },
     {
       "name": "open a socket without socket() via io_uring",

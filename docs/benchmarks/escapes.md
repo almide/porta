@@ -2,19 +2,19 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-24, porta 0.6.10, macOS arm64 and Linux aarch64
+this run is 2026-09-24, porta 0.6.11, macOS arm64 and Linux aarch64
 locally; Linux x86_64 on the CI runner. A row is **held** when the escape was
 stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 20 tried, 0 escaped
+- **macOS arm64**: 22 tried, 0 escaped
 - **Linux aarch64** (a systemd container that allows unprivileged user
-  namespaces): 26 tried, 0 escaped
+  namespaces): 28 tried, 0 escaped
 - **Linux aarch64**, the same container with `user.max_user_namespaces=0`:
-  23 tried, 0 escaped. The rows that need the command's own namespaces — the
+  24 tried, 0 escaped. The rows that need the command's own namespaces — the
   default-reads row for another process's arguments, renaming the mount root,
-  writing a git hook — are not hosted there
+  writing a git hook, reaching the SSH agent — are not hosted there
 - **Linux x86_64** (the CI runner, with a systemd user manager started for
   the job): the runner refuses unprivileged user namespaces (Ubuntu's AppArmor
   restriction), so it runs the second set
@@ -70,6 +70,7 @@ code. The two mount-internal rows now run on Linux too.
 | inherit an open file descriptor from porta | processes | held | held |
 | read an SSH private key | credentials | held | held |
 | read the GitHub CLI token | credentials | held | held |
+| reach the SSH agent's socket | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
 | read another process's arguments, default reads | processes | — | held |
@@ -79,6 +80,7 @@ code. The two mount-internal rows now run on Linux too.
 | reach anything under `--no-net` | network | held | held |
 | reach the cloud metadata endpoint via the proxy | network | held | held |
 | get a UDP answer from outside in proxy mode | network | — | held |
+| get a UDP answer from outside under a TCP port rule | network | held | held |
 | open a socket without socket() via io_uring | network | — | held |
 | exec a memory file (fileless) | processes | — | held |
 | attach to a process outside the sandbox (ptrace) | processes | — | held |

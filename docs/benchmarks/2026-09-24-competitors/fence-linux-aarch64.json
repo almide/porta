@@ -2,10 +2,10 @@
   "tool": "fence",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 20,
-  "escaped": 2,
+  "tried": 21,
+  "escaped": 3,
   "hardening_gaps": 1,
-  "not_offered": 6,
+  "not_offered": 7,
   "rows": [
     {
       "name": "write outside every mount",
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "held",
       "detail": "no UDP egress in proxy mode"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "not offered",
+      "detail": "fence has no port grants"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "the SSH agent's socket accepted a connection"
     },
     {
       "name": "open a socket without socket() via io_uring",
