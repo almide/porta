@@ -77,12 +77,15 @@ fn print_help(topic: String) -> Unit =
       println("Supports both WASM and native runtimes.")
     },
     "init" => {
-      println("porta init [native|wasm] [command]")
+      println("porta init <recipe>  |  porta init [native|wasm] <command>")
       println("")
-      println("Create a porta.toml in the current directory.")
+      println("Create a porta.toml in the current directory. A recipe is a ready-made")
+      println("one for a coding agent, measured to what it needs: claude, codex.")
       println("")
       println("examples:")
-      println("  porta init native claude    Create native config for 'claude'")
+      println("  porta init claude           Claude Code, confined to this directory")
+      println("  porta init codex            Codex CLI, confined to this directory")
+      println("  porta init native mytool    A starting point for any command")
       println("  porta init wasm agent.wasm  Create WASM config")
     },
     "build" => {

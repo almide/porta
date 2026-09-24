@@ -14,7 +14,7 @@ use crate::sandbox_profile::{build_sandbox_profile, readable_roots, ProfileReque
 mod checks;
 mod command;
 use command::{with_ceilings, INHERITED_ENV};
-use checks::{missing_command, resolve_mount};
+use checks::{expand_home, missing_command, resolve_mount};
 mod explain;
 pub use explain::{wt_sandbox_explain, wt_sandbox_explain_json};
 #[cfg(target_os = "linux")]
@@ -145,6 +145,7 @@ impl SandboxRequest {
         if let Some(reason) = request.running_as_root() {
             return Err(reason);
         }
+        request.cwd = expand_home(&request.cwd);
         request.allowed_dirs =
             request.allowed_dirs.iter().map(|dir| resolve_mount(dir)).collect::<Result<_, _>>()?;
         if let Some(reason) = missing_command(&request.cmd, &request.cwd) {

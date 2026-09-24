@@ -57,6 +57,11 @@ impl SandboxRequest {
         if !self.cwd.is_empty() && self.cwd != "." {
             command.current_dir(&self.cwd);
         }
+        // The Keychain is closed, and with it the roots a tool that lists
+        // them through Security.framework would find there; the system's own
+        // bundle stands in for them. `-e` can override it.
+        #[cfg(target_os = "macos")]
+        command.env("SSL_CERT_FILE", "/etc/ssl/cert.pem");
         #[cfg(target_os = "linux")]
         if self.egress() == crate::seccomp::Egress::TcpPorts {
             command.env(RESOLVER_OVER_TCP.0, RESOLVER_OVER_TCP.1);

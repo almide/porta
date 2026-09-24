@@ -36,7 +36,7 @@ pub(super) fn mount_protection_rules(dir: &str, protect: &[String]) -> String {
     let mut pinned: Vec<String> = vec![dir.to_string()];
     // `subpath` covers a file as well as a directory and all beneath it, so
     // one rule serves either, and one created later is covered too.
-    for name in protect {
+    for name in &crate::policy_preset::protected_in(dir, protect) {
         rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{dir}/{name}"))));
         let mut parent = std::path::Path::new(name.as_str()).parent();
         while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {

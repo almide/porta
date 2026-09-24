@@ -78,13 +78,19 @@ The agent installs deps, runs tests, edits files — on the machine that holds
 your keys. Give it one directory and one host, and close the rest.
 
 ```bash
-porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME" \
-  -- --print "Fix the bug in main.rs"
+cd project
+porta init claude          # or: porta init codex
+porta up -- -p "Fix the bug in main.rs"
 ```
 
-`claude` runs unchanged, but it can write only inside `./project`, reach only
-the host you listed, and it cannot read `~/.ssh`, `~/.aws` or the Keychain. No
-Docker daemon, no image, no change to the agent.
+`claude` runs unchanged, but it can write only inside the project and its own
+`~/.claude` — where its settings, commands and global `CLAUDE.md` stay
+unwritable, so one session cannot plant hooks for the next — and it cannot
+read `~/.ssh`, `~/.aws` or the Keychain. The recipe is a commented
+`porta.toml`, measured to what the agent needs; on macOS it takes its login
+as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
+since the Keychain is closed. No Docker daemon, no image, no change to the
+agent.
 
 ### Give a tool one API, and log every attempt
 
@@ -146,8 +152,8 @@ pins](docs/artifact-pins.md) that bind WASM to a reviewed SHA-256.
 ### Keep the settings as project config
 
 ```bash
-porta init native claude                 # writes porta.toml
-porta up -- --print "Fix the bug in main.rs"
+porta init native mytool                 # writes a porta.toml to edit
+porta up -- --some-flag
 ```
 
 Or let a working invocation write its own: `porta explain claude … --save

@@ -1,0 +1,28 @@
+# porta.toml for the Codex CLI. `porta up` starts it here, confined to this
+# directory; `porta up -- exec "…"` passes arguments on.
+#
+# Codex keeps its login, sessions and state under ~/.codex, so that is
+# writable too; its config.toml and global AGENTS.md there stay unwritable,
+# so one session cannot change the next one's sandbox, approvals, MCP servers
+# or instructions. Everything else under the home is readable but not
+# writable, and the credential stores in porta's preset stay closed.
+#
+# porta is the sandbox here. Codex's own sandbox cannot start inside it on
+# macOS (sandbox-exec does not nest), so it is switched off for the commands
+# Codex runs; porta's policy holds them instead.
+args = ["--sandbox", "danger-full-access"]
+
+[runtime]
+type = "native"
+command = "codex"
+
+[sandbox]
+mounts = [".", "~/.codex"]
+env-pass = ["OPENAI_API_KEY"]
+protect = ["~/.codex/config.toml", "~/.codex/AGENTS.md"]
+# The network is open, as it is for Codex outside porta. To allow only the
+# API and the package registries a coding session reaches, use the proxy:
+# [proxy]
+# allow = ["*.openai.com", "chatgpt.com", "*.chatgpt.com", "github.com",
+#          "*.github.com", "*.githubusercontent.com", "registry.npmjs.org",
+#          "pypi.org", "files.pythonhosted.org", "crates.io", "*.crates.io"]

@@ -103,7 +103,7 @@ pub(super) fn protections(mount: &str, protect: &[String]) -> Vec<(String, Cover
             }
         }
     }
-    for name in protect {
+    for name in crate::policy_preset::protected_in(mount, protect) {
         let path = format!("{mount}/{name}");
         if exists(&path) {
             covers.push((path, Cover::Freeze));

@@ -4,6 +4,14 @@
 
 use super::*;
 
+/// `path` with a leading `~/` made the caller's home.
+pub(super) fn expand_home(path: &str) -> String {
+    match (path.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
+        _ => path.to_string(),
+    }
+}
+
 /// Absolute, symlink-free mount path, keeping the `:ro` marker the policy
 /// builders read. Both platforms match a rule against the path the kernel
 /// resolved, so an absolute mount reached through a symlink — `/var/folders/…`,
@@ -13,9 +21,12 @@ use super::*;
 /// A mount that does not exist is refused rather than passed through as
 /// written. Passed through, it reached the kernel as a relative path and the
 /// run failed later with an exec error that named nothing the caller typed.
+///
+/// `~/` is the caller's home, as in a shell and as `porta.toml` examples write
+/// it; a quoted `-v '~/x'` and a TOML string reach porta unexpanded.
 pub(super) fn resolve_mount(mount: &str) -> Result<String, String> {
     let clean = mount.strip_suffix(":ro").unwrap_or(mount);
-    let resolved = std::fs::canonicalize(clean)
+    let resolved = std::fs::canonicalize(expand_home(clean))
         .map_err(|error| format!("mount {clean} cannot be used: {error}"))?;
     if !resolved.is_dir() {
         return Err(format!("mount {clean} is not a directory; -v takes a directory to grant"));

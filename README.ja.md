@@ -70,12 +70,17 @@ almide install github.com/almide/porta --branch main
 1つのディレクトリと1つのホストだけ与え、残りは閉じる。
 
 ```bash
-porta run claude --allow-net 'api.anthropic.com:443' -v ./project -e "HOME=$HOME" \
-  -- --print "main.rs のバグを直して"
+cd project
+porta init claude          # または porta init codex
+porta up -- -p "main.rs のバグを直して"
 ```
 
-`claude` はそのまま動きますが、書けるのは `./project` の中だけ、繋がるのは
-指定したホストだけ。`~/.ssh`・`~/.aws`・Keychain は読めません。Docker も
+`claude` はそのまま動きますが、書けるのはプロジェクトと自身の `~/.claude` だけ。
+そこでも settings・commands・グローバルな `CLAUDE.md` は書けないので、ある
+セッションが次のセッションにフックを仕込むことはできません。`~/.ssh`・`~/.aws`・
+Keychain は読めません。レシピは必要なものを実測したコメント付きの `porta.toml`
+です。macOS では Keychain を閉じているため、ログインは `ANTHROPIC_API_KEY` か
+`CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token` で発行）で渡します。Docker も
 イメージも、エージェント本体の変更も不要。
 
 ### ツールに API を1本だけ許し、全試行を記録する
@@ -136,8 +141,8 @@ porta agent-journal run.jsonl              # 読み取り専用メタデータ�
 ### 設定をプロジェクト設定として残す
 
 ```bash
-porta init native claude                 # porta.toml を生成
-porta up -- --print "main.rs のバグを直して"
+porta init native mytool                 # 編集用の porta.toml を生成
+porta up -- --some-flag
 ```
 
 うまくいった起動をそのまま書き出すこともできます: `porta explain claude … --save porta.toml`。

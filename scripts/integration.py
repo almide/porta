@@ -489,6 +489,22 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     else:
         print('PASS: --why not exercised (no strace on this Linux host)')
 
+    # A recipe is a porta.toml for one coding agent, written by `porta init`;
+    # its ~/ mounts and protected paths resolve against the home.
+    with tempfile.TemporaryDirectory() as recipe_dir:
+        for name, mount in (('claude', '~/.claude'), ('codex', '~/.codex')):
+            result = run('init', name, cwd=recipe_dir)
+            text = (pathlib.Path(recipe_dir) / 'porta.toml').read_text()
+            assert result.returncode == 0 and mount in text and 'protect' in text, (result, text)
+            (pathlib.Path(recipe_dir) / 'porta.toml').unlink()
+    # Not the whole home: on Linux without namespaces that grant would hold
+    # the preset's closed paths, and the run would rightly be refused.
+    under_home = pathlib.Path(tempfile.mkdtemp(prefix='porta-tilde-', dir=pathlib.Path.home()))
+    result = run('run', '/bin/sh', '-v', f'~/{under_home.name}', '--', '-c', f'echo x > "{under_home}/written" && echo home-mounted')
+    shutil.rmtree(under_home, ignore_errors=True)
+    assert result.returncode == 0 and 'home-mounted' in result.stdout, result
+    print('PASS: porta init writes the claude and codex recipes, and ~/ mounts resolve')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

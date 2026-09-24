@@ -17,7 +17,8 @@ pub(crate) struct Closures {
     /// that does not exist on this host is kept as written: there is nothing
     /// there to read, and on macOS the rule still covers one created later.
     pub(crate) deny_read: Vec<String>,
-    /// Names relative to each writable mount's root.
+    /// Names relative to each writable mount's root, or absolute paths that
+    /// are protected in whichever writable mount holds them.
     pub(crate) protect: Vec<String>,
     /// Regular expressions over a Unix socket's path.
     pub(crate) deny_unix: Vec<String>,
@@ -63,7 +64,7 @@ pub(crate) fn resolve(preset: &str, extra: &Closures, home: Option<&str>) -> Res
         }
     }
     for name in document.write.protect.iter().chain(&extra.protect) {
-        let name = protected_name(name)?;
+        let name = protected_name(name, home)?;
         if !closures.protect.contains(&name) {
             closures.protect.push(name);
         }
@@ -93,13 +94,28 @@ fn resolved_path(entry: &str, home: Option<&str>) -> Result<String, String> {
     Ok(std::fs::canonicalize(&expanded).map(|path| path.to_string_lossy().to_string()).unwrap_or(expanded))
 }
 
-/// A name relative to a mount root, without a way out of it.
-fn protected_name(name: &str) -> Result<String, String> {
-    let trimmed = name.trim_matches('/');
+/// A name relative to a mount root, without a way out of it; or, written
+/// `~/…` or absolute, one path, resolved like a closed read.
+fn protected_name(name: &str, home: Option<&str>) -> Result<String, String> {
+    let absolute = name.starts_with('/') || name.starts_with("~/");
+    let trimmed = if absolute { name.trim_start_matches("~/").trim_start_matches('/') } else { name }.trim_end_matches('/');
     if trimmed.is_empty() || trimmed.split('/').any(|part| part == ".." || part == "." || part.is_empty()) {
-        return Err(format!("--protect takes a name inside a mount, like .envrc or .claude/commands, not {name}"));
+        return Err(format!("--protect takes a name inside a mount, like .envrc or .claude/commands, or one path, like ~/.claude/settings.json, not {name}"));
+    }
+    if absolute {
+        return resolved_path(name, home);
     }
     Ok(trimmed.to_string())
+}
+
+/// The protected names that apply inside `mount`, relative to it: every
+/// relative name, and each absolute one that lies beneath it.
+pub(crate) fn protected_in(mount: &str, protect: &[String]) -> Vec<String> {
+    let root = format!("{}/", mount.trim_end_matches('/'));
+    protect
+        .iter()
+        .filter_map(|name| if name.starts_with('/') { name.strip_prefix(&root).map(str::to_string) } else { Some(name.clone()) })
+        .collect()
 }
 
 /// The shipped default, for `porta explain --preset` and the tests.
@@ -129,9 +145,16 @@ mod tests {
 
     #[test]
     fn a_protected_name_cannot_leave_the_mount() {
-        for name in ["../x", "a/../b", "", "/"] {
-            assert!(protected_name(name).is_err(), "{name}");
+        for name in ["../x", "a/../b", "", "/", "~/a/../b"] {
+            assert!(protected_name(name, Some("/home/u")).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn an_absolute_protected_path_applies_only_in_the_mount_holding_it() {
+        let protect = vec![".envrc".to_string(), protected_name("~/.codex/config.toml", Some("/home/u")).unwrap()];
+        assert_eq!(protected_in("/home/u/.codex", &protect), vec![".envrc".to_string(), "config.toml".to_string()]);
+        assert_eq!(protected_in("/home/u/project", &protect), vec![".envrc".to_string()]);
     }
 
     #[test]

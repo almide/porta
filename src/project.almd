@@ -67,6 +67,16 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
   }
 }
 
+// A recipe's porta.toml, as it ships: what that agent was measured to need.
+effect fn porta_init_recipe(name: String, recipe: String) -> Result[Unit, String] =
+  if fs.exists("porta.toml") then { println("porta.toml already exists."); ok(()) }
+  else {
+    fs.write("porta.toml", recipe)!
+    println("Created porta.toml for ${name}; read it, then run:")
+    println("  porta up")
+    ok(())
+  }
+
 effect fn porta_init(runtime_type: String, command: String) -> Result[Unit, String] = {
   if fs.exists("porta.toml") then {
     println("porta.toml already exists.")

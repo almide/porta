@@ -14,6 +14,7 @@ line, never dropped.
 
 | Command | Description |
 |---------|-------------|
+| `porta init <recipe>` | Write a ready-made porta.toml for a coding agent: `claude`, `codex` |
 | `porta init [native\|wasm] [cmd]` | Create porta.toml |
 | `porta up [-- args...]` | Run from porta.toml |
 
@@ -131,7 +132,8 @@ API_KEY = "literal-value"
 ```
 
 ```bash
-porta init native claude   # Generate porta.toml
+porta init claude          # A recipe: Claude Code, measured to what it needs
+porta init native mytool   # Generate a porta.toml to edit
 porta up                   # Run from porta.toml
 porta up -- --print "hi"   # Pass arguments to the command
 ```

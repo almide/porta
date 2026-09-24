@@ -51,7 +51,7 @@ fn file_advice(operation: &str, target: &str, closures: &Closures) -> String {
         return "closed by the preset or --deny-read; no mount reopens it (--preset none, or a preset without it, does)".to_string();
     }
     let git = ["/.git/hooks", "/.git/config"];
-    if git.iter().any(|name| target.contains(name)) || closures.protect.iter().any(|name| target.contains(&format!("/{name}"))) {
+    if git.iter().any(|name| target.contains(name)) || closures.protect.iter().any(|name| if name.starts_with('/') { under(name) } else { target.contains(&format!("/{name}")) }) {
         return "protected inside the mount by the preset or --protect; no mount reopens it".to_string();
     }
     let dir = grantable_directory(target);

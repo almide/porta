@@ -105,7 +105,9 @@ effect fn main() -> Result[Unit, String] = {
     "init" => {
       let runtime_type = list.get(args, 2) ?? "native"
       let command = list.get(args, 3) ?? ""
-      if command == "" then { help.print_help("init"); ok(()) }
+      let recipe = wasm_rt.wt_recipe(runtime_type)
+      if recipe != "" then project.porta_init_recipe(runtime_type, recipe)
+      else if command == "" then { help.print_help("init"); ok(()) }
       else project.porta_init(runtime_type, command)
     },
     // Alias: porta run-native is equivalent to porta run <non-wasm>
