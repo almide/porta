@@ -115,7 +115,7 @@ fn writable_dirs(allowed_dirs: &[String]) -> Vec<String> {
 /// Every mount the caller was granted, read-only ones included. Under a strict
 /// read policy these and the system directories are the only readable roots.
 fn readable_dirs(allowed_dirs: &[String]) -> Vec<String> {
-    allowed_dirs.iter().map(|dir| dir.trim_end_matches(":ro").to_string()).collect()
+    allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir).to_string()).collect()
 }
 
 /// Everything a strict read policy leaves readable that a command could live

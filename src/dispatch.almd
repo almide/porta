@@ -77,7 +77,12 @@ fn exec_request_json(req: ExecRequest) -> String =
 // The working directory a run starts in: the first granted mount, without the
 // read-only marker, or the current directory when nothing was granted.
 fn first_mount(dirs: List[String]) -> String =
-  string.replace(list.get(dirs, 0) ?? ".", ":ro", "")
+  read_only_stripped(list.get(dirs, 0) ?? ".")
+
+// A mount without its read-only marker: one ":ro", at the end. Removing every
+// ":ro" turned a directory named "a:rob" into "ab", which does not exist.
+fn read_only_stripped(dir: String) -> String =
+  if string.ends_with(dir, ":ro") then string.drop_end(dir, 3) else dir
 
 type InstanceState =
   | Created

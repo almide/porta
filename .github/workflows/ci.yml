@@ -103,6 +103,15 @@ jobs:
           target/porta check | grep -E '^ok +own PID, mount and network namespace'
           python3 scripts/integration.py target/porta
           python3 scripts/escapes.py target/porta
+      # The seeds that found each fixed bug, so the fix stays fixed, then one
+      # fresh seed per push, printed, so a new find can be replayed.
+      - name: Fuzz
+        run: |
+          python3 scripts/fuzz.py target/porta policy --iterations 250 --seed 2
+          python3 scripts/fuzz.py target/porta proxy --iterations 4 --seed 7
+          python3 scripts/fuzz.py target/porta cli --iterations 300 --seed 1
+          python3 scripts/fuzz.py target/porta policy --iterations 150
+          python3 scripts/fuzz.py target/porta proxy --iterations 4
       # Not a gate: the numbers move with the runner. Printed so every push
       # leaves what porta cost on that commit in its log.
       - name: Overhead

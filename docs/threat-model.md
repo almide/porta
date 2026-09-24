@@ -122,3 +122,21 @@ not stop one of them is accurate and not a vulnerability.
   including any row porta loses.
 - A rule the kernel cannot express refuses the run. There is no silent
   fallback, on any platform, to running with less than asked.
+- The parts that read input a stranger controls are fuzzed (`scripts/fuzz.py`):
+  mount paths with hostile names in the policy each platform generates, CONNECT
+  requests to the proxy in allow- and deny-list mode, and the command line. The
+  oracles are that nothing crashes and that nothing is ever reachable the policy
+  did not grant. CI replays the seed that found each fixed bug and adds a fresh
+  one on every push. The first runs, on 2026-09-24, found three bugs:
+  - On macOS, a mount whose name held a carriage return before a newline had its
+    rules name a different directory. The profile's per-run tagging split it
+    the way `str::lines` does, which drops the `\r`. The grant was lost, and a
+    directory of the other name would have been granted instead.
+  - On macOS, a newline in a mount name let that tagging write into the middle
+    of a rule's path string. Profile strings now escape every control character.
+  - In deny-list mode (`--proxy-deny`) the proxy let `evil.com.`, with DNS's
+    trailing dot, past a list naming `evil.com`. Names now match as DNS reads
+    them.
+
+  A `:ro` inside a mount's name, not at its end, was also stripped from the
+  working directory, which failed the run.

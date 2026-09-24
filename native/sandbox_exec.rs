@@ -124,7 +124,7 @@ const READ_POLICIES: [&str; 2] = ["open", "strict"];
 /// written. Passed through, it reached the kernel as a relative path and the
 /// run failed later with an exec error that named nothing the caller typed.
 fn resolve_mount(mount: &str) -> Result<String, String> {
-    let clean = mount.trim_end_matches(":ro");
+    let clean = mount.strip_suffix(":ro").unwrap_or(mount);
     let resolved = std::fs::canonicalize(clean)
         .map_err(|error| format!("mount {clean} cannot be used: {error}"))?;
     if !resolved.is_dir() {
