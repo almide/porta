@@ -66,6 +66,7 @@ line, never dropped.
 | `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
 | `--allow-unix <path>` | Let the command connect to this Unix socket, although the preset closes it: by default the SSH agent, gpg-agent and the container runtimes' sockets (repeatable) |
+| `--why` | Say afterwards what the sandbox refused and which flag would allow it, even when the run succeeded. On Linux the run is traced with `strace` |
 | `--no-net` | No network at all: no TCP or UDP to anywhere, and not the host's loopback either. On Linux the command gets a network namespace of its own holding only a loopback interface it can use itself; where the host refuses one, Landlock closes every TCP port and seccomp every other socket family, and a kernel that can do neither refuses the run. Refused beside `--allow-net`, `--allow-bind` or a proxy |
 | `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `native/presets/default.toml`), `none`, or a TOML file of the same shape |
 | `--deny-read <path>` | Close this path to reads on top of the preset; absolute or `~/…` (repeatable) |
@@ -188,8 +189,18 @@ unified log, which macOS writes asynchronously; porta asks it a few times over
 a few seconds, and on a heavily loaded machine a denial can still arrive after
 that, in which case the footer is missing for that run, never wrong. `PORTA_DENIALS=always` asks after
 every run, including ones that exited 0; `PORTA_DENIALS=never` keeps the footer
-away. On Linux the footer is not available yet: it needs Landlock ABI 7's audit
-records.
+away.
+
+Linux keeps no record an unprivileged process can read (Landlock logs to the
+audit subsystem), so there the footer comes from `--why`: porta runs the
+command under `strace`, which traces from outside the sandbox and keeps only
+the calls that failed, and reads the refusals back. A call the file
+permissions refused is left out — porta asks the same question itself,
+outside, and keeps only what it is allowed and the command was not. `--why`
+needs `strace` on the PATH and cannot be combined with `--max-memory-mb`.
+After a failed run at a terminal without it, porta says `--why` is there.
+On macOS `--why` prints the footer whatever the exit code, and says so when
+nothing was refused.
 
 Exit codes tell a script what happened:
 

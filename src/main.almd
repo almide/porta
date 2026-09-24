@@ -68,6 +68,11 @@ effect fn main() -> Result[Unit, String] = {
       help.print_help("")
       ok(())
     },
+    "__sandboxed" => {
+      eprintln("Error: ${wasm_rt.wt_exec_inner(list.get(args, 2) ?? "")}")
+      process.exit(125)
+      ok(())
+    },
     "agent-journal" => agent.journal_info(list.drop(args, 2)),
     "agent-check" => agent.inspect_config(list.drop(args, 2)),
     "agent" => agent.command(list.drop(args, 2), "run"),

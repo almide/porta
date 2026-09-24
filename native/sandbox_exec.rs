@@ -20,6 +20,8 @@ pub use explain::{wt_sandbox_explain, wt_sandbox_explain_json};
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod why;
+#[cfg(target_os = "linux")]
 use linux::{exec_sandboxed_linux, replace_with_sandboxed, supervise_sandboxed, RESOLVER_OVER_TCP};
 #[cfg(target_os = "macos")]
 mod macos;
@@ -88,6 +90,12 @@ struct SandboxRequest {
     /// This run's tag, minted here rather than sent: the mark every deny rule
     /// carries so the kernel's denial records for this run can be found.
     #[serde(skip)] tag: String,
+    /// Say afterwards what the sandbox refused, even when the run succeeded.
+    /// On Linux this runs the command under `strace` (see `why`).
+    #[serde(default)] why: bool,
+    /// The document this request was read from, for the copy of porta that
+    /// `--why` starts under `strace` to apply it to itself.
+    #[serde(skip)] raw: String,
 }
 
 /// A tag for one run: the pid and the clock, which no two runs on one host
@@ -124,6 +132,7 @@ impl SandboxRequest {
         let mut request: Self = serde_json::from_str(request_json)
             .map_err(|error| format!("invalid sandbox request: {error}"))?;
         request.tag = run_tag();
+        request.raw = request_json.to_string();
         let own = crate::policy_preset::Closures {
             deny_read: request.deny_read.clone(),
             protect: request.protect.clone(),
@@ -245,5 +254,17 @@ pub fn wt_parse_toml(content: impl AsRef<str>) -> String {
     match toml::from_str::<toml::Value>(content.as_ref()) {
         Ok(value) => serde_json::json!({"value": value}).to_string(),
         Err(error) => serde_json::json!({"error": error.to_string()}).to_string(),
+    }
+}
+
+/// The copy of porta `--why` starts under `strace`: it applies the request
+/// to itself and becomes the command, and returns only when that failed.
+pub fn wt_exec_inner(request_json: impl AsRef<str>) -> String {
+    match SandboxRequest::parse(request_json.as_ref()) {
+        #[cfg(target_os = "linux")]
+        Ok(request) => why::exec_in_place(&request),
+        #[cfg(not(target_os = "linux"))]
+        Ok(_) => "running a request in place is only how --why works on Linux".to_string(),
+        Err(reason) => reason,
     }
 }

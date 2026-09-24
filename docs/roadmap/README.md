@@ -30,13 +30,14 @@
 
 ## Done
 
-25 items
+26 items
 
 <details>
-<summary>Show all 25 completed items</summary>
+<summary>Show all 26 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-09-24 | [Why a run was refused, on Linux](done/10-why-on-linux.md) | --why: what the sandbox refused, on Linux too, traced with strace |
 | 2026-09-24 | [Credential sockets and UDP on Linux](done/09-linux-sockets-and-udp.md) | Linux closes credential sockets and, under --allow-net, UDP |
 | 2026-09-24 | [Closures as a preset](done/08-policy-preset.md) | What a run closes is a preset (data), not paths written into the core |
 | 2026-09-23 | [Own PID namespace on Linux](done/06-pid-namespace.md) | Run the Linux command in its own PID and mount namespace, so /proc shows only it |

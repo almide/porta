@@ -61,6 +61,11 @@ fn wt_exec_replace(request_json: String) -> String
 @extern(rs, "wasmtime_bridge", "wt_exec_supervised")
 fn wt_exec_supervised(request_json: String) -> String
 
+// The copy of porta `--why` starts under strace on Linux: applies the
+// request to itself and becomes the command; returns only why it could not.
+@extern(rs, "wasmtime_bridge", "wt_exec_inner")
+fn wt_exec_inner(request_json: String) -> String
+
 // The policy a request would apply, in words, without applying it.
 @extern(rs, "wasmtime_bridge", "wt_sandbox_explain")
 fn wt_sandbox_explain(request_json: String) -> String

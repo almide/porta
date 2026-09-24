@@ -1,14 +1,11 @@
 // CLI types, argument parsing, and shared configuration builders
-
 import fs
 import process
 import self.dispatch
 import self.sandbox
 import self.manifest
 import self.util
-
 // --- Options ---
-
 type Options = {
   path: String,
   entry: String,
@@ -46,8 +43,7 @@ type Options = {
   deny_unix: List[String],
   // Seconds before porta kills the command and everything it started; 0 means no limit.
   timeout: Int,
-  // setrlimit ceilings inherited by everything the command starts: CPU seconds,
-  // processes of this user, file size in MiB. 0 leaves one unset.
+  // setrlimit ceilings inherited by all the command starts (CPU s, processes, file MiB); 0 unsets.
   max_cpu: Int,
   max_procs: Int,
   max_file_size: Int,
@@ -57,6 +53,8 @@ type Options = {
   json: Bool,
   // Where `explain --save` writes a porta.toml of the policy in these flags.
   save_path: String,
+  // Say afterwards what the sandbox refused and which flag would allow it.
+  why: Bool,
 }
 
 fn default_options() -> Options = {
@@ -96,6 +94,7 @@ fn default_options() -> Options = {
   max_memory_mb: 0,
   json: false,
   save_path: "",
+  why: false,
 }
 
 // One argument applied. `consumed` is how many arguments it took: two for an
@@ -135,6 +134,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
     "--no-net" => flag({...opts, no_net: true}),
+    "--why" => flag({...opts, why: true}),
     "--preset" => valued({...opts, preset: next}),
     "--deny-read" => valued({...opts, deny_read: opts.deny_read + [next]}),
     "--protect" => valued({...opts, protect: opts.protect + [next]}),

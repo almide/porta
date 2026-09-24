@@ -474,6 +474,21 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     shutil.rmtree(fake_home, ignore_errors=True)
     print('PASS: the default preset closes credential stores; --preset none, --deny-read and explain work on it')
 
+    # --why says what the sandbox refused even when the run went on: macOS
+    # from the unified log, Linux by tracing the run with strace from outside.
+    if platform.system() == 'Darwin' or shutil.which('strace'):
+        outside = pathlib.Path(tempfile.mkdtemp(prefix='porta-why-', dir=pathlib.Path.home()))
+        result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
+                     '-c', f'echo x > "{outside}/refused"; exit 3')
+        shutil.rmtree(outside, ignore_errors=True)
+        assert result.returncode == 3, result
+        assert 'the sandbox refused this run' in result.stderr and f'-v {outside.resolve()}' in result.stderr, result.stderr
+        result = run('run', '/bin/echo', '-v', str(elsewhere), '--why', '--', 'fine')
+        assert result.returncode == 0 and 'refused nothing' in result.stderr, result.stderr
+        print('PASS: --why names each refusal and the flag it needed, and says when there was none')
+    else:
+        print('PASS: --why not exercised (no strace on this Linux host)')
+
     # explain --save writes a porta.toml of the flags in use, so an invocation
     # a user converged on can be committed and re-run with `porta up`. Secrets
     # and -e values are left out on purpose: a committed file is the wrong place.

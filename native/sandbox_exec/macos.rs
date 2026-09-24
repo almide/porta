@@ -72,7 +72,8 @@ pub(super) fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, Strin
 #[cfg(target_os = "macos")]
 pub(super) fn explain_denials(request: &SandboxRequest, started: &str, code: i64) {
     use crate::ceilings::{CPU_EXCEEDED, MEMORY_EXCEEDED, TIMED_OUT};
-    let setting = std::env::var("PORTA_DENIALS").unwrap_or_default();
+    // --why asks for the footer whatever the outcome, as PORTA_DENIALS=always does.
+    let setting = if request.why { "always".to_string() } else { std::env::var("PORTA_DENIALS").unwrap_or_default() };
     // A run porta's own supervisor ended has nothing the kernel refused to
     // explain, and the log query would cost it seconds of retries.
     let ended_by_porta = matches!(code, TIMED_OUT | CPU_EXCEEDED | MEMORY_EXCEEDED);
@@ -80,5 +81,8 @@ pub(super) fn explain_denials(request: &SandboxRequest, started: &str, code: i64
         return;
     }
     let denials = crate::denials::collect(&request.tag, started);
+    if denials.is_empty() && request.why {
+        eprintln!("[porta] the sandbox refused nothing this run");
+    }
     eprint!("{}", crate::denials::footer(&denials, &request.rerun_line(), &request.closures));
 }

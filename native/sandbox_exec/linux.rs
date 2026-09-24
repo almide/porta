@@ -222,6 +222,9 @@ pub(super) fn replace_with_sandboxed(request: &SandboxRequest) -> String {
 
 #[cfg(target_os = "linux")]
 pub(super) fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, String> {
+    if request.why {
+        return request.supervise_traced();
+    }
     use std::os::unix::process::CommandExt;
 
     // porta keeps its own sockets here — a proxy thread it started is still
@@ -266,5 +269,7 @@ pub(super) fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, Strin
         crate::memory_ceiling::place(&mut child, &request.tag, request.max_memory_mb.saturating_mul(MIB))?;
     }
     // The memory ceiling is the cgroup's here, so the supervisor watches none.
-    wait_within(child, request.timeout, request.max_cpu, 0).map_err(|error| format!("waiting for the command failed: {error}"))
+    let code = wait_within(child, request.timeout, request.max_cpu, 0).map_err(|error| format!("waiting for the command failed: {error}"))?;
+    super::why::point_at_why(code);
+    Ok(code)
 }

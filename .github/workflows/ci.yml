@@ -88,6 +88,10 @@ jobs:
           ls -la "/run/user/$(id -u)/bus"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      # --why traces the run with strace on Linux.
+      - name: Install strace for --why
+        if: matrix.os == 'ubuntu-latest'
+        run: command -v strace || (sudo apt-get update -qq && sudo apt-get install -y -qq strace)
       - name: Integration
         run: python3 scripts/integration.py target/porta
       - name: Escape corpus

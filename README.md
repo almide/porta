@@ -165,7 +165,8 @@ porta run curl --allow-net '*:80'  -- https://example.com # → exit 7, port 443
 
 A refused run does not leave you guessing: after a non-zero exit, porta reads
 the kernel's denial records and prints which flag each refusal would have
-needed (macOS today; Linux needs Landlock ABI 7). Exit codes tell a script
+needed (on macOS after every failed run; on Linux with `--why`, which traces
+the run with `strace`). Exit codes tell a script
 apart a command that failed from one that never ran — see
 [the CLI reference](docs/cli.md#when-a-run-is-refused).
 

@@ -46,7 +46,7 @@ static INSTANCES: Mutex<Vec<Option<WasmInstance>>> = Mutex::new(Vec::new());
 // The Almide side resolves these by module, so the FFI surface stays here while
 // the implementations live next to the state they own.
 pub use crate::http_proxy::{wt_is_host_allowed, wt_proxy_start, wt_proxy_stop};
-pub use crate::sandbox_exec::{wt_exec_replace, wt_exec_sandboxed, wt_exec_supervised, wt_parse_toml, wt_sandbox_explain, wt_sandbox_explain_json};
+pub use crate::sandbox_exec::{wt_exec_inner, wt_exec_replace, wt_exec_sandboxed, wt_exec_supervised, wt_parse_toml, wt_sandbox_explain, wt_sandbox_explain_json};
 pub use crate::sandbox_check::{wt_sandbox_check, wt_sandbox_check_json};
 pub use crate::sandbox_profile::wt_sandbox_profile;
 pub use crate::http_client::wt_http_request;

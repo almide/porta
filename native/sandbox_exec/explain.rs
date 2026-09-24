@@ -159,14 +159,12 @@ impl SandboxRequest {
 
 /// `word` as a shell would need it typed: bare when it is plain, in single
 /// quotes otherwise.
-#[cfg(target_os = "macos")]
 pub(super) fn shell_word(word: &str) -> String {
     let plain = !word.is_empty()
         && word.chars().all(|ch| ch.is_ascii_alphanumeric() || "-_./:=@%+,".contains(ch));
     if plain { word.to_string() } else { format!("'{}'", word.replace('\'', "'\\''")) }
 }
 
-#[cfg(target_os = "macos")]
 impl SandboxRequest {
     /// The `porta run` command line that would reproduce this request, for
     /// the footer to add grants to. Options are rebuilt from the policy rather

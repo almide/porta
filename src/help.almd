@@ -23,6 +23,7 @@ fn print_common_runtime_opts() -> Unit = {
   println("  --env-pass <NAME,...>   Copy these host variables in (the rest stay outside)")
   println("  --allow-unix <path>     Let the command reach this credential socket (repeatable)")
   println("  --allow-bind <port>     Let the command listen on this port under --allow-net")
+  println("  --why                   Say afterwards what the sandbox refused and which flag allows it (strace on Linux)")
   println("  --no-net                No network at all: no TCP, UDP or host loopback (own network namespace on Linux)")
   println("  --preset <name|file>    What to close beyond the grants: default (credential stores etc.), none, or a file")
   println("  --deny-read <path>      Close this path to reads, on top of the preset (repeatable; ~/ allowed)")
