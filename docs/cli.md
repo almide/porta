@@ -133,7 +133,7 @@ checked-in policy. Secrets and `-e` values are left out on purpose.
 
 ## Verifying a release
 
-From 0.6.7 on, every release carries two Sigstore signatures, both keyless
+From 0.6.8 on, every release carries two Sigstore signatures, both keyless
 and both issued to porta's release workflow at the release's tag:
 
 - `porta-checksums.sha256.sigstore.json` signs the checksum list. `install.sh`
