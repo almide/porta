@@ -29,10 +29,14 @@ if it breaks one of them. The short version:
   multicast addresses, and records every decision before acting on it.
 - The child's environment holds nothing of the caller's shell beyond `PATH`,
   `HOME`, the locale and the terminal unless `-e` or `--env-pass` named it.
-- On macOS, inside a writable mount, the operator's repository hooks and config
-  and the trusted files at the mount root cannot be written or renamed away;
-  another process's arguments, the Keychain, `open(1)` and the credential
-  agents' sockets are closed.
+- What the preset (`native/presets/default.toml`, shown by `porta explain`)
+  closes stays closed: credential stores to reads in every mode, the credential
+  agents' sockets to `connect`, and inside a writable mount the repository hooks
+  and config and the trusted files at the root, which cannot be written or
+  renamed away. On Linux the sockets and the mount protections need the
+  command's mount namespace; without one the run says what stays open.
+- On macOS another process's arguments, the Keychain and `open(1)` are closed.
+- Under `--allow-net` no UDP leaves: on Linux an internet socket must be TCP.
 - A WASM agent's tool arguments are validated against the declared schema
   before anything executes, and a guest cannot grant itself a capability,
   choose a credential, or bypass a failed completion check.
@@ -55,22 +59,18 @@ not a container is accurate and not news.
   is one reason porta refuses to run as root.
 - **Reads are open by default.** `--read-policy strict` is opt-in in 0.6.x.
 - **The default policy is not a secret store.** Without `strict`, an agent can
-  read what your user can read, minus the credential stores porta closes in
-  every mode on macOS (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`,
-  `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, the Keychains,
-  browser profiles). On Linux the default mode closes none of these; `strict`
-  closes the whole home.
+  read what your user can read, minus what the preset closes. A credential
+  store the preset does not name is readable; add it with `--deny-read`.
 - **With the network open, a child may listen and may reach Unix sockets.**
   Listening is closed only once `--allow-net` names a port, and reopened per
-  port by `--allow-bind`. On macOS the SSH agent, gpg-agent and container
-  runtime sockets are closed in every mode; on Linux they are not until
-  Landlock's `RESOLVE_UNIX` is used.
-- **Inside a writable mount, Linux protects nothing in particular.** The
-  macOS profile keeps the operator's repository hooks and config and the
-  trusted files at a mount root unwritable; Landlock grants a directory whole.
-- **UDP is open under `--allow-net` on Linux.** Landlock's rules reach TCP;
-  a named port on Linux says nothing about UDP. Proxy mode closes UDP on both
-  platforms.
+  port by `--allow-bind`. The credential sockets the preset names are closed;
+  on Linux only those bound when the run starts, and only where the host
+  allows unprivileged user namespaces.
+- **Inside a writable mount on a Linux host without user namespaces, nothing
+  in particular is protected.** Landlock grants a directory whole; the run
+  says so.
+- **Name resolution under `--allow-net` on Linux goes over TCP.** A resolver
+  that ignores `RES_OPTIONS=use-vc` cannot resolve there; proxy mode can.
 - **A tool you granted can do what you granted it.** porta checks arguments
   against a schema, not intent.
 

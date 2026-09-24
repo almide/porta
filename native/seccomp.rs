@@ -161,6 +161,8 @@ const TIOCLINUX: u32 = 0x541c;
 const AT_EMPTY_PATH: u32 = 0x1000;
 
 const AF_INET: u32 = libc::AF_INET as u32;
+const AF_INET6: u32 = libc::AF_INET6 as u32;
+const IPPROTO_TCP: u32 = libc::IPPROTO_TCP as u32;
 const AF_NETLINK: u32 = libc::AF_NETLINK as u32;
 const AF_PACKET: u32 = libc::AF_PACKET as u32;
 const AF_BLUETOOTH: u32 = libc::AF_BLUETOOTH as u32;
@@ -180,7 +182,8 @@ pub enum Egress {
     /// No network rule: the baseline alone.
     Open,
     /// `--allow-net` names TCP ports. Landlock holds the port rule; the
-    /// baseline closes the families a TCP rule cannot see.
+    /// baseline closes the families a TCP rule cannot see, and an internet
+    /// socket must be TCP, which closes UDP, SCTP and ICMP echo.
     TcpPorts,
     /// The loopback proxy is the only permitted egress.
     ProxyOnly,
@@ -379,6 +382,21 @@ fn socket_rules(asm: &mut Assembler, egress: Egress) {
         asm.if_equal(AF_INET, Target::Verdict(Verdict::Allow), refuse);
         return;
     }
+    if egress == Egress::TcpPorts {
+        // an internet socket must be a TCP stream, the one thing a port rule
+        // speaks for; any other family goes on to the checks below
+        asm.load(arg_high(0));
+        asm.if_equal(0, Target::Next, refuse);
+        asm.load(arg_low(0));
+        asm.if_equal(AF_INET, Target::Ahead(1), Target::Next);
+        asm.if_equal(AF_INET6, Target::Next, Target::Ahead(6));
+        asm.load(arg_low(1));
+        asm.mask(SOCK_TYPE_MASK);
+        asm.if_equal(SOCK_STREAM, Target::Next, refuse);
+        asm.load(arg_low(2));
+        asm.if_equal(0, Target::Verdict(Verdict::Allow), Target::Next);
+        asm.if_equal(IPPROTO_TCP, Target::Verdict(Verdict::Allow), refuse);
+    }
     // domain: the high word empty, and none of the families no command needs
     asm.load(arg_high(0));
     asm.if_equal(0, Target::Next, refuse);
@@ -393,11 +411,13 @@ fn socket_rules(asm: &mut Assembler, egress: Egress) {
 }
 
 static BASELINE: OnceLock<Vec<Instruction>> = OnceLock::new();
+static TCP_PORTS: OnceLock<Vec<Instruction>> = OnceLock::new();
 static PROXY_ONLY: OnceLock<Vec<Instruction>> = OnceLock::new();
 
 fn slot(egress: Egress) -> &'static OnceLock<Vec<Instruction>> {
     match egress {
-        Egress::Open | Egress::TcpPorts => &BASELINE,
+        Egress::Open => &BASELINE,
+        Egress::TcpPorts => &TCP_PORTS,
         Egress::ProxyOnly => &PROXY_ONLY,
     }
 }
@@ -538,6 +558,22 @@ mod tests {
     }
 
     #[test]
+    fn tcp_ports_leave_an_internet_socket_only_tcp() {
+        let code = assemble(Egress::TcpPorts);
+        let socket = |domain: u64, kind: u64, proto: u64| evaluate(&code, libc::SYS_socket as u32, [domain, kind, proto, 0, 0, 0]);
+        assert_eq!(socket(AF_INET as u64, SOCK_STREAM as u64, 0), ACTION_ALLOW);
+        assert_eq!(socket(AF_INET6 as u64, SOCK_STREAM as u64 | 0x80800, IPPROTO_TCP as u64), ACTION_ALLOW);
+        assert_eq!(socket(AF_INET as u64, libc::SOCK_DGRAM as u64, 0), EAFNOSUPPORT);
+        assert_eq!(socket(AF_INET6 as u64, libc::SOCK_DGRAM as u64, 0), EAFNOSUPPORT);
+        assert_eq!(socket(AF_INET as u64, SOCK_STREAM as u64, 132 /* SCTP */), EAFNOSUPPORT);
+        assert_eq!(socket(AF_INET as u64, libc::SOCK_SEQPACKET as u64, 0), EAFNOSUPPORT);
+        assert_eq!(socket(libc::AF_UNIX as u64, libc::SOCK_DGRAM as u64, 0), ACTION_ALLOW);
+        assert_eq!(socket(AF_NETLINK as u64, libc::SOCK_DGRAM as u64, NETLINK_ROUTE as u64), ACTION_ALLOW);
+        assert_eq!(socket(AF_PACKET as u64, libc::SOCK_DGRAM as u64, 0), EAFNOSUPPORT);
+        assert_eq!(socket(AF_INET as u64 | (1 << 32), SOCK_STREAM as u64, 0), EAFNOSUPPORT);
+    }
+
+    #[test]
     fn a_foreign_architecture_is_killed() {
         let code = assemble(Egress::Open);
         assert_eq!(evaluate_on(&code, AUDIT_ARCH ^ 1, libc::SYS_write as u32, [0; 6]), ACTION_KILL_PROCESS);
@@ -545,7 +581,7 @@ mod tests {
 
     #[test]
     fn every_jump_lands_inside_the_program() {
-        for egress in [Egress::Open, Egress::ProxyOnly] {
+        for egress in [Egress::Open, Egress::TcpPorts, Egress::ProxyOnly] {
             let code = assemble(egress);
             for (index, ins) in code.iter().enumerate() {
                 let reach = |offset: usize| assert!(index + 1 + offset < code.len(), "jump past the end at {index}");

@@ -46,6 +46,8 @@ true.
 | Another process's arguments and environment are unreadable (macOS every mode; Linux every mode where unprivileged user namespaces are allowed, otherwise under `--read-policy strict`) | Seatbelt `procargs`/`process-info` denies; Linux: a PID namespace of the command's own with a fresh `/proc`, and `/proc` closed under strict | `escapes.py` "read another process's arguments", "…, default reads"; integration "hides other processes in a PID namespace" |
 | A mount's repository hooks and the names the preset protects cannot be written or renamed away (macOS; Linux where unprivileged user namespaces are allowed) | macOS: profile per-path denies plus `deny file-write-unlink` on ancestors; Linux: each bind-mounted read-only onto itself, and the mount root and `.git` pinned by a bind mount, which cannot be renamed | integration "repository hooks and mount roots are closed"; `escapes.py` |
 | Under `--no-net`, nothing is reached: no TCP, no UDP, not the host's loopback | Seatbelt `deny network*`; Linux: own network namespace, or Landlock with no TCP port plus seccomp's proxy-only filter | `escapes.py` "reach anything under --no-net"; integration "--no-net reaches nothing" |
+| Under `--allow-net` no UDP leaves: an internet socket is TCP only on Linux, and the profile names TCP ports only on macOS | Linux: seccomp refuses a non-TCP `AF_INET`/`AF_INET6` socket; Seatbelt `remote tcp` rules | `escapes.py` "get a UDP answer from outside under a TCP port rule"; integration |
+| A credential socket the preset names cannot be reached unless `--allow-unix` names it (Linux where unprivileged user namespaces are allowed) | Seatbelt `deny network-outbound` by path regex; Linux: each matching socket bound at the start covered by `/dev/null` in the command's mount namespace | `escapes.py` "reach the SSH agent's socket"; integration |
 | Proxy mode: the loopback proxy is the only egress | Landlock TCP port rule + seccomp socket-family filter; Seatbelt profile | integration "proxy mode is the only egress" |
 | The proxy serves only this run's client, and never tunnels to loopback/metadata addresses | per-run credential; resolved-address guard | integration "CONNECT needs the run credential" |
 | Syscalls that reach around a file policy are refused (Linux, every mode) | seccomp baseline: `ptrace`, `process_vm_*`, mounts, namespaces, `io_uring`, `execveat(AT_EMPTY_PATH)`, … | `escapes.py` "ptrace", "fileless exec", "io_uring", "new user namespace" |
@@ -99,12 +101,20 @@ not stop one of them is accurate and not a vulnerability.
   `/private/etc` whole, because `sandbox-exec` grants a subtree; there, file
   permissions are what separate `shadow`, which is why porta refuses to run as
   root (`--allow-root` overrides, and the operator owns that choice).
-- **Mount-internal protections.** The repository-hooks and trusted-file denies
-  inside a writable mount are macOS-only: Landlock grants a directory whole and
-  cannot carve files out of it. On Linux, a writable mount is writable throughout.
-- **UDP under `--allow-net`.** Landlock's rules reach TCP; a named port on Linux
-  says nothing about UDP, which stays open under `--allow-net` (and closes name
-  resolution if it did not). Proxy mode closes UDP on both platforms via seccomp.
+- **Linux without a mount namespace.** Landlock grants a directory whole and
+  has no rule over a Unix socket's `connect`, so the repository-hooks and
+  trusted-file protections inside a writable mount, and the credential sockets
+  the preset closes, are held on Linux in the command's mount namespace. Where
+  the host refuses unprivileged user namespaces they are not, and the run says
+  so, naming the sockets that stay reachable.
+- **Credential sockets bound later.** On Linux porta covers the matching sockets
+  bound when the run starts (`/proc/net/unix`); an agent started during the run
+  is not covered. macOS matches the pattern at `connect`, whenever it was bound.
+- **Name resolution under `--allow-net` on Linux.** UDP is closed there, so
+  names resolve over TCP: porta sets `RES_OPTIONS=use-vc`, which glibc (and Go,
+  which then hands lookups to glibc) follows, and lets TCP reach port 53 on
+  any host. A resolver that ignores the variable — musl, a static Go binary,
+  c-ares — fails to resolve rather than leaking over UDP.
 - **The denial footer.** After a failed run porta names the flag each refusal
   needed. On macOS it reads this from the unified log; on Linux the equivalent
   needs Landlock ABI 7 audit records and is not there yet.

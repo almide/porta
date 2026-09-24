@@ -2,7 +2,7 @@
   "tool": "srt",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 15,
+  "tried": 17,
   "escaped": 5,
   "hardening_gaps": 0,
   "not_offered": 5,
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "n/a",
       "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no UDP egress under --allow-net"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "agent socket refused"
     },
     {
       "name": "open a socket without socket() via io_uring",

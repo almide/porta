@@ -752,6 +752,40 @@ print('proxy_env', bool(__import__('os').environ.get('HTTPS_PROXY')))
         assert 'udp4 True' in result.stdout and 'unix True' in result.stdout, result.stdout
         print('PASS: proxy mode is the only egress — UDP, Unix, IPv6 and netlink all denied')
 
+        # --allow-net names TCP ports, and Landlock's rule speaks for TCP alone:
+        # an internet socket must then be TCP, and names resolve over TCP 53.
+        result = run('run', sys.executable, '--allow-net', '*:443', '-v', str(workspace),
+                     '-v', str(pathlib.Path(sys.base_prefix).resolve()) + ':ro',
+                     '--', '-c', families + "print('res', __import__('os').environ.get('RES_OPTIONS'))")
+        assert result.returncode == 0, result.stderr
+        opened = dict(line.split() for line in result.stdout.split('\n') if line)
+        assert opened['tcp4'] == 'True' and opened['tcp6'] == 'True' and opened['unix'] == 'True', opened
+        assert opened['udp4'] == 'False' and opened['res'] == 'use-vc', opened
+        print('PASS: under --allow-net an internet socket is TCP only, and names resolve over TCP')
+
+        # A credential socket the preset names is covered in the command's
+        # mount namespace, unless --allow-unix opens it.
+        sockets = pathlib.Path(tempfile.mkdtemp(prefix='ssh-porta', dir=pathlib.Path.home()))
+        agent = socket.socket(socket.AF_UNIX)
+        agent.bind(str(sockets / 'agent.4242'))
+        agent.listen(2)
+        reach = 'import socket,sys\ntry: socket.socket(socket.AF_UNIX).connect(sys.argv[1]); print("reached")\nexcept OSError: print("refused")'
+        try:
+            closed = run('run', sys.executable, '-v', str(workspace), '--', '-c', reach, str(sockets / 'agent.4242'))
+            opened = run('run', sys.executable, '-v', str(workspace), '--allow-unix', str(sockets / 'agent.4242'),
+                         '--', '-c', reach, str(sockets / 'agent.4242'))
+        finally:
+            agent.close()
+            shutil.rmtree(sockets)
+        assert opened.stdout.strip() == 'reached', opened
+        host = json.loads(run('check', '--json').stdout)
+        if any('PID, mount and network namespace' in p['name'] and p['present'] for p in host['primitives']):
+            assert closed.stdout.strip() == 'refused', closed
+            print('PASS: a credential socket the preset names is refused unless --allow-unix opens it')
+        else:
+            assert 'these sockets stay reachable' in closed.stderr, closed
+            print('PASS: without a mount namespace a credential socket stays reachable, and the run says so')
+
         # --read-policy strict confines reads to the granted mounts and the
         # platform's own directories. A credential outside both is unreadable.
         secrets = ungranted / 'porta-secrets'

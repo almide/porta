@@ -58,7 +58,7 @@ line, never dropped.
 | `--secret <KEY=VALUE>` | Inject a secret as an env var |
 | `-v <path>` | Mount a directory (writable) |
 | `-v <path>:ro` | Mount a directory (read-only) |
-| `--allow-net <host:port>` | Allow outbound TCP by port (repeatable). The host part is not enforced at the OS layer — use `--proxy-allow` for that |
+| `--allow-net <host:port>` | Allow outbound TCP by port (repeatable). The host part is not enforced at the OS layer — use `--proxy-allow` for that. UDP is closed; on Linux names resolve over TCP 53 |
 | `--proxy-allow <hosts>` | Route egress through porta's CONNECT proxy and allow only these hosts |
 | `--proxy-deny <hosts>` | Same, denying these hosts |
 | `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
@@ -70,7 +70,7 @@ line, never dropped.
 | `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `native/presets/default.toml`), `none`, or a TOML file of the same shape |
 | `--deny-read <path>` | Close this path to reads on top of the preset; absolute or `~/…` (repeatable) |
 | `--protect <name>` | Keep this name, relative to each writable mount, unwritable and unrenamable (repeatable) |
-| `--deny-unix <regex>` | Refuse Unix sockets whose path matches, on top of the preset (repeatable; macOS) |
+| `--deny-unix <regex>` | Refuse Unix sockets whose path matches, on top of the preset (repeatable). On Linux, the sockets bound when the run starts |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
 | `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
@@ -114,7 +114,7 @@ network = ["*:443"]       # Restrict to these ports (empty = all open)
 # preset = "none"         # default, none, or a preset file
 # deny-read = ["~/work/secrets"]  # Closed to reads on top of the preset
 # protect = [".env"]      # Unwritable inside every writable mount
-# deny-unix = ['/my-agent\.sock$']  # Refused sockets (macOS)
+# deny-unix = ['/my-agent\.sock$']  # Refused sockets
 
 [proxy]
 # allow = ["api.example.com"]   # egress only through the CONNECT proxy, these hosts

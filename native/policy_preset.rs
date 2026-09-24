@@ -71,7 +71,7 @@ pub(crate) fn resolve(preset: &str, extra: &Closures, home: Option<&str>) -> Res
     for pattern in document.unix.deny.iter().chain(&extra.deny_unix) {
         // A control character would carry the profile's rule onto a second
         // line; no socket path needs one.
-        if pattern.is_empty() || pattern.chars().any(char::is_control) {
+        if pattern.is_empty() || pattern.chars().any(char::is_control) || regex::Regex::new(pattern).is_err() {
             return Err(format!("--deny-unix takes a regular expression over a socket path, not {pattern:?}"));
         }
         if !closures.deny_unix.contains(pattern) {
@@ -132,5 +132,11 @@ mod tests {
         for name in ["../x", "a/../b", "", "/"] {
             assert!(protected_name(name).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn a_socket_pattern_must_be_a_regular_expression() {
+        let extra = Closures { deny_unix: vec!["(".into()], ..Closures::default() };
+        assert!(resolve("none", &extra, Some("/home/u")).is_err());
     }
 }

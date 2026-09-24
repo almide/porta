@@ -36,7 +36,8 @@ does not show you where.
 | **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
 | **Read-only mount** | `-v ./data:ro` → read yes, write no | same |
 | **No network (`--no-net`)** | every outbound, bind and inbound denied, the resolver included | a network namespace of its own with only a loopback interface, where the host allows unprivileged user namespaces; otherwise Landlock closes every TCP port and seccomp every other family |
-| **Network by port** | `--allow-net '*:443'` | same, needs Landlock ABI 4 |
+| **Network by port** | `--allow-net '*:443'`; UDP closed | same, needs Landlock ABI 4; UDP, SCTP and ICMP closed by seccomp, and names resolve over TCP 53 (`RES_OPTIONS=use-vc`) |
+| **Credential sockets** | the preset's patterns refused at `connect` unless `--allow-unix` names the path | the matching sockets bound at the start covered with `/dev/null` in the command's mount namespace; where the host refuses one, reachable (the run names them) |
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
 | **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
 
@@ -140,10 +141,14 @@ host execution and HTTP requests go through the checked MCP built-in tools.
   `--no-net` falls back to Landlock and seccomp. On Ubuntu,
   `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
   profile Ubuntu documents for a program that needs them, for porta alone.
-- **Linux protects inside a mount only in a mount namespace.** Landlock grants
-  a directory whole, so the repository-hooks and trusted-file protections
-  inside a writable mount need the namespace; where the host refuses one they
-  are not applied, and the run says so.
+- **Linux protects inside a mount, and closes credential sockets, only in a
+  mount namespace.** Landlock grants a directory whole and has no rule over a
+  Unix socket's `connect`, so both need the namespace; where the host refuses
+  one they are not applied, and the run says so. A credential socket bound
+  after the run starts is not covered on Linux.
+- **Under `--allow-net`, names resolve over TCP on Linux.** UDP is closed, so a
+  resolver that does not follow `RES_OPTIONS=use-vc` (musl, a static Go binary)
+  cannot resolve; use `--proxy-allow`, where the proxy resolves.
 - **Resource ceilings are what an unprivileged process can place.**
   `--timeout`, `--max-cpu`, `--max-procs` and `--max-file-size` are a process
   group kill and rlimits the kernel enforces on every descendant, per process.

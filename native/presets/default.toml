@@ -82,8 +82,8 @@ protect = [
 # Unix sockets that act for the caller's own credentials: the SSH agent,
 # gpg-agent, container runtimes (whose socket is root on the host). Regular
 # expressions over the socket's path. Closed to connects unless --allow-unix
-# names one. Enforced on macOS; on Linux these sockets live under paths the
-# [read] list above already hides, or in /tmp where they are named by agent.
+# names one: on macOS at connect, on Linux each one bound when the run starts
+# is covered in the command's mount namespace.
 deny = [
   '/com\.apple\.launchd\.[^/]+/Listeners$',
   '/ssh-[^/]+/agent\.[0-9]+$',

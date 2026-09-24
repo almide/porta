@@ -9,7 +9,7 @@ platform.
 
 | Tool | Version | Platforms run |
 |---|---|---|
-| porta | 0.6.10 (2026-09-24) | macOS, Linux |
+| porta | 0.6.11 (2026-09-24) | macOS, Linux |
 | [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic sandbox-runtime) | 0.0.77 (npm) | macOS, Linux |
 | [Fence](https://github.com/fencesandbox/fence) | 737751a (2026-09-11) | macOS, Linux |
 | [nono](https://github.com/nolabs-ai/nono) | 0.78.0 | macOS, Linux |
@@ -53,7 +53,7 @@ directory when the row grants none.
 
 | Attempt | porta | srt | Fence | nono |
 |---|---|---|---|---|
-| **tried / escaped / not offered** | **20 / 0 / 0** | 15 / 5 / 5 | 13 / 5 / 7 | 12 / 4 / 7 |
+| **tried / escaped / not offered** | **22 / 0 / 0** | 17 / 5 / 5 | 14 / 5 / 8 | 13 / 5 / 8 |
 | write outside every mount | held | held | held | held |
 | rename the mount root away | held | held | held | **ESCAPED** |
 | write a git hook inside a mount | held | held | held | **ESCAPED** |
@@ -62,10 +62,12 @@ directory when the row grants none.
 | inherit an open file descriptor | held | held | held | — |
 | read an SSH private key | held | **ESCAPED** | **ESCAPED** | held |
 | read the GitHub CLI token | held | **ESCAPED** | **ESCAPED** | held |
+| reach the SSH agent's socket | held | held | held | **ESCAPED** |
 | read another process's arguments | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
 | read the login Keychain | held | **ESCAPED** | **ESCAPED** | held |
 | reach Launch Services | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
 | reach a port the policy did not open | held | held | not offered | not offered |
+| get a UDP answer under a TCP port rule | held | held | not offered | not offered |
 | reach anything with no network granted | held | held | held | held |
 | reach the cloud metadata endpoint via the proxy | held | held | held | held |
 | open a raw socket | held | held | not offered | not offered |
@@ -89,6 +91,10 @@ What the escapes are:
 - **Launch Services**. The sandbox could reach `com.apple.lsd.mapdb`
   (nono also `modifydb`). That is the service `open(1)` asks to start an
   application, and the application runs outside the sandbox.
+- **SSH agent** (nono). A listener at the path ssh-agent uses
+  (`ssh-XXXX/agent.<pid>`) outside every grant accepted a connection: whoever
+  reaches the agent signs with the caller's keys without reading them. srt,
+  Fence and porta refuse the socket by default.
 - **Mount root, git hook** (nono). Inside a directory granted for writing,
   nono let `.git/hooks/pre-commit` be written and the directory itself be
   renamed away. A written hook runs as the operator at the next `git commit`,
@@ -103,7 +109,7 @@ What the escapes are:
 
 | Attempt | porta | srt | Fence | nono | landrun |
 |---|---|---|---|---|---|
-| **tried / escaped / not offered** | **26 / 0 / 0** | 21 / 2 / 5 | 20 / 2 / 6 | 22 / 4 / 3 | 20 / 5 / 6 |
+| **tried / escaped / not offered** | **28 / 0 / 0** | 23 / 2 / 5 | 21 / 3 / 7 | 24 / 5 / 3 | 22 / 7 / 6 |
 | write outside every mount | held | held | held | held | held |
 | rename the mount root away | held | held | held | **ESCAPED** | **ESCAPED** |
 | write a git hook inside a mount | held | held | held | **ESCAPED** | **ESCAPED** |
@@ -112,6 +118,7 @@ What the escapes are:
 | inherit an open file descriptor | held | held | held | — | held |
 | read an SSH private key | held | **ESCAPED** | **ESCAPED** | held | **ESCAPED** |
 | read the GitHub CLI token | held | **ESCAPED** | **ESCAPED** | held | held |
+| reach the SSH agent's socket | held | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
 | read /etc/shadow under strict | held | held | held | held | held |
 | read another process's arguments (strict reads) | held | held | held | **ESCAPED** | held |
 | read another process's arguments (default reads) | held | held | held | **ESCAPED** | held |
@@ -119,6 +126,7 @@ What the escapes are:
 | reach anything with no network granted | held | held | held | held | **ESCAPED** |
 | reach the cloud metadata endpoint via the proxy | held | held | held | held | not offered |
 | get a UDP answer from outside in proxy mode | held | held | held | held | **ESCAPED** |
+| get a UDP answer under a TCP port rule | held | held | not offered | held | **ESCAPED** |
 | open a socket without `socket()` via io_uring | held | held | held | held | held |
 | exec a memory file (fileless) | held | held | held | held | held |
 | attach to a process outside the sandbox (ptrace) | held | held | held | held | held |
@@ -147,12 +155,20 @@ What the escapes are:
   the repository config and the preset's protected names read-only onto
   themselves, and pins the mount root with a bind mount. srt and Fence held
   both, through bubblewrap's read-only binds.
-- **UDP** (landrun, in both network rows). Landlock's network rules cover TCP
+- **SSH agent** (Fence, nono, landrun). A listener at ssh-agent's path
+  outside every grant accepted a connection. Landlock has no rule over a Unix
+  socket's `connect`; porta covers each credential socket its preset names
+  with `/dev/null` in the command's mount namespace, and srt's bubblewrap
+  mount leaves it out. Until 2026-09-24 porta closed these sockets on macOS
+  only.
+- **UDP** (landrun, in all three network rows). Landlock's network rules cover TCP
   only. Under a policy that granted no network, landrun refused a TCP
   connection to `1.1.1.1:53` but let a UDP DNS question to the same address
-  get its answer. porta has the
+  get its answer; so did one under a TCP port rule. porta has the
   same Landlock limit, so it adds a seccomp filter that refuses every socket
-  family a TCP rule cannot see. srt, Fence and nono isolate the network in a
+  family a TCP rule cannot see, and under a port rule every internet socket
+  that is not TCP (names then resolve over TCP 53). Until 2026-09-24 porta
+  left UDP open under `--allow-net` too. srt, Fence and nono isolate the network in a
   namespace or proxy.
 - **Another process's arguments** (nono, in both read modes).
   `/proc/<pid>/cmdline` of a process outside the sandbox was readable. The
@@ -195,17 +211,17 @@ is allowing a host (cloud metadata) is not offered.
   their proxy. porta gives the command its own namespace (loopback only)
   under `--no-net`. Under `--allow-net` and `--proxy-allow` it stays in the
   host's, where Landlock's TCP port rules and a seccomp filter refuse every
-  other socket family. No network row above shows an escape from that
-  difference, but under `--allow-net` UDP stays open on Linux (see the
-  threat model). A namespace would not close that without a network stack of
-  porta's own.
+  other socket family, and under `--allow-net` every internet socket that is
+  not TCP. No network row above shows an escape from that difference. The
+  cost is name resolution: without UDP it goes over TCP 53, which a resolver
+  that ignores `RES_OPTIONS` (musl, a static Go binary) does not do.
 - **Hosts that refuse unprivileged user namespaces.** Examples are Ubuntu 23.10
   and later with `kernel.apparmor_restrict_unprivileged_userns=1`, and most
   containers. porta then cannot create the PID namespace. The run goes ahead
   in the host's, says so on stderr, and `porta check` shows it. There, the
   default read mode leaves other processes' `/proc` entries readable, and only
   `--read-policy strict` closes them; a writable mount's hooks and protected
-  names are not protected; and the preset's closed paths are carved out of a
+  names are not protected; credential sockets stay reachable; and the preset's closed paths are carved out of a
   Landlock read grant, so a closed path inside a mount refuses the run. srt and Fence depend on bubblewrap, which
   needs the same kernel permission (or an AppArmor profile that grants it).
   On Ubuntu, `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"`

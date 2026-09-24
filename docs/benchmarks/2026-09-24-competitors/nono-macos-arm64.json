@@ -2,10 +2,10 @@
   "tool": "nono",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 12,
-  "escaped": 4,
+  "tried": 13,
+  "escaped": 5,
   "hardening_gaps": 0,
-  "not_offered": 7,
+  "not_offered": 8,
   "rows": [
     {
       "name": "write outside every mount",
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "n/a",
       "detail": "not applicable on Darwin"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "not offered",
+      "detail": "nono cannot filter by TCP port on macOS"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "the SSH agent's socket accepted a connection"
     },
     {
       "name": "open a socket without socket() via io_uring",

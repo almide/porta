@@ -114,6 +114,8 @@ symlink.
   decision under `--allow-net` on Linux went the other way from the draft
   below: UDP stays open (a TCP port rule says nothing about UDP, and closing it
   would break name resolution), recorded in SECURITY.md; proxy mode closes it.
+  Reversed in 0.6.11 (2026-09-24): UDP is closed and names resolve over TCP
+  53 (see [done/09](../done/09-linux-sockets-and-udp.md)).
 - **0.7 in progress**: the macOS denial footer (per-run tag on every deny rule,
   read back from the unified log after a failed run), `porta check`, `porta
   explain`, exit codes 125/126/127 with the child's code passed through in

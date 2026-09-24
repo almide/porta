@@ -2,7 +2,7 @@
   "tool": "porta",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 20,
+  "tried": 22,
   "escaped": 0,
   "hardening_gaps": 0,
   "not_offered": 0,
@@ -110,6 +110,18 @@
       "detail": "not applicable on Darwin"
     },
     {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "held",
+      "detail": "no UDP egress under --allow-net"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "agent socket refused"
+    },
+    {
       "name": "open a socket without socket() via io_uring",
       "category": "network",
       "verdict": "n/a",
@@ -161,13 +173,13 @@
       "name": "burn CPU past --max-cpu",
       "category": "resources",
       "verdict": "held",
-      "detail": "CPU burn ended by the kernel after 1.0s (exit 152)"
+      "detail": "CPU burn ended by the kernel after 1.2s (exit 152)"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
       "verdict": "held",
-      "detail": "killed after 1.1s despite ignoring SIGXCPU (exit 152)"
+      "detail": "killed after 1.5s despite ignoring SIGXCPU (exit 152)"
     },
     {
       "name": "allocate past --max-memory-mb",

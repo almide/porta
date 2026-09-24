@@ -2,8 +2,8 @@
   "tool": "landrun",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 20,
-  "escaped": 5,
+  "tried": 22,
+  "escaped": 7,
   "hardening_gaps": 1,
   "not_offered": 6,
   "rows": [
@@ -108,6 +108,18 @@
       "category": "network",
       "verdict": "ESCAPED",
       "detail": "a UDP DNS query got an answer in proxy mode"
+    },
+    {
+      "name": "get a UDP answer from outside under a TCP port rule",
+      "category": "network",
+      "verdict": "ESCAPED",
+      "detail": "a UDP DNS query got an answer under a TCP port rule"
+    },
+    {
+      "name": "reach the SSH agent's socket",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "the SSH agent's socket accepted a connection"
     },
     {
       "name": "open a socket without socket() via io_uring",
