@@ -30,6 +30,13 @@ fn a_policy_refusal_is_kept_and_a_permission_refusal_is_not() -> std::io::Result
 }
 
 #[test]
+fn porta_own_namespace_maps_are_not_the_command_refusals() {
+    let trace = "7 openat(AT_FDCWD</w>, \"/proc/self/setgroups\", O_WRONLY) = -1 EACCES (Permission denied)\n\
+                 7 openat(AT_FDCWD</w>, \"/proc/42/uid_map\", O_WRONLY) = -1 EPERM (Operation not permitted)\n";
+    assert!(refusals(trace, &[]).is_empty());
+}
+
+#[test]
 fn a_relative_path_is_joined_to_its_directory() {
     assert_eq!(paths("AT_FDCWD</work>, \"a/b\", O_RDONLY"), vec!["/work/a/b".to_string()]);
     assert_eq!(paths("3</old>, \"x\", 4</new>, \"y\", 0"), vec!["/old/x".to_string(), "/new/y".to_string()]);

@@ -182,6 +182,9 @@ fn refusal(call: &Call, sockets: &[String]) -> Option<Denial> {
 /// A refused file call, unless porta itself, outside the sandbox, would be
 /// refused the same: then the file permissions refused it, not the policy.
 fn file_refusal(operation: &str, path: String) -> Option<Denial> {
+    if porta_own(&path) {
+        return None;
+    }
     let writes = operation.starts_with("file-write");
     let asked = if writes && !std::path::Path::new(&path).exists() {
         std::path::Path::new(&path).parent().map(|parent| parent.to_string_lossy().to_string()).unwrap_or_default()
@@ -193,6 +196,17 @@ fn file_refusal(operation: &str, path: String) -> Option<Denial> {
     // Only a question about a path; nothing is opened.
     let allowed_outside = unsafe { libc::access(asked.as_ptr(), mode) } == 0;
     allowed_outside.then(|| Denial { operation: operation.to_string(), target: path })
+}
+
+/// A path porta itself writes before the command exists: the maps of the
+/// user namespace it tries to give the command. Where the host refuses that
+/// namespace the write fails in the traced process, and it is porta's, not
+/// the command's.
+fn porta_own(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/proc/") else { return false };
+    let (process, file) = rest.split_once('/').unwrap_or((rest, ""));
+    let a_process = process == "self" || process == "thread-self" || process.bytes().all(|byte| byte.is_ascii_digit());
+    a_process && matches!(file, "setgroups" | "uid_map" | "gid_map")
 }
 
 /// A refused TCP connect or bind (Landlock's EACCES), a refused connection to
