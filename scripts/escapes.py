@@ -151,7 +151,17 @@ def write_outside_mount(ctx):
     return _wrote_outside(ctx, ctx.ungranted / "escape")
 
 
+def mount_protection_unhosted(ctx):
+    """On Linux porta protects inside a mount only in a mount namespace of the
+    command's own; a tool without one there is not asked for the row."""
+    if SYSTEM == "Linux" and not ctx.runner.gives_pid_namespaces(host_gives_pid_namespaces):
+        return Result(NA, "Linux protects inside a mount only in a mount namespace, and this host gives none")
+    return None
+
+
 def rename_mount_root(ctx):
+    if unhosted := mount_protection_unhosted(ctx):
+        return unhosted
     moved = pathlib.Path(str(ctx.workspace) + ".moved")
     result = ctx.porta_run("/bin/sh", "-c", f'mv "$1" "{moved}"', "sh", str(ctx.workspace),
                            policy=["-v", str(ctx.workspace), "-v", str(ctx.workspace.parent)])
@@ -162,6 +172,8 @@ def rename_mount_root(ctx):
 
 
 def write_git_hook(ctx):
+    if unhosted := mount_protection_unhosted(ctx):
+        return unhosted
     repo = ctx.workspace / "repo"
     if not (repo / ".git").exists():
         repo.mkdir(exist_ok=True)
@@ -225,29 +237,30 @@ def inherit_porta_fd(ctx):
     return Result(ESCAPED, "a porta descriptor crossed into the child") if "LEAK" in result.stdout else Result(HELD, "no descriptor beyond stdio inherited")
 
 
-def _read_secret(ctx, secret_dir, name, policy):
+def _read_secret(ctx, secret, policy, home=None):
     """A read of a file the sandbox should not open. The file holds MARKER;
-    the probe prints whatever it managed to read."""
-    secret = secret_dir / name
-    secret_dir.mkdir(parents=True, exist_ok=True)
+    the probe prints whatever it managed to read. `home` becomes the run's
+    HOME, so a closure written ~/… lands on the planted file."""
+    secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_text(f"token={MARKER}\n")
-    result = ctx.porta_run("/bin/cat", str(secret), policy=policy,
-                           env={"HOME": str(secret_dir.parent)} if ".ssh" in str(secret) else None)
+    result = ctx.porta_run("/bin/cat", str(secret), policy=policy, env={"HOME": str(home)} if home else None)
     return Result(ESCAPED, "secret read") if MARKER in result.stdout else Result(HELD, "read refused")
 
 
 def read_ssh_key(ctx):
+    # ~/.ssh is closed in every read mode by the default preset, including
+    # when the home itself is mounted: that is the case the row runs. Until
+    # 2026-09-24 it ran on Linux under strict reads only, where the home is
+    # closed anyway, and hid that the default mode left the key readable there.
     home = ctx.ungranted / "home"
-    # On macOS ~/.ssh is closed in every mode. On Linux the home directory is
-    # closed under strict, so the key sits outside the strict read set; the
-    # policies differ but the promise — an SSH key the run was not granted
-    # stays unread — is the same, so the row runs on both.
-    policy = ["-v", str(home)]
-    if SYSTEM == "Linux":
-        policy = ["--read-policy", "strict", "-v", str(ctx.workspace),
-                  "-v", str(pathlib.Path(sys.base_prefix).resolve()) + ":ro"]
-        home = ctx.ungranted / "elsewhere"
-    return _read_secret(ctx, home / ".ssh", "id_ed25519", policy=policy)
+    return _read_secret(ctx, home / ".ssh" / "id_ed25519", policy=["-v", str(home)], home=home)
+
+
+def read_gh_token(ctx):
+    # A credential store the first, hard-coded list did not name: the GitHub
+    # CLI's token. The default preset names it; default reads, no mounts.
+    home = ctx.ungranted / "home"
+    return _read_secret(ctx, home / ".config" / "gh" / "hosts.yml", policy=["-v", str(ctx.workspace)], home=home)
 
 
 def read_etc_shadow_strict(ctx):
@@ -644,12 +657,13 @@ def raw_socket(ctx):
 
 CORPUS = [
     Attempt("write outside every mount", "filesystem", None, write_outside_mount),
-    Attempt("rename the mount root away", "filesystem", ["Darwin"], rename_mount_root),
-    Attempt("write a git hook inside a mount", "filesystem", ["Darwin"], write_git_hook),
+    Attempt("rename the mount root away", "filesystem", ["Darwin", "Linux"], rename_mount_root),
+    Attempt("write a git hook inside a mount", "filesystem", ["Darwin", "Linux"], write_git_hook),
     Attempt("write through a symlink pointing outside the mount", "filesystem", None, write_through_symlink),
     Attempt("read a secret through a symlink under strict", "credentials", None, read_secret_through_symlink),
     Attempt("inherit an open file descriptor from porta", "processes", None, inherit_porta_fd),
     Attempt("read an SSH private key", "credentials", None, read_ssh_key),
+    Attempt("read the GitHub CLI token", "credentials", None, read_gh_token),
     Attempt("read /etc/shadow under strict", "credentials", ["Linux"], read_etc_shadow_strict),
     Attempt("read another process's arguments", "processes", None, read_other_process_argv),
     Attempt("read another process's arguments, default reads", "processes", ["Linux"], read_other_process_argv_default),

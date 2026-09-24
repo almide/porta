@@ -16,6 +16,7 @@ as a definition does.
 | Module | Owns |
 |---|---|
 | `wasmtime_bridge.rs` + `wasmtime_bridge/{load,run}.rs` | WASM instance lifecycle and the FFI surface; `load` reads a file as a core module or a WASI 0.2 / 0.3 component, `run` executes it |
+| `policy_preset.rs` + `presets/default.toml` | what a run closes beyond its grants, as data: reads denied, names protected inside mounts, sockets refused; extended by `--deny-read`, `--protect`, `--deny-unix`, replaced by `--preset` |
 | `sandbox_exec.rs`; `sandbox_profile.rs`; `landlock_policy.rs` + `landlock.rs`; `seccomp.rs` | native OS enforcement: one request, the macOS profile, the Linux ruleset and the syscalls under it, and the seccomp baseline plus proxy-only filter for what Landlock cannot see |
 | `pid_namespace.rs` | the command's own user, PID and mount namespace on Linux, a fresh `/proc` in it, and the pid-1 helper that reports how the command ended; where the host refuses them the run goes ahead and says so |
 | `ceilings.rs`, `memory_ceiling.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU or memory ceiling; on Linux the memory ceiling is a cgroup v2 scope asked of the systemd user manager |
@@ -101,11 +102,16 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
   `execveat` of a pathless descriptor, `io_uring`, mounts, namespaces) and
   the socket families a TCP rule cannot see. A kernel that will not take the
   filter refuses the run.
-- Inside a writable mount on macOS, the operator's repository hooks and
-  config and the files at the root a host tool trusts stay unwritable, and
-  neither they nor the mount root can be renamed away.
-- Credential stores under the home are closed to reads in every mode on macOS,
-  and the Keychain is closed by its mach services as well as its files.
+- Which paths, names and sockets a run closes is the preset's, not the core's:
+  no credential path is written in enforcement code. The core supplies the
+  mechanisms and applies them to whatever the preset and flags resolve to.
+- Inside a writable mount, the repository hooks and config and the names the
+  preset protects stay unwritable, and neither they nor the mount root can be
+  renamed away — on Linux through the mount namespace, and where the host
+  refuses one the run says it is unprotected.
+- What the preset closes to reads stays closed in every mode on both
+  platforms; on Linux without a mount namespace, a closed path inside a grant
+  refuses the run. The Keychain is closed by its mach services as well.
 - `run`, `up`, and MCP execution must share native policy generation.
 - Proxy mode permits only the loopback proxy endpoint, without UDP, Unix
   sockets or any other egress channel — including a ring that would open a

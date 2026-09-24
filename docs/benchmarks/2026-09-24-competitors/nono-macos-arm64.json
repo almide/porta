@@ -1,5 +1,5 @@
 {
-  "tool": "fence",
+  "tool": "nono",
   "system": "Darwin",
   "machine": "arm64",
   "tried": 12,
@@ -16,14 +16,14 @@
     {
       "name": "rename the mount root away",
       "category": "filesystem",
-      "verdict": "held",
-      "detail": "rename refused"
+      "verdict": "ESCAPED",
+      "detail": "mount root renamed away"
     },
     {
       "name": "write a git hook inside a mount",
       "category": "filesystem",
-      "verdict": "held",
-      "detail": "hook write refused"
+      "verdict": "ESCAPED",
+      "detail": "hook written inside a mount"
     },
     {
       "name": "write through a symlink pointing outside the mount",
@@ -40,14 +40,20 @@
     {
       "name": "inherit an open file descriptor from porta",
       "category": "processes",
-      "verdict": "held",
-      "detail": "no descriptor beyond stdio inherited"
+      "verdict": "n/a",
+      "detail": "nono hands the child its own supervisor socket by design"
     },
     {
       "name": "read an SSH private key",
       "category": "credentials",
-      "verdict": "ESCAPED",
-      "detail": "secret read"
+      "verdict": "held",
+      "detail": "read refused"
+    },
+    {
+      "name": "read the GitHub CLI token",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read refused"
     },
     {
       "name": "read /etc/shadow under strict",
@@ -70,20 +76,20 @@
     {
       "name": "read the login Keychain",
       "category": "credentials",
-      "verdict": "ESCAPED",
-      "detail": "the login keychain database is readable"
+      "verdict": "held",
+      "detail": "keychain closed"
     },
     {
       "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
       "category": "processes",
       "verdict": "ESCAPED",
-      "detail": "Launch Services reachable: PROBE-STARTED; com.apple.lsd.mapdb REACHABLE; com.apple.lsd.modifydb denied 1100"
+      "detail": "Launch Services reachable: PROBE-STARTED; com.apple.lsd.mapdb REACHABLE; com.apple.lsd.modifydb REACHABLE"
     },
     {
       "name": "reach a port the policy did not open",
       "category": "network",
       "verdict": "not offered",
-      "detail": "fence has no port grants"
+      "detail": "nono cannot filter by TCP port on macOS"
     },
     {
       "name": "reach anything under --no-net",
@@ -137,37 +143,37 @@
       "name": "open a raw socket",
       "category": "network",
       "verdict": "not offered",
-      "detail": "fence has no port grants"
+      "detail": "nono cannot filter by TCP port on macOS"
     },
     {
       "name": "fork past --max-procs",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "fence has no --max-procs"
+      "detail": "nono enforces resource limits only on Linux"
     },
     {
       "name": "grow a file past --max-file-size",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "fence has no --max-file-size"
+      "detail": "nono has no --max-file-size"
     },
     {
       "name": "burn CPU past --max-cpu",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "fence has no --max-cpu"
+      "detail": "nono has no --max-cpu"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "fence has no --max-cpu"
+      "detail": "nono has no --max-cpu"
     },
     {
       "name": "allocate past --max-memory-mb",
       "category": "resources",
       "verdict": "not offered",
-      "detail": "fence has no --max-memory-mb"
+      "detail": "nono enforces resource limits only on Linux"
     }
   ]
 }

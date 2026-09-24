@@ -34,6 +34,12 @@ type ExecRequest = {
   bind: List[String],
   // No network at all. The native side refuses it beside any grant.
   no_net: Bool,
+  // The preset this run starts from and what the caller adds to it: reads
+  // denied, names protected inside mounts, sockets refused.
+  preset: String,
+  deny_read: List[String],
+  protect: List[String],
+  deny_unix: List[String],
   // Unix sockets the command may connect to although they hold a credential
   // agent.
   unix: List[String],
@@ -66,6 +72,10 @@ fn exec_request_json(req: ExecRequest) -> String =
     ("allow_root", value.bool(req.allow_root)),
     ("bind", strings(req.bind)),
     ("no_net", value.bool(req.no_net)),
+    ("preset", value.str(req.preset)),
+    ("deny_read", strings(req.deny_read)),
+    ("protect", strings(req.protect)),
+    ("deny_unix", strings(req.deny_unix)),
     ("unix", strings(req.unix)),
     ("timeout", value.int(req.timeout)),
     ("max_cpu", value.int(req.max_cpu)),

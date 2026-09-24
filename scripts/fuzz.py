@@ -69,6 +69,18 @@ def run(porta, *args, timeout=30):
 
 # --- policy -----------------------------------------------------------------
 
+_PROTECTS = {}
+
+
+def protects_inside_mounts(porta):
+    """macOS always; Linux when porta has its mount namespace here."""
+    if SYSTEM == "Darwin":
+        return True
+    if porta not in _PROTECTS:
+        report = json.loads(subprocess.run([porta, "check", "--json"], capture_output=True, text=True).stdout)
+        _PROTECTS[porta] = any("namespace" in p["name"] and p["present"] for p in report["primitives"])
+    return _PROTECTS[porta]
+
 WRITER = 'for target in "$@"; do (printf x > "$target") 2>/dev/null; done; exit 0'
 
 
@@ -93,7 +105,7 @@ def policy_case(porta, rng, root):
     expected = {directory / "in": not ro for directory, ro in mounts}
     expected[outside / "out"] = False
     expected[sibling / "out"] = False
-    if SYSTEM == "Darwin" and not mounts[0][1]:
+    if protects_inside_mounts(porta) and not mounts[0][1]:
         expected[hooks / "pre-commit"] = False
     result = run(porta, "run", "/bin/sh", *flags, "--", "-c", WRITER, "sh", *map(str, expected))
     landed = {path: path.exists() for path in expected}

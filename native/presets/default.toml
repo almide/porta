@@ -1,0 +1,95 @@
+# porta's default preset: what every run closes unless it asks otherwise.
+#
+# porta's core knows how to deny a read, protect a file inside a mount and
+# refuse a socket; this file says what to apply that to. It is data, shown by
+# `porta explain`, extended with --deny-read, --protect and --deny-unix (or
+# the same keys in porta.toml), and replaced with --preset <file> or dropped
+# with --preset none.
+#
+# A path under the home is written ~/…, and resolved against the caller's
+# HOME and then to the path the kernel sees, symlinks followed.
+
+[read]
+# Credential stores: keys, cloud and registry tokens, logins, browser
+# sessions, password stores. Nothing a command needs to run, and reading one
+# is how a prompt-injected agent walks off with the caller's identity. Denied
+# in every read mode, including inside a mount.
+deny = [
+  "~/.ssh",
+  "~/.gnupg",
+  "~/.password-store",
+  "~/.aws",
+  "~/.azure",
+  "~/.config/gcloud",
+  "~/.oci",
+  "~/.config/gh",
+  "~/.config/hub",
+  "~/.git-credentials",
+  "~/.netrc",
+  "~/.npmrc",
+  "~/.yarnrc.yml",
+  "~/.pypirc",
+  "~/.gem/credentials",
+  "~/.cargo/credentials",
+  "~/.cargo/credentials.toml",
+  "~/.docker",
+  "~/.kube",
+  "~/.terraform.d",
+  "~/.vault-token",
+  "~/.pgpass",
+  "~/.my.cnf",
+  "~/.local/share/keyrings",
+  "~/.config/op",
+  "~/Library/Keychains",
+  "~/Library/Cookies",
+  "~/Library/Application Support/Google/Chrome",
+  "~/Library/Application Support/Firefox",
+  "~/Library/Application Support/BraveSoftware",
+  "~/Library/Application Support/Microsoft Edge",
+  "~/Library/Application Support/Arc",
+  "~/Library/Safari",
+  "~/.config/google-chrome",
+  "~/.config/chromium",
+  "~/.mozilla",
+]
+
+[write]
+# Names inside every writable mount that a host tool runs or trusts without
+# asking: shell startup, git identity, an agent's own tools and MCP servers,
+# an editor's tasks, direnv. A command may read them and write everything
+# around them; these it may not change or rename away. A repository's own
+# .git/hooks and .git/config are protected as well, wherever .git points.
+protect = [
+  ".bashrc",
+  ".bash_profile",
+  ".zshrc",
+  ".zprofile",
+  ".profile",
+  ".envrc",
+  ".gitconfig",
+  ".mcp.json",
+  ".npmrc",
+  "porta.toml",
+  ".porta.toml",
+  ".claude/commands",
+  ".claude/agents",
+  ".claude/settings.json",
+  ".vscode",
+  ".idea",
+]
+
+[unix]
+# Unix sockets that act for the caller's own credentials: the SSH agent,
+# gpg-agent, container runtimes (whose socket is root on the host). Regular
+# expressions over the socket's path. Closed to connects unless --allow-unix
+# names one. Enforced on macOS; on Linux these sockets live under paths the
+# [read] list above already hides, or in /tmp where they are named by agent.
+deny = [
+  '/com\.apple\.launchd\.[^/]+/Listeners$',
+  '/ssh-[^/]+/agent\.[0-9]+$',
+  '/\.ssh/agent[^/]*$',
+  '/\.gnupg/S\.gpg-agent[^/]*$',
+  '/docker\.sock$',
+  '/podman[^/]*\.sock$',
+  '/\.(colima|orbstack|lima)/.*\.sock$',
+]

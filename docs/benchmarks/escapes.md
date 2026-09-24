@@ -2,18 +2,22 @@
 # Escape corpus results
 
 `scripts/escapes.py` run against the built binary. Regenerated per release;
-this run is 2026-09-23, porta 0.6.3, macOS arm64
-locally and Linux x86_64 on the CI runner (run 35703962916). A row is **held** when the escape was
+this run is 2026-09-24, porta 0.6.10, macOS arm64 and Linux aarch64
+locally; Linux x86_64 on the CI runner. A row is **held** when the escape was
 stopped, **ESCAPED** when it got through (a finding, and a red build), and —
 when the platform cannot host the attempt. Published whatever the result: a
 corpus that hid its losses would not be evidence.
 
-- **macOS arm64**: 19 tried, 0 escaped
+- **macOS arm64**: 20 tried, 0 escaped
+- **Linux aarch64** (a systemd container that allows unprivileged user
+  namespaces): 26 tried, 0 escaped
+- **Linux aarch64**, the same container with `user.max_user_namespaces=0`:
+  23 tried, 0 escaped. The rows that need the command's own namespaces — the
+  default-reads row for another process's arguments, renaming the mount root,
+  writing a git hook — are not hosted there
 - **Linux x86_64** (the CI runner, with a systemd user manager started for
-  the job; run 35808689468): 21 tried, 0 escaped. The runner refuses
-  unprivileged user namespaces (Ubuntu's AppArmor restriction), so the
-  default-reads row for another process's arguments is not hosted there
-- **Linux aarch64** (a systemd container, 2026-09-23): 23 tried, 0 escaped
+  the job): the runner refuses unprivileged user namespaces (Ubuntu's AppArmor
+  restriction), so it runs the second set
 
 ## A correction to earlier runs
 
@@ -47,15 +51,25 @@ process outside the sandbox. The user-namespace row is not a way out of the
 policy but a step an escape would start from, and is now counted apart, as
 hardening. porta held all three before and after.
 
+A fourth came with the preset (2026-09-24). The SSH row ran on Linux under
+`--read-policy strict`, where the whole home is closed anyway, and so hid that
+Linux's default reads left `~/.ssh`, `~/.aws` and every other credential store
+readable: the closures were a macOS profile list. The row now runs in default
+reads on both platforms, against a key planted in a fake home, and a second
+credential row — the GitHub CLI token, which that hard-coded list did not name
+— checks that the closures come from the preset rather than from a list in
+code. The two mount-internal rows now run on Linux too.
+
 | Attempt | Category | macOS | Linux |
 |---|---|---|---|
 | write outside every mount | filesystem | held | held |
-| rename the mount root away | filesystem | held | — |
-| write a git hook inside a mount | filesystem | held | — |
+| rename the mount root away | filesystem | held | held |
+| write a git hook inside a mount | filesystem | held | held |
 | write through a symlink pointing outside the mount | filesystem | held | held |
 | read a secret through a symlink under strict | credentials | held | held |
 | inherit an open file descriptor from porta | processes | held | held |
 | read an SSH private key | credentials | held | held |
+| read the GitHub CLI token | credentials | held | held |
 | read /etc/shadow under strict | credentials | — | held |
 | read another process's arguments | processes | held | held |
 | read another process's arguments, default reads | processes | — | held |
@@ -78,8 +92,7 @@ hardening. porta held all three before and after.
 | allocate past `--max-memory-mb` | resources | held | held |
 
 Where a row is — on one platform, the escape is not expressible there:
-the mount-internal and Keychain protections are macOS-only (Landlock grants
-a directory whole), and the syscall-level attempts are Linux-only (the macOS
+the Keychain is macOS's, and the syscall-level attempts are Linux-only (the macOS
 profile closes those channels differently, tested in the integration suite).
 The memory row is a cgroup v2 ceiling placed through the systemd user manager
 on Linux, which needs a user manager (where there is none the row is not

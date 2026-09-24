@@ -136,8 +136,36 @@ pub(crate) struct Network<'a> {
     pub(crate) closed: bool,
 }
 
+/// The closed paths that exist on this host, as given (already resolved).
+fn existing(closed: &[String]) -> Vec<String> {
+    closed.iter().filter(|path| std::path::Path::new(path).exists()).cloned().collect()
+}
+
+/// A closed path inside a mount, or inside what strict reads leave open, is a
+/// hole Landlock cannot cut: a grant covers everything beneath it. Without a
+/// mount namespace to cover the path instead, the run is refused.
+fn refuse_closed_inside_grants(allowed_dirs: &[String], closed: &[String], strict: bool) -> Result<(), String> {
+    // /tmp and /dev are granted to every run, so a closed path under them is
+    // inside a grant too.
+    let mut grants: Vec<String> = allowed_dirs.iter().map(|dir| dir.strip_suffix(":ro").unwrap_or(dir).to_string()).collect();
+    grants.extend(ALWAYS_WRITABLE.iter().map(|dir| dir.to_string()));
+    if strict {
+        grants.extend(SYSTEM_READABLE.iter().map(|dir| dir.to_string()));
+    }
+    for path in existing(closed) {
+        if let Some(grant) = grants.iter().find(|grant| path == **grant || path.starts_with(&format!("{grant}/"))) {
+            return Err(format!(
+                "{path} is closed to reads (the preset or --deny-read), but it lies inside {grant}, which this run grants; \
+                 Landlock cannot close part of a grant and this host gives no mount namespace to cover it. \
+                 Grant less, or drop the closure with --preset none or a preset without it"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The Landlock policy a request asks for, or why this kernel cannot apply it.
-pub(crate) fn ruleset(allowed_dirs: &[String], network: Network, read_policy: &str) -> Result<crate::landlock::Ruleset, String> {
+pub(crate) fn ruleset(allowed_dirs: &[String], network: Network, read_policy: &str, closed: &[String]) -> Result<crate::landlock::Ruleset, String> {
     let strict = read_policy == "strict";
     let policy = crate::landlock::Policy {
         writable_dirs: writable_dirs(allowed_dirs),
@@ -148,6 +176,8 @@ pub(crate) fn ruleset(allowed_dirs: &[String], network: Network, read_policy: &s
         tcp_ports: requested_tcp_ports(network.connect)?,
         bind_ports: network.bind.to_vec(),
         restrict_network: network.closed || !network.connect.is_empty(),
+        open_reads_except: if strict { Vec::new() } else { existing(closed) },
     };
+    refuse_closed_inside_grants(allowed_dirs, closed, strict)?;
     crate::landlock::prepare(&policy)
 }

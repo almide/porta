@@ -1,6 +1,5 @@
 import value
 // Engine: WASM/native execution, MCP serve, validate, inspect
-
 import fs
 import json
 import self.cli
@@ -15,7 +14,6 @@ import self.mcp
 import self.proxy
 
 // --- Serve ---
-
 effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
   let manifest_path = if opts.manifest_path != "" then opts.manifest_path
     else string.replace(opts.path, ".wasm", ".manifest.json")
@@ -95,6 +93,10 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
     allow_root: opts.allow_root,
     bind: opts.allow_bind,
     no_net: opts.no_net,
+    preset: opts.preset,
+    deny_read: opts.deny_read,
+    protect: opts.protect,
+    deny_unix: opts.deny_unix,
     unix: opts.allow_unix,
     timeout: opts.timeout,
     max_cpu: opts.max_cpu,

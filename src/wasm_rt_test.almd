@@ -122,7 +122,7 @@ test "build_sandbox_profile: host facilities are closed in every mode" {
 
 test "build_sandbox_profile: a writable mount keeps its trusted files and its root" {
   let profile = wasm_rt.build_sandbox_profile(["/workspace"], [], "open")
-  assert(string.contains(profile, "(deny file-write* (literal \"/workspace/.mcp.json\"))"))
+  assert(string.contains(profile, "(deny file-write* (subpath \"/workspace/.mcp.json\"))"))
   assert(string.contains(profile, "(deny file-write* (subpath \"/workspace/.claude/commands\"))"))
   assert(string.contains(profile, "(deny file-write-unlink (literal \"/workspace\"))"))
   assert(string.contains(profile, "(deny file-write-unlink (literal \"/workspace/.claude\"))"))

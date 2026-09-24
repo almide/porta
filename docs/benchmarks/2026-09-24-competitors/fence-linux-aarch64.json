@@ -2,8 +2,8 @@
   "tool": "fence",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 17,
-  "escaped": 0,
+  "tried": 20,
+  "escaped": 2,
   "hardening_gaps": 1,
   "not_offered": 6,
   "rows": [
@@ -16,14 +16,14 @@
     {
       "name": "rename the mount root away",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "rename refused"
     },
     {
       "name": "write a git hook inside a mount",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "hook write refused"
     },
     {
       "name": "write through a symlink pointing outside the mount",
@@ -46,8 +46,14 @@
     {
       "name": "read an SSH private key",
       "category": "credentials",
-      "verdict": "held",
-      "detail": "read refused"
+      "verdict": "ESCAPED",
+      "detail": "secret read"
+    },
+    {
+      "name": "read the GitHub CLI token",
+      "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "secret read"
     },
     {
       "name": "read /etc/shadow under strict",

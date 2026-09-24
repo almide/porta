@@ -31,27 +31,27 @@ type Options = {
   proxy_audit: String,
   read_policy: String,
   allow_root: Bool,
-  // Host variables copied into the child by name. The child's environment
-  // starts empty apart from the few a command needs to run.
+  // Host variables copied into the child by name; its environment otherwise starts empty.
   env_pass: List[String],
-  // Unix sockets the child may connect to although they hold a credential
-  // agent: the SSH agent, gpg-agent, a container runtime.
+  // Unix sockets the child may connect to although the preset closes them.
   allow_unix: List[String],
   // TCP ports the child may listen on once --allow-net closes the network.
   allow_bind: List[String],
   // No network at all: no TCP, no UDP, not even the host's loopback.
   no_net: Bool,
-  // Seconds the command may run before porta kills it and everything it
-  // started. 0 means no limit.
+  // What the run closes beyond its grants: a preset (default, none, a file) plus the caller's own.
+  preset: String,
+  deny_read: List[String],
+  protect: List[String],
+  deny_unix: List[String],
+  // Seconds before porta kills the command and everything it started; 0 means no limit.
   timeout: Int,
-  // Per-process ceilings set with setrlimit and inherited by everything the
-  // command starts: CPU seconds, processes of this user, file size in MiB.
-  // 0 leaves one unset.
+  // setrlimit ceilings inherited by everything the command starts: CPU seconds,
+  // processes of this user, file size in MiB. 0 leaves one unset.
   max_cpu: Int,
   max_procs: Int,
   max_file_size: Int,
-  // Resident memory in MiB for the whole run, a cgroup v2 ceiling set through
-  // the systemd user manager on Linux. 0 leaves it unset; refused elsewhere.
+  // Resident MiB for the whole run: a cgroup v2 ceiling on Linux, supervised on macOS. 0 unsets.
   max_memory_mb: Int,
   // Emit machine-readable JSON instead of prose, for `explain` and `check`.
   json: Bool,
@@ -85,6 +85,10 @@ fn default_options() -> Options = {
   allow_unix: [],
   allow_bind: [],
   no_net: false,
+  preset: "",
+  deny_read: [],
+  protect: [],
+  deny_unix: [],
   timeout: 0,
   max_cpu: 0,
   max_procs: 0,
@@ -131,6 +135,10 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
     "--no-net" => flag({...opts, no_net: true}),
+    "--preset" => valued({...opts, preset: next}),
+    "--deny-read" => valued({...opts, deny_read: opts.deny_read + [next]}),
+    "--protect" => valued({...opts, protect: opts.protect + [next]}),
+    "--deny-unix" => valued({...opts, deny_unix: opts.deny_unix + [next]}),
     "--env-pass" => valued({...opts, env_pass: opts.env_pass + string.split(next, ",")}),
     "--allow-unix" => valued({...opts, allow_unix: opts.allow_unix + [next]}),
     "--allow-bind" => valued({...opts, allow_bind: opts.allow_bind + [next]}),
@@ -268,6 +276,10 @@ fn policy_toml(opts: Options) -> String = {
      "mounts = " + toml_strings(mounts)]
     + line_when(list.len(opts.allow_net) > 0, "network = " + toml_strings(opts.allow_net))
     + line_when(opts.no_net, "no-net = true")
+    + line_when(opts.preset != "", "preset = " + toml_quote(opts.preset))
+    + line_when(list.len(opts.deny_read) > 0, "deny-read = " + toml_strings(opts.deny_read))
+    + line_when(list.len(opts.protect) > 0, "protect = " + toml_strings(opts.protect))
+    + line_when(list.len(opts.deny_unix) > 0, "deny-unix = " + toml_strings(opts.deny_unix))
     + line_when(opts.read_policy == "strict", "read-policy = \"strict\"")
     + line_when(list.len(opts.env_pass) > 0, "env-pass = " + toml_strings(opts.env_pass))
     + line_when(list.len(opts.allow_unix) > 0, "unix = " + toml_strings(opts.allow_unix))

@@ -65,8 +65,12 @@ line, never dropped.
 | `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
 | `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
-| `--allow-unix <path>` | Let the command connect to this Unix socket. The SSH agent, gpg-agent and the container runtimes' sockets are closed by default (repeatable) |
+| `--allow-unix <path>` | Let the command connect to this Unix socket, although the preset closes it: by default the SSH agent, gpg-agent and the container runtimes' sockets (repeatable) |
 | `--no-net` | No network at all: no TCP or UDP to anywhere, and not the host's loopback either. On Linux the command gets a network namespace of its own holding only a loopback interface it can use itself; where the host refuses one, Landlock closes every TCP port and seccomp every other socket family, and a kernel that can do neither refuses the run. Refused beside `--allow-net`, `--allow-bind` or a proxy |
+| `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `native/presets/default.toml`), `none`, or a TOML file of the same shape |
+| `--deny-read <path>` | Close this path to reads on top of the preset; absolute or `~/…` (repeatable) |
+| `--protect <name>` | Keep this name, relative to each writable mount, unwritable and unrenamable (repeatable) |
+| `--deny-unix <regex>` | Refuse Unix sockets whose path matches, on top of the preset (repeatable; macOS) |
 | `--allow-bind <port>` | Let the command listen on this TCP port. Once `--allow-net` is in force, a granted port is a port to reach, not one to serve on (repeatable) |
 | `--timeout <secs>` | Kill the command and everything it started after this many seconds, reporting exit 124. `0` (the default) sets no limit |
 | `--max-cpu <secs>` | CPU seconds each process may use before the kernel ends it with SIGXCPU (exit 152). Inherited by everything the command starts. Ignoring the signal buys nothing: Linux kills at the hard limit a second later, and on macOS porta measures the process group's CPU and kills it at the ceiling |
@@ -107,6 +111,10 @@ network = ["*:443"]       # Restrict to these ports (empty = all open)
 # env-pass = ["CI"]       # Copy these host variables in by name
 # unix = ["/run/…"]       # Credential sockets the command may reach
 # bind = ["8080"]         # TCP ports the command may listen on
+# preset = "none"         # default, none, or a preset file
+# deny-read = ["~/work/secrets"]  # Closed to reads on top of the preset
+# protect = [".env"]      # Unwritable inside every writable mount
+# deny-unix = ['/my-agent\.sock$']  # Refused sockets (macOS)
 
 [proxy]
 # allow = ["api.example.com"]   # egress only through the CONNECT proxy, these hosts

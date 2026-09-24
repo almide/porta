@@ -1,11 +1,11 @@
 {
-  "tool": "srt",
+  "tool": "porta",
   "system": "Darwin",
   "machine": "arm64",
-  "tried": 14,
-  "escaped": 4,
+  "tried": 20,
+  "escaped": 0,
   "hardening_gaps": 0,
-  "not_offered": 5,
+  "not_offered": 0,
   "rows": [
     {
       "name": "write outside every mount",
@@ -46,8 +46,14 @@
     {
       "name": "read an SSH private key",
       "category": "credentials",
-      "verdict": "ESCAPED",
-      "detail": "secret read"
+      "verdict": "held",
+      "detail": "read refused"
+    },
+    {
+      "name": "read the GitHub CLI token",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read refused"
     },
     {
       "name": "read /etc/shadow under strict",
@@ -58,8 +64,8 @@
     {
       "name": "read another process's arguments",
       "category": "processes",
-      "verdict": "ESCAPED",
-      "detail": "another process's arguments read"
+      "verdict": "held",
+      "detail": "process arguments closed"
     },
     {
       "name": "read another process's arguments, default reads",
@@ -70,14 +76,14 @@
     {
       "name": "read the login Keychain",
       "category": "credentials",
-      "verdict": "ESCAPED",
-      "detail": "the login keychain database is readable"
+      "verdict": "held",
+      "detail": "keychain closed"
     },
     {
       "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
       "category": "processes",
-      "verdict": "ESCAPED",
-      "detail": "Launch Services reachable: PROBE-STARTED; com.apple.lsd.mapdb REACHABLE; com.apple.lsd.modifydb denied 1100"
+      "verdict": "held",
+      "detail": "Launch Services mach lookups refused"
     },
     {
       "name": "reach a port the policy did not open",
@@ -142,32 +148,32 @@
     {
       "name": "fork past --max-procs",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "srt has no --max-procs"
+      "verdict": "held",
+      "detail": "every fork refused under --max-procs 1"
     },
     {
       "name": "grow a file past --max-file-size",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "srt has no --max-file-size"
+      "verdict": "held",
+      "detail": "file stopped at 1048576 bytes under a 1 MiB ceiling"
     },
     {
       "name": "burn CPU past --max-cpu",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "srt has no --max-cpu"
+      "verdict": "held",
+      "detail": "CPU burn ended by the kernel after 1.0s (exit 152)"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "srt has no --max-cpu"
+      "verdict": "held",
+      "detail": "killed after 1.1s despite ignoring SIGXCPU (exit 152)"
     },
     {
       "name": "allocate past --max-memory-mb",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "srt has no --max-memory-mb"
+      "verdict": "held",
+      "detail": "allocation past the ceiling was killed (exit 137)"
     }
   ]
 }

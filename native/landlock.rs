@@ -53,13 +53,11 @@ const FILE_RIGHTS: u64 = (1 << 0) | (1 << 1) | (1 << 2) | ACCESS_FS_TRUNCATE;
 const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
 const SCOPE_SIGNAL: u64 = 1 << 1;
 
-/// ABI that first understands network rules.
+/// The first ABI that understands network rules, cross-directory rename and
+/// link, truncation as a distinct right, and signal and abstract-socket scoping.
 const MIN_ABI_FOR_NET: i64 = 4;
-/// ABI that first understands cross-directory rename and link.
 const MIN_ABI_FOR_REFER: i64 = 2;
-/// ABI that first understands truncation as a distinct right.
 const MIN_ABI_FOR_TRUNCATE: i64 = 3;
-/// ABI that first understands signal and abstract-socket scoping.
 const MIN_ABI_FOR_SCOPE: i64 = 6;
 
 /// The only place a landlock syscall is issued. The arguments travel as one
@@ -113,6 +111,10 @@ pub struct Policy {
     /// other port is closed to `bind(2)`.
     pub bind_ports: Vec<u16>,
     pub restrict_network: bool,
+    /// Under open reads, paths closed anyway (the preset, `--deny-read`) when
+    /// no mount namespace covers them. Reads are then handled after all, and
+    /// granted everywhere but beneath these: see [`open_except`].
+    pub open_reads_except: Vec<String>,
 }
 
 /// A prepared ruleset. The descriptor is owned, so it closes on every path.
@@ -136,7 +138,6 @@ impl Ruleset {
         }
         Ok(())
     }
-
 }
 
 // `/proc/self` is not granted under a strict read policy, and this is where
@@ -144,9 +145,8 @@ impl Ruleset {
 // place does grant its own entry — measured — but `/proc/self` names whoever
 // opens it, so the shell that is porta's usual command gets its entry and
 // every tool the shell starts gets nothing, since each has a pid of its own.
-// A grant that covers the wrapper and not the work is a grant that misleads,
-// so `/proc` stays closed as a whole, and a command that needs it takes it as
-// a mount.
+// A grant that covers the wrapper and not the work misleads, so `/proc` stays
+// closed as a whole, and a command that needs it takes it as a mount.
 
 /// Landlock ABI the running kernel reports, or an error when it has none.
 pub fn abi_version() -> Result<i64, String> {
@@ -224,6 +224,37 @@ fn allow_tcp_port(ruleset: &Ruleset, port: u16, access: u64) -> Result<(), Strin
     Ok(())
 }
 
+/// Listing a directory, and nothing beneath it.
+const ACCESS_FS_READ_DIR: u64 = 1 << 3;
+
+/// Reads everywhere except beneath `closed`. Landlock is an allow-list and a
+/// grant covers everything under it, so the walk descends only along closed
+/// paths: a subtree holding none is granted whole, a directory holding one is
+/// granted listing only and its entries visited, a closed path is skipped. A
+/// symlink is never granted: the kernel checks the path it resolves to, which
+/// has its own place in the walk. An entry that cannot be opened, or appears
+/// after the walk in a directory on a closed path, stays closed.
+fn open_except(ruleset: &Ruleset, dir: &std::path::Path, closed: &[String]) -> Result<(), String> {
+    let here = dir.to_string_lossy();
+    let prefix = if here == "/" { "/".to_string() } else { format!("{here}/") };
+    if closed.iter().any(|path| *path == here) {
+        return Ok(());
+    }
+    if !closed.iter().any(|path| path.starts_with(&prefix)) {
+        let _ = allow_path(ruleset, &here, READ_RIGHTS_ABI1);
+        return Ok(());
+    }
+    allow_path(ruleset, &here, ACCESS_FS_READ_DIR)?;
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
+    for entry in entries.flatten() {
+        if entry.file_type().map(|kind| kind.is_symlink()).unwrap_or(true) {
+            continue;
+        }
+        open_except(ruleset, &entry.path(), closed)?;
+    }
+    Ok(())
+}
+
 /// Builds the ruleset for a policy, or explains which rule this kernel refuses.
 pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
     let abi = abi_version()?;
@@ -235,25 +266,17 @@ pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
         ));
     }
     let writes = write_rights(abi);
-    let reads = if policy.restrict_reads { READ_RIGHTS_ABI1 } else { 0 };
+    let carve = !policy.restrict_reads && !policy.open_reads_except.is_empty();
+    let reads = if policy.restrict_reads || carve { READ_RIGHTS_ABI1 } else { 0 };
     let handled_net = if policy.restrict_network { ACCESS_NET_CONNECT_TCP | ACCESS_NET_BIND_TCP } else { 0 };
     let ruleset = create_ruleset(abi, writes | reads, handled_net)?;
     for dir in &policy.writable_dirs {
         allow_path(&ruleset, dir, writes | reads)?;
     }
-    // Reading is handled all-or-nothing: with reads restricted, a path no rule
-    // names is closed, so the platform's own directories have to be named too.
     if policy.restrict_reads {
-        for dir in &policy.readable_dirs {
-            allow_path(&ruleset, dir, reads)?;
-        }
-        let present = |path: &&String| std::path::Path::new(path.as_str()).exists();
-        for dir in policy.system_dirs.iter().filter(present) {
-            allow_path(&ruleset, dir, reads)?;
-        }
-        for file in policy.system_files.iter().filter(present) {
-            allow_path(&ruleset, file, reads)?;
-        }
+        allow_reads(&ruleset, policy)?;
+    } else if carve {
+        open_except(&ruleset, std::path::Path::new("/"), &policy.open_reads_except)?;
     }
     for port in &policy.tcp_ports {
         allow_tcp_port(&ruleset, *port, ACCESS_NET_CONNECT_TCP)?;
@@ -262,4 +285,15 @@ pub fn prepare(policy: &Policy) -> Result<Ruleset, String> {
         allow_tcp_port(&ruleset, *port, ACCESS_NET_BIND_TCP)?;
     }
     Ok(ruleset)
+}
+
+/// Reading is handled all-or-nothing: with reads restricted, a path no rule
+/// names is closed, so the platform's own directories have to be named too.
+fn allow_reads(ruleset: &Ruleset, policy: &Policy) -> Result<(), String> {
+    let present = |path: &&String| std::path::Path::new(path.as_str()).exists();
+    let system = policy.system_dirs.iter().chain(&policy.system_files).filter(present);
+    for path in policy.readable_dirs.iter().chain(system) {
+        allow_path(ruleset, path, READ_RIGHTS_ABI1)?;
+    }
+    Ok(())
 }

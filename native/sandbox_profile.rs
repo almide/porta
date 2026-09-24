@@ -32,47 +32,6 @@ const PROFILE_READABLE: [&str; 6] =
 /// is readable is decided above.
 const PROFILE_READABLE_LITERALS: [&str; 4] = ["/", "/tmp", "/etc", "/var"];
 
-/// Directories under the caller's home that hold credentials and nothing a
-/// command needs to run: keys, cloud tokens, registry logins, browser
-/// sessions. Closed to reads in every mode, including when the home directory
-/// itself is a mount — the deny is emitted after the grant so it wins.
-const HOME_CREDENTIAL_DIRS: [&str; 10] = [
-    ".ssh",
-    ".gnupg",
-    ".aws",
-    ".config/gcloud",
-    ".docker",
-    ".kube",
-    "Library/Keychains",
-    "Library/Cookies",
-    "Library/Application Support/Google/Chrome",
-    "Library/Application Support/Firefox",
-];
-
-/// Single files under the home directory with the same standing.
-const HOME_CREDENTIAL_FILES: [&str; 3] = [".netrc", ".npmrc", ".pypirc"];
-
-/// Files at a writable mount's root that a host tool executes or trusts
-/// without asking: shell startup, git identity, the agent's own tool and MCP
-/// configuration. A command may read them and may write everything around
-/// them; these it may not touch, so an agent cannot plant instructions its
-/// operator's next shell or next agent session will run.
-const MOUNT_PROTECTED_FILES: [&str; 10] = [
-    ".bashrc",
-    ".bash_profile",
-    ".zshrc",
-    ".zprofile",
-    ".profile",
-    ".gitconfig",
-    ".mcp.json",
-    ".npmrc",
-    "porta.toml",
-    ".porta.toml",
-];
-
-/// Directories at a writable mount's root with the same standing.
-const MOUNT_PROTECTED_DIRS: [&str; 4] = [".claude/commands", ".claude/agents", ".vscode", ".idea"];
-
 /// Mach services that give a process the login Keychain. Denying the files
 /// alone is not enough: `security(1)` talks to these daemons, which read the
 /// database on the caller's behalf.
@@ -95,27 +54,6 @@ const HOST_CONTROL_SERVICES: [&str; 4] = [
     "com.apple.NetAuthAgent",
     "com.apple.NetAuthSysAgent",
     "com.apple.appleeventsd",
-];
-
-/// Unix sockets that are agents for the caller's own credentials: the SSH
-/// agent (launchd's `Listeners`, or a user-placed socket), gpg-agent, and the
-/// container runtimes whose socket is root on the host. Closed to connects
-/// unless `--allow-unix` names one.
-const CREDENTIAL_SOCKET_PATTERNS: [&str; 7] = [
-    // The launchd-managed SSH agent's socket. launchd puts its per-session
-    // `Listeners` socket under whichever directory it bootstrapped in —
-    // `/tmp`, `/private/tmp`, `/var/run` have all been seen — so the deny keys
-    // on the distinctive `com.apple.launchd.<id>/Listeners` tail, not the
-    // parent, rather than chase each root.
-    r"/com\.apple\.launchd\.[^/]+/Listeners$",
-    // A user- or CI-started ssh-agent: $TMPDIR/ssh-XXXX/agent.PID, wherever
-    // $TMPDIR points.
-    r"/ssh-[^/]+/agent\.[0-9]+$",
-    r"/\.ssh/agent[^/]*$",
-    r"/\.gnupg/S\.gpg-agent[^/]*$",
-    r"/docker\.sock$",
-    r"/podman[^/]*\.sock$",
-    r"/\.(colima|orbstack|lima)/.*\.sock$",
 ];
 
 /// The socket every macOS resolver call goes through. `getaddrinfo` does not
@@ -167,6 +105,9 @@ pub(crate) struct ProfileRequest<'a> {
     /// Unix socket paths reopened for connects after the credential-socket
     /// denies.
     pub allowed_unix: &'a [String],
+    /// What this run closes beyond its grants: the preset and the caller's
+    /// own additions, resolved (see `policy_preset`).
+    pub closures: &'a crate::policy_preset::Closures,
     /// This run's tag. Every deny rule carries it as its log message, so the
     /// kernel's denial records for this run can be told from every other
     /// process's. Empty for a profile that is only being shown.
@@ -176,15 +117,15 @@ pub(crate) struct ProfileRequest<'a> {
 /// The whole profile for one request: everything `sandbox-exec` will apply.
 pub(crate) fn build_sandbox_profile(request: &ProfileRequest) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    profile.push_str(&write_rules(request.allowed_dirs));
+    profile.push_str(&write_rules(request.allowed_dirs, &request.closures.protect));
     profile.push_str(&read_rules(request.allowed_dirs, request.read_policy));
-    profile.push_str(&credential_read_rules());
+    profile.push_str(&closed_read_rules(&request.closures.deny_read));
     profile.push_str(&if request.no_network {
         NO_NETWORK_RULES.to_string()
     } else {
         network_rules(request.allowed_net, request.proxy, request.bind_ports)
     });
-    profile.push_str(&socket_rules(request.allowed_unix));
+    profile.push_str(&socket_rules(&request.closures.deny_unix, request.allowed_unix));
     profile.push_str(&host_rules());
     tagged(&profile, request.tag)
 }
@@ -228,6 +169,8 @@ pub(crate) fn build_sandbox_profile_rs(
     read_policy: &str,
     proxy: bool,
 ) -> String {
+    let home = std::env::var("HOME").ok();
+    let closures = crate::policy_preset::resolve("default", &Default::default(), home.as_deref()).unwrap_or_default();
     build_sandbox_profile(&ProfileRequest {
         allowed_dirs,
         allowed_net,
@@ -236,6 +179,7 @@ pub(crate) fn build_sandbox_profile_rs(
         no_network: false,
         bind_ports: &[],
         allowed_unix: &[],
+        closures: &closures,
         tag: "",
     })
 }
@@ -245,7 +189,7 @@ pub(crate) fn build_sandbox_profile_rs(
 /// After the grants come the denies a grant must not reopen: the files at a
 /// mount's root a host tool trusts, the existing repository's hooks and
 /// config, and the mount root itself, which stays where the policy put it.
-fn write_rules(allowed_dirs: &[String]) -> String {
+fn write_rules(allowed_dirs: &[String], protect: &[String]) -> String {
     let mut rules = String::from("(deny file-write*)\n");
     let writable: Vec<&str> =
         allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).map(|dir| dir.as_str()).collect();
@@ -256,7 +200,7 @@ fn write_rules(allowed_dirs: &[String]) -> String {
         rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(&always)));
     }
     for dir in &writable {
-        rules.push_str(&mount_protection_rules(dir));
+        rules.push_str(&mount_protection_rules(dir, protect));
     }
     rules
 }
@@ -268,16 +212,17 @@ fn write_rules(allowed_dirs: &[String]) -> String {
 /// up to the mount root is pinned against unlink and rename, and the mount
 /// root is pinned too. A `.git` that does not exist yet is not protected: it
 /// is the operator's repository this guards, not one the command creates.
-fn mount_protection_rules(dir: &str) -> String {
+fn mount_protection_rules(dir: &str, protect: &[String]) -> String {
     let mut rules = String::new();
     let mut pinned: Vec<String> = vec![dir.to_string()];
-    for name in MOUNT_PROTECTED_FILES {
-        rules.push_str(&format!("(deny file-write* (literal \"{}\"))\n", sandbox_literal(&format!("{dir}/{name}"))));
-    }
-    for name in MOUNT_PROTECTED_DIRS {
+    // `subpath` covers a file as well as a directory and all beneath it, so
+    // one rule serves either, and one created later is covered too.
+    for name in protect {
         rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{dir}/{name}"))));
-        if let Some((parent, _)) = name.rsplit_once('/') {
-            pinned.push(format!("{dir}/{parent}"));
+        let mut parent = std::path::Path::new(name.as_str()).parent();
+        while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
+            pinned.push(format!("{dir}/{}", path.display()));
+            parent = path.parent();
         }
     }
     if let Some(git_dir) = repository_dir(dir) {
@@ -295,7 +240,7 @@ fn mount_protection_rules(dir: &str) -> String {
 /// The repository directory a mount root belongs to, if it has one: `.git`
 /// itself, or the directory a `.git` pointer file names (a worktree or a
 /// submodule), resolved as the kernel will see it.
-fn repository_dir(dir: &str) -> Option<String> {
+pub(crate) fn repository_dir(dir: &str) -> Option<String> {
     let dot_git = std::path::Path::new(dir).join(".git");
     let metadata = std::fs::symlink_metadata(&dot_git).ok()?;
     let target = if metadata.is_dir() {
@@ -312,17 +257,14 @@ fn read_rules(allowed_dirs: &[String], read_policy: &str) -> String {
     if read_policy == "strict" { confined_read_rules(allowed_dirs) } else { String::new() }
 }
 
-/// The caller's credential stores, closed in every mode. `file-read*` rather
-/// than `file-read-data`: listing a key directory already says which hosts
-/// and accounts exist.
-fn credential_read_rules() -> String {
-    let Ok(home) = std::env::var("HOME") else { return String::new() };
+/// The paths the preset and the caller close to reads, in every mode and
+/// after every grant, so a mount cannot reopen them. `file-read*` rather than
+/// `file-read-data`: listing a key directory already says which hosts and
+/// accounts exist.
+fn closed_read_rules(deny_read: &[String]) -> String {
     let mut rules = String::new();
-    for dir in HOME_CREDENTIAL_DIRS {
-        rules.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", sandbox_literal(&format!("{home}/{dir}"))));
-    }
-    for file in HOME_CREDENTIAL_FILES {
-        rules.push_str(&format!("(deny file-read* (literal \"{}\"))\n", sandbox_literal(&format!("{home}/{file}"))));
+    for path in deny_read {
+        rules.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", sandbox_literal(path)));
     }
     // The system keychain holds trust roots and nothing of the caller's, and
     // TLS needs it; the rest of that directory is other users' keychains.
@@ -417,11 +359,14 @@ fn network_rules(allowed_net: &[String], proxy: bool, bind_ports: &[u16]) -> Str
 /// reopened only for the paths the caller names. Under `--allow-net` the
 /// blanket outbound deny already closes them; here is where the open-network
 /// default closes them too.
-fn socket_rules(allowed_unix: &[String]) -> String {
+fn socket_rules(deny_unix: &[String], allowed_unix: &[String]) -> String {
     let mut rules = String::new();
     // The patterns are regex source, not strings: a backslash in them is the
-    // regex's own escape and must reach the kernel as written.
-    for pattern in CREDENTIAL_SOCKET_PATTERNS {
+    // regex's own escape and must reach the kernel as written. A quote would
+    // end the regex literal, so a pattern holding one is escaped as the
+    // profile's strings are.
+    for pattern in deny_unix {
+        let pattern = pattern.replace('"', "\\\"");
         rules.push_str(&format!("(deny network-outbound (regex #\"{}\"))\n", pattern));
     }
     for path in allowed_unix {

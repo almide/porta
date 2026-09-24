@@ -4,12 +4,12 @@
 The [escape corpus](escapes.md) run under five sandboxing tools, each with the
 same attempts, the same probes and the same verdicts. Where porta loses, the
 row is published as it is. The raw results are in
-[`2026-09-23-competitors/`](2026-09-23-competitors/), one JSON file per tool and
+[`2026-09-24-competitors/`](2026-09-24-competitors/), one JSON file per tool and
 platform.
 
 | Tool | Version | Platforms run |
 |---|---|---|
-| porta | 0.6.9 (2026-09-24) | macOS, Linux |
+| porta | 0.6.10 (2026-09-24) | macOS, Linux |
 | [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic sandbox-runtime) | 0.0.77 (npm) | macOS, Linux |
 | [Fence](https://github.com/fencesandbox/fence) | 737751a (2026-09-11) | macOS, Linux |
 | [nono](https://github.com/nolabs-ai/nono) | 0.78.0 | macOS, Linux |
@@ -53,7 +53,7 @@ directory when the row grants none.
 
 | Attempt | porta | srt | Fence | nono |
 |---|---|---|---|---|
-| **tried / escaped / not offered** | **19 / 0 / 0** | 14 / 4 / 5 | 12 / 4 / 7 | 11 / 4 / 7 |
+| **tried / escaped / not offered** | **20 / 0 / 0** | 15 / 5 / 5 | 13 / 5 / 7 | 12 / 4 / 7 |
 | write outside every mount | held | held | held | held |
 | rename the mount root away | held | held | held | **ESCAPED** |
 | write a git hook inside a mount | held | held | held | **ESCAPED** |
@@ -61,6 +61,7 @@ directory when the row grants none.
 | read a secret through a symlink under strict | held | held | held | held |
 | inherit an open file descriptor | held | held | held | — |
 | read an SSH private key | held | **ESCAPED** | **ESCAPED** | held |
+| read the GitHub CLI token | held | **ESCAPED** | **ESCAPED** | held |
 | read another process's arguments | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
 | read the login Keychain | held | **ESCAPED** | **ESCAPED** | held |
 | reach Launch Services | held | **ESCAPED** | **ESCAPED** | **ESCAPED** |
@@ -76,11 +77,12 @@ directory when the row grants none.
 
 What the escapes are:
 
-- **SSH key, Keychain** (srt, Fence, defaults). Both tools allow reads
-  everywhere unless told otherwise. `~/.ssh/id_*` and
-  `~/Library/Keychains/login.keychain-db` were read from a run that granted
-  one writable directory and nothing else. nono and porta close credential
-  stores in every mode.
+- **SSH key, GitHub CLI token, Keychain** (srt, Fence, defaults). Both tools
+  allow reads everywhere unless told otherwise. `~/.ssh/id_*`,
+  `~/.config/gh/hosts.yml` and `~/Library/Keychains/login.keychain-db` were
+  read from a run that granted one writable directory and nothing else. nono
+  and porta close credential stores in every mode; porta's list is a preset
+  the caller can read, extend or replace.
 - **Another process's arguments**. `sysctl(KERN_PROCARGS2)` on a process the
   sandbox did not start returned its command line, and with it the secret
   token that command line carried.
@@ -101,12 +103,15 @@ What the escapes are:
 
 | Attempt | porta | srt | Fence | nono | landrun |
 |---|---|---|---|---|---|
-| **tried / escaped / not offered** | **23 / 0 / 0** | 18 / 0 / 5 | 17 / 0 / 6 | 19 / 2 / 3 | 17 / 2 / 6 |
+| **tried / escaped / not offered** | **26 / 0 / 0** | 21 / 2 / 5 | 20 / 2 / 6 | 22 / 4 / 3 | 20 / 5 / 6 |
 | write outside every mount | held | held | held | held | held |
+| rename the mount root away | held | held | held | **ESCAPED** | **ESCAPED** |
+| write a git hook inside a mount | held | held | held | **ESCAPED** | **ESCAPED** |
 | write through a symlink pointing outside the mount | held | held | held | held | held |
 | read a secret through a symlink under strict | held | held | held | held | held |
 | inherit an open file descriptor | held | held | held | — | held |
-| read an SSH private key | held | held | held | held | held |
+| read an SSH private key | held | **ESCAPED** | **ESCAPED** | held | **ESCAPED** |
+| read the GitHub CLI token | held | **ESCAPED** | **ESCAPED** | held | held |
 | read /etc/shadow under strict | held | held | held | held | held |
 | read another process's arguments (strict reads) | held | held | held | **ESCAPED** | held |
 | read another process's arguments (default reads) | held | held | held | **ESCAPED** | held |
@@ -128,6 +133,20 @@ What the escapes are:
 
 What the escapes are:
 
+- **SSH key, GitHub CLI token** (srt, Fence, landrun). The row grants the
+  home and runs with each tool's default reads. srt and Fence read everywhere
+  unless told otherwise; landrun cannot close a path inside a grant, and held
+  the token row only because that row grants no directory it lies in. nono
+  closes credential stores; porta covers each path its preset names with an
+  empty mount in the command's mount namespace. Before 2026-09-24 this row ran
+  on Linux under strict reads, where every tool held it, and so hid that
+  porta's own default reads left these stores open on Linux.
+- **Mount root, git hook** (nono, landrun). Inside a directory granted for
+  writing, both let `.git/hooks/pre-commit` be written and the directory be
+  renamed away: Landlock grants a directory whole. porta bind-mounts the hooks,
+  the repository config and the preset's protected names read-only onto
+  themselves, and pins the mount root with a bind mount. srt and Fence held
+  both, through bubblewrap's read-only binds.
 - **UDP** (landrun, in both network rows). Landlock's network rules cover TCP
   only. Under a policy that granted no network, landrun refused a TCP
   connection to `1.1.1.1:53` but let a UDP DNS question to the same address
@@ -145,8 +164,9 @@ What the escapes are:
   but the same call made from Python went through. porta's seccomp baseline
   refuses the syscall.
 
-Apart from those, srt and Fence held every Linux row porta held. The
-differences on Linux are the resource ceilings and the hardening row.
+Apart from the credential rows, srt and Fence held every Linux row porta
+held. The other differences on Linux are the resource ceilings and the
+hardening row.
 
 **Ceilings.** nono has two: `--memory` and `--max-processes`, both through
 cgroup v2. Both held. They need the run started inside the systemd user
@@ -184,7 +204,9 @@ is allowing a host (cloud metadata) is not offered.
   containers. porta then cannot create the PID namespace. The run goes ahead
   in the host's, says so on stderr, and `porta check` shows it. There, the
   default read mode leaves other processes' `/proc` entries readable, and only
-  `--read-policy strict` closes them. srt and Fence depend on bubblewrap, which
+  `--read-policy strict` closes them; a writable mount's hooks and protected
+  names are not protected; and the preset's closed paths are carved out of a
+  Landlock read grant, so a closed path inside a mount refuses the run. srt and Fence depend on bubblewrap, which
   needs the same kernel permission (or an AppArmor profile that grants it).
   On Ubuntu, `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"`
   loads the profile Ubuntu documents for porta alone. CI runs both suites

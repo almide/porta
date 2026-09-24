@@ -1,11 +1,11 @@
 {
-  "tool": "porta",
-  "system": "Darwin",
-  "machine": "arm64",
-  "tried": 19,
-  "escaped": 0,
-  "hardening_gaps": 0,
-  "not_offered": 0,
+  "tool": "landrun",
+  "system": "Linux",
+  "machine": "aarch64",
+  "tried": 20,
+  "escaped": 5,
+  "hardening_gaps": 1,
+  "not_offered": 6,
   "rows": [
     {
       "name": "write outside every mount",
@@ -16,14 +16,14 @@
     {
       "name": "rename the mount root away",
       "category": "filesystem",
-      "verdict": "held",
-      "detail": "rename refused"
+      "verdict": "ESCAPED",
+      "detail": "mount root renamed away"
     },
     {
       "name": "write a git hook inside a mount",
       "category": "filesystem",
-      "verdict": "held",
-      "detail": "hook write refused"
+      "verdict": "ESCAPED",
+      "detail": "hook written inside a mount"
     },
     {
       "name": "write through a symlink pointing outside the mount",
@@ -46,14 +46,20 @@
     {
       "name": "read an SSH private key",
       "category": "credentials",
+      "verdict": "ESCAPED",
+      "detail": "secret read"
+    },
+    {
+      "name": "read the GitHub CLI token",
+      "category": "credentials",
       "verdict": "held",
       "detail": "read refused"
     },
     {
       "name": "read /etc/shadow under strict",
       "category": "credentials",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "/etc/shadow closed"
     },
     {
       "name": "read another process's arguments",
@@ -64,20 +70,20 @@
     {
       "name": "read another process's arguments, default reads",
       "category": "processes",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "the process is not visible"
     },
     {
       "name": "read the login Keychain",
       "category": "credentials",
-      "verdict": "held",
-      "detail": "keychain closed"
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
     },
     {
       "name": "reach Launch Services (open(1) starts programs outside the sandbox through it)",
       "category": "processes",
-      "verdict": "held",
-      "detail": "Launch Services mach lookups refused"
+      "verdict": "n/a",
+      "detail": "not applicable on Linux"
     },
     {
       "name": "reach a port the policy did not open",
@@ -88,50 +94,50 @@
     {
       "name": "reach anything under --no-net",
       "category": "network",
-      "verdict": "held",
-      "detail": "no loopback service, TCP or UDP reached"
+      "verdict": "ESCAPED",
+      "detail": "reached udp 1.1.1.1:53"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",
       "category": "network",
-      "verdict": "held",
-      "detail": "cloud metadata refused even when allow-listed"
+      "verdict": "not offered",
+      "detail": "landrun cannot allow a host, only ports"
     },
     {
       "name": "get a UDP answer from outside in proxy mode",
       "category": "network",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "ESCAPED",
+      "detail": "a UDP DNS query got an answer in proxy mode"
     },
     {
       "name": "open a socket without socket() via io_uring",
       "category": "network",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "io_uring refused"
     },
     {
       "name": "exec a memory file (fileless)",
       "category": "processes",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "fileless exec refused"
     },
     {
       "name": "attach to a process outside the sandbox (ptrace)",
       "category": "processes",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "attach refused (yama ptrace_scope absent)"
     },
     {
       "name": "enter a new user namespace",
       "category": "hardening",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "ESCAPED",
+      "detail": "unshare(CLONE_NEWUSER) permitted"
     },
     {
       "name": "reach the network over MPTCP",
       "category": "network",
-      "verdict": "n/a",
-      "detail": "not applicable on Darwin"
+      "verdict": "held",
+      "detail": "MPTCP refused"
     },
     {
       "name": "open a raw socket",
@@ -142,32 +148,32 @@
     {
       "name": "fork past --max-procs",
       "category": "resources",
-      "verdict": "held",
-      "detail": "every fork refused under --max-procs 1"
+      "verdict": "not offered",
+      "detail": "landrun has no --max-procs"
     },
     {
       "name": "grow a file past --max-file-size",
       "category": "resources",
-      "verdict": "held",
-      "detail": "file stopped at 1048576 bytes under a 1 MiB ceiling"
+      "verdict": "not offered",
+      "detail": "landrun has no --max-file-size"
     },
     {
       "name": "burn CPU past --max-cpu",
       "category": "resources",
-      "verdict": "held",
-      "detail": "CPU burn ended by the kernel after 1.0s (exit 152)"
+      "verdict": "not offered",
+      "detail": "landrun has no --max-cpu"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
-      "verdict": "held",
-      "detail": "killed after 1.0s despite ignoring SIGXCPU (exit 152)"
+      "verdict": "not offered",
+      "detail": "landrun has no --max-cpu"
     },
     {
       "name": "allocate past --max-memory-mb",
       "category": "resources",
-      "verdict": "held",
-      "detail": "allocation past the ceiling was killed (exit 137)"
+      "verdict": "not offered",
+      "detail": "landrun has no --max-memory-mb"
     }
   ]
 }

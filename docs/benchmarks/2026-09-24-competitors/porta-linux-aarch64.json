@@ -1,11 +1,11 @@
 {
-  "tool": "landrun",
+  "tool": "porta",
   "system": "Linux",
   "machine": "aarch64",
-  "tried": 17,
-  "escaped": 2,
-  "hardening_gaps": 1,
-  "not_offered": 6,
+  "tried": 26,
+  "escaped": 0,
+  "hardening_gaps": 0,
+  "not_offered": 0,
   "rows": [
     {
       "name": "write outside every mount",
@@ -16,14 +16,14 @@
     {
       "name": "rename the mount root away",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "rename refused"
     },
     {
       "name": "write a git hook inside a mount",
       "category": "filesystem",
-      "verdict": "n/a",
-      "detail": "not applicable on Linux"
+      "verdict": "held",
+      "detail": "hook write refused"
     },
     {
       "name": "write through a symlink pointing outside the mount",
@@ -45,6 +45,12 @@
     },
     {
       "name": "read an SSH private key",
+      "category": "credentials",
+      "verdict": "held",
+      "detail": "read refused"
+    },
+    {
+      "name": "read the GitHub CLI token",
       "category": "credentials",
       "verdict": "held",
       "detail": "read refused"
@@ -88,20 +94,20 @@
     {
       "name": "reach anything under --no-net",
       "category": "network",
-      "verdict": "ESCAPED",
-      "detail": "reached udp 1.1.1.1:53"
+      "verdict": "held",
+      "detail": "no loopback service, TCP or UDP reached"
     },
     {
       "name": "reach the cloud metadata endpoint via the proxy",
       "category": "network",
-      "verdict": "not offered",
-      "detail": "landrun cannot allow a host, only ports"
+      "verdict": "held",
+      "detail": "cloud metadata refused even when allow-listed"
     },
     {
       "name": "get a UDP answer from outside in proxy mode",
       "category": "network",
-      "verdict": "ESCAPED",
-      "detail": "a UDP DNS query got an answer in proxy mode"
+      "verdict": "held",
+      "detail": "no UDP egress in proxy mode"
     },
     {
       "name": "open a socket without socket() via io_uring",
@@ -124,8 +130,8 @@
     {
       "name": "enter a new user namespace",
       "category": "hardening",
-      "verdict": "ESCAPED",
-      "detail": "unshare(CLONE_NEWUSER) permitted"
+      "verdict": "held",
+      "detail": "unshare refused"
     },
     {
       "name": "reach the network over MPTCP",
@@ -142,32 +148,32 @@
     {
       "name": "fork past --max-procs",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "landrun has no --max-procs"
+      "verdict": "held",
+      "detail": "every fork refused under --max-procs 1"
     },
     {
       "name": "grow a file past --max-file-size",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "landrun has no --max-file-size"
+      "verdict": "held",
+      "detail": "file stopped at 1048576 bytes under a 1 MiB ceiling"
     },
     {
       "name": "burn CPU past --max-cpu",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "landrun has no --max-cpu"
+      "verdict": "held",
+      "detail": "CPU burn ended by the kernel after 1.0s (exit 152)"
     },
     {
       "name": "ignore SIGXCPU and keep burning",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "landrun has no --max-cpu"
+      "verdict": "held",
+      "detail": "killed after 2.0s despite ignoring SIGXCPU (exit 137)"
     },
     {
       "name": "allocate past --max-memory-mb",
       "category": "resources",
-      "verdict": "not offered",
-      "detail": "landrun has no --max-memory-mb"
+      "verdict": "held",
+      "detail": "allocation past the ceiling was killed (exit 137)"
     }
   ]
 }
