@@ -478,8 +478,14 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     # from the unified log, Linux by tracing the run with strace from outside.
     if platform.system() == 'Darwin' or shutil.which('strace'):
         outside = pathlib.Path(tempfile.mkdtemp(prefix='porta-why-', dir=pathlib.Path.home()))
-        result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
-                     '-c', f'echo x > "{outside}/refused"; exit 3')
+        # On macOS the footer comes from the unified log, which lags on a busy
+        # runner (see the footer test below): three runs, not one.
+        for attempt in range(3):
+            result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
+                         '-c', f'echo x > "{outside}/refused"; exit 3')
+            if 'the sandbox refused this run' in result.stderr:
+                break
+            time.sleep(2)
         shutil.rmtree(outside, ignore_errors=True)
         assert result.returncode == 3, result
         assert 'the sandbox refused this run' in result.stderr and f'-v {outside.resolve()}' in result.stderr, result.stderr
