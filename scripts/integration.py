@@ -468,6 +468,7 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     closed = json.loads(run('explain', '/bin/echo', '-v', str(elsewhere), '--deny-read', '~/notes', '--json', env=as_home).stdout)
     assert closed['preset'] == 'default' and str(token.parent.resolve()) in closed['closed']['read'], closed
     assert str(own.parent.resolve()) in closed['closed']['read'] and '.envrc' in closed['closed']['protect'], closed
+    assert closed['closed']['repository'] == ['hooks', 'config'], closed
     for bad in (['--protect', '../outside'], ['--deny-read', 'relative/path'], ['--preset', str(root / 'no-such-preset.toml')]):
         result = run('run', '/bin/echo', '-v', str(elsewhere), *bad, '--', 'must-not-run', env=as_home)
         assert result.returncode == 125 and 'must-not-run' not in result.stdout, (bad, result)

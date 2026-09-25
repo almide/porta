@@ -64,6 +64,7 @@ impl SandboxRequest {
         let mut text = format!("preset       {preset} (--preset none drops it; --deny-read, --protect, --deny-unix add)\n");
         text.push_str(&format!("closed reads {}\n", if closures.deny_read.is_empty() { "none".to_string() } else { closures.deny_read.join("\n             ") }));
         text.push_str(&format!("protected    {}\n", if closures.protect.is_empty() { "none".to_string() } else { closures.protect.join(", ") }));
+        text.push_str(&format!("in .git     {}\n", if closures.repository.is_empty() { "none".to_string() } else { closures.repository.join(", ") }));
         text.push_str(&format!("closed unix  {}\n", if closures.deny_unix.is_empty() { "none".to_string() } else { closures.deny_unix.join("  ") }));
         #[cfg(target_os = "linux")]
         text.push_str(&format!("  bound now  {}\n", self.closed_sockets().join("\n             ")));
@@ -94,7 +95,7 @@ impl SandboxRequest {
             "{{\"command\":{},\"args\":{},\"working_dir\":{},\"mounts\":{},\"reads\":{},\
 \"network\":{{\"mode\":{},\"allow\":{}}},\"listen\":{},\"unix_sockets\":{},\
 \"timeout_seconds\":{},\"limits\":{{\"cpu_seconds\":{},\"processes\":{},\"file_size_mib\":{},\"memory_mib\":{}}},\
-\"preset\":{},\"closed\":{{\"read\":{},\"protect\":{},\"unix\":{}}},\"enforcement\":{}}}",
+\"preset\":{},\"closed\":{{\"read\":{},\"protect\":{},\"repository\":{},\"unix\":{}}},\"enforcement\":{}}}",
             quoted(&self.cmd),
             array(&self.args),
             quoted(if self.cwd.is_empty() { "." } else { &self.cwd }),
@@ -112,6 +113,7 @@ impl SandboxRequest {
             quoted(if self.preset.is_empty() { "default" } else { &self.preset }),
             array(&self.closures.deny_read),
             array(&self.closures.protect),
+            array(&self.closures.repository),
             array(&self.closures.deny_unix),
             quoted(self.enforcement_backend()),
         )

@@ -34,9 +34,9 @@ impl Hidden {
     /// The paths of `deny_read` that exist, outermost only (one inside another
     /// is covered with it, and could not be mounted on once it is), the closed
     /// Unix sockets, then the protections for each writable mount.
-    pub(crate) fn prepare(deny_read: &[String], sockets: &[String], writable: &[String], protect: &[String]) -> Vec<Hidden> {
+    pub(crate) fn prepare(closures: &crate::policy_preset::Closures, sockets: &[String], writable: &[String]) -> Vec<Hidden> {
         let exists: Vec<(&String, std::fs::Metadata)> =
-            deny_read.iter().filter_map(|path| std::fs::metadata(path).ok().map(|meta| (path, meta))).collect();
+            closures.deny_read.iter().filter_map(|path| std::fs::metadata(path).ok().map(|meta| (path, meta))).collect();
         let mut covers: Vec<(String, Cover)> = exists
             .iter()
             .filter(|(path, _)| !exists.iter().any(|(other, _)| other != path && path.starts_with(&format!("{other}/"))))
@@ -44,7 +44,7 @@ impl Hidden {
             .collect();
         covers.extend(sockets.iter().map(|socket| (socket.clone(), Cover::HideFile)));
         for mount in writable {
-            covers.extend(protections(mount, protect));
+            covers.extend(protections(mount, closures));
         }
         covers
             .into_iter()
@@ -88,22 +88,22 @@ impl Hidden {
 /// repository's hooks and config, frozen; and the mount root and `.git`,
 /// pinned. A name that does not exist yet is not covered on Linux — there is
 /// nothing to mount on — where macOS's rules cover one created later.
-pub(super) fn protections(mount: &str, protect: &[String]) -> Vec<(String, Cover)> {
+pub(super) fn protections(mount: &str, closures: &crate::policy_preset::Closures) -> Vec<(String, Cover)> {
     let mut covers = vec![(mount.to_string(), Cover::Pin)];
     let exists = |path: &String| std::fs::symlink_metadata(path).map(|meta| !meta.file_type().is_symlink()).unwrap_or(false);
-    if let Some(git_dir) = crate::sandbox_profile::repository_dir(mount) {
+    if let Some(git_dir) = crate::sandbox_profile::repository_dir(mount).filter(|_| !closures.repository.is_empty()) {
         let dot_git = format!("{mount}/.git");
         if exists(&dot_git) && std::path::Path::new(&dot_git).is_dir() {
             covers.push((dot_git, Cover::Pin));
         }
-        for part in ["hooks", "config"] {
+        for part in &closures.repository {
             let path = format!("{git_dir}/{part}");
             if exists(&path) {
                 covers.push((path, Cover::Freeze));
             }
         }
     }
-    for name in crate::policy_preset::protected_in(mount, protect) {
+    for name in crate::policy_preset::protected_in(mount, &closures.protect) {
         let path = format!("{mount}/{name}");
         if exists(&path) {
             covers.push((path, Cover::Freeze));

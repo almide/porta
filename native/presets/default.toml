@@ -57,8 +57,7 @@ deny = [
 # Names inside every writable mount that a host tool runs or trusts without
 # asking: shell startup, git identity, an agent's own tools and MCP servers,
 # an editor's tasks, direnv. A command may read them and write everything
-# around them; these it may not change or rename away. A repository's own
-# .git/hooks and .git/config are protected as well, wherever .git points.
+# around them; these it may not change or rename away.
 protect = [
   ".bashrc",
   ".bash_profile",
@@ -77,6 +76,11 @@ protect = [
   ".vscode",
   ".idea",
 ]
+# Names inside the git directory of a repository at a mount's root, wherever
+# its .git points (a worktree's too): a hook runs as the operator at the next
+# commit, and config can name a program git runs (core.fsmonitor, a pager).
+# The .git holding them is pinned so it cannot be renamed away.
+repository = ["hooks", "config"]
 
 [unix]
 # Unix sockets that act for the caller's own credentials: the SSH agent,

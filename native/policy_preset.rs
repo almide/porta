@@ -20,6 +20,9 @@ pub(crate) struct Closures {
     /// Names relative to each writable mount's root, or absolute paths that
     /// are protected in whichever writable mount holds them.
     pub(crate) protect: Vec<String>,
+    /// Names inside the git directory of a repository at a writable mount's
+    /// root, wherever its `.git` points: `hooks`, `config`.
+    pub(crate) repository: Vec<String>,
     /// Regular expressions over a Unix socket's path.
     pub(crate) deny_unix: Vec<String>,
 }
@@ -42,6 +45,7 @@ struct Section {
 #[serde(default, deny_unknown_fields)]
 struct WriteSection {
     protect: Vec<String>,
+    repository: Vec<String>,
 }
 
 /// The preset a request named: `default`, `none`, or a path to a preset file.
@@ -68,6 +72,13 @@ pub(crate) fn resolve(preset: &str, extra: &Closures, home: Option<&str>) -> Res
         if !closures.protect.contains(&name) {
             closures.protect.push(name);
         }
+    }
+    for name in &document.write.repository {
+        let name = protected_name(name, None).map_err(|_| format!("[write] repository takes names inside a git directory, like hooks, not {name}"))?;
+        if name.starts_with('/') || closures.repository.contains(&name) {
+            continue;
+        }
+        closures.repository.push(name);
     }
     for pattern in document.unix.deny.iter().chain(&extra.deny_unix) {
         // A control character would carry the profile's rule onto a second
@@ -132,6 +143,7 @@ mod tests {
         let closures = resolve("default", &Closures::default(), Some("/home/u")).unwrap();
         assert!(closures.deny_read.contains(&"/home/u/.aws".to_string()));
         assert!(closures.protect.contains(&".envrc".to_string()));
+        assert_eq!(closures.repository, vec!["hooks".to_string(), "config".to_string()]);
         assert!(!closures.deny_unix.is_empty());
     }
 
@@ -140,7 +152,7 @@ mod tests {
         let extra = Closures { deny_read: vec!["~/secret".into()], ..Closures::default() };
         let closures = resolve("none", &extra, Some("/home/u")).unwrap();
         assert_eq!(closures.deny_read, vec!["/home/u/secret".to_string()]);
-        assert!(closures.protect.is_empty());
+        assert!(closures.protect.is_empty() && closures.repository.is_empty());
     }
 
     #[test]
