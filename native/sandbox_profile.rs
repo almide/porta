@@ -118,7 +118,7 @@ pub(crate) struct ProfileRequest<'a> {
 /// The whole profile for one request: everything `sandbox-exec` will apply.
 pub(crate) fn build_sandbox_profile(request: &ProfileRequest) -> String {
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    profile.push_str(&write_rules(request.allowed_dirs, &request.closures.protect));
+    profile.push_str(&write_rules(request.allowed_dirs, request.closures));
     profile.push_str(&read_rules(request.allowed_dirs, request.read_policy));
     profile.push_str(&closed_read_rules(&request.closures.deny_read));
     profile.push_str(&if request.no_network {

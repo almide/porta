@@ -8,7 +8,7 @@ use super::*;
 /// After the grants come the denies a grant must not reopen: the files at a
 /// mount's root a host tool trusts, the existing repository's hooks and
 /// config, and the mount root itself, which stays where the policy put it.
-pub(super) fn write_rules(allowed_dirs: &[String], protect: &[String]) -> String {
+pub(super) fn write_rules(allowed_dirs: &[String], closures: &crate::policy_preset::Closures) -> String {
     let mut rules = String::from("(deny file-write*)\n");
     let writable: Vec<&str> =
         allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).map(|dir| dir.as_str()).collect();
@@ -19,7 +19,7 @@ pub(super) fn write_rules(allowed_dirs: &[String], protect: &[String]) -> String
         rules.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", sandbox_literal(&always)));
     }
     for dir in &writable {
-        rules.push_str(&mount_protection_rules(dir, protect));
+        rules.push_str(&mount_protection_rules(dir, closures));
     }
     rules
 }
@@ -31,12 +31,12 @@ pub(super) fn write_rules(allowed_dirs: &[String], protect: &[String]) -> String
 /// up to the mount root is pinned against unlink and rename, and the mount
 /// root is pinned too. A `.git` that does not exist yet is not protected: it
 /// is the operator's repository this guards, not one the command creates.
-pub(super) fn mount_protection_rules(dir: &str, protect: &[String]) -> String {
+pub(super) fn mount_protection_rules(dir: &str, closures: &crate::policy_preset::Closures) -> String {
     let mut rules = String::new();
     let mut pinned: Vec<String> = vec![dir.to_string()];
     // `subpath` covers a file as well as a directory and all beneath it, so
     // one rule serves either, and one created later is covered too.
-    for name in &crate::policy_preset::protected_in(dir, protect) {
+    for name in &crate::policy_preset::protected_in(dir, &closures.protect) {
         rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{dir}/{name}"))));
         let mut parent = std::path::Path::new(name.as_str()).parent();
         while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
@@ -44,9 +44,10 @@ pub(super) fn mount_protection_rules(dir: &str, protect: &[String]) -> String {
             parent = path.parent();
         }
     }
-    if let Some(git_dir) = repository_dir(dir) {
-        rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{git_dir}/hooks"))));
-        rules.push_str(&format!("(deny file-write* (literal \"{}\"))\n", sandbox_literal(&format!("{git_dir}/config"))));
+    if let Some(git_dir) = repository_dir(dir).filter(|_| !closures.repository.is_empty()) {
+        for name in &closures.repository {
+            rules.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", sandbox_literal(&format!("{git_dir}/{name}"))));
+        }
         pinned.push(git_dir.clone());
         pinned.push(format!("{dir}/.git"));
     }

@@ -139,6 +139,7 @@ impl SandboxRequest {
             deny_read: request.deny_read.clone(),
             protect: request.protect.clone(),
             deny_unix: request.deny_unix.clone(),
+            ..Default::default()
         };
         request.closures = crate::policy_preset::resolve(&request.preset, &own, std::env::var("HOME").ok().as_deref())?;
         if !READ_POLICIES.contains(&request.read_policy.as_str()) {

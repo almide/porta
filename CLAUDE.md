@@ -106,10 +106,14 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
   the socket families a TCP rule cannot see. A kernel that will not take the
   filter refuses the run.
 - Which paths, names and sockets a run closes is the preset's, not the core's:
-  no credential path is written in enforcement code. The core supplies the
+  no credential path, protected name or git file is written in enforcement
+  code. What stays in code is how the platform works: the Keychain's mach
+  services, Launch Services, the resolver socket, the system directories a
+  command needs to start. The core supplies the
   mechanisms and applies them to whatever the preset and flags resolve to.
-- Inside a writable mount, the repository hooks and config and the names the
-  preset protects stay unwritable, and neither they nor the mount root can be
+- Inside a writable mount, the names the preset protects — in the mount and
+  (`[write] repository`, hooks and config by default) in its repository's git
+  directory — stay unwritable, and neither they nor the mount root can be
   renamed away — on Linux through the mount namespace, and where the host
   refuses one the run says it is unprotected.
 - A credential socket the preset names is refused unless `--allow-unix`

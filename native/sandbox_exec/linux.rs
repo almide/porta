@@ -128,7 +128,7 @@ impl SandboxRequest {
         let mut command = self.bare_command(if stub { "/bin/sh" } else { &self.cmd });
         if let Some(isolation) = isolation {
             let writable: Vec<String> = self.allowed_dirs.iter().filter(|dir| !dir.ends_with(":ro")).cloned().collect();
-            let hidden = crate::pid_namespace::Hidden::prepare(&self.closures.deny_read, &self.closed_sockets(), &writable, &self.closures.protect);
+            let hidden = crate::pid_namespace::Hidden::prepare(&self.closures, &self.closed_sockets(), &writable);
             unsafe {
                 command.pre_exec(move || isolation.enter(&hidden));
             }
@@ -167,7 +167,7 @@ impl SandboxRequest {
                     open.push("the command shares the host's process list (--read-policy strict closes /proc)".to_string());
                 }
                 if self.allowed_dirs.iter().any(|dir| !dir.ends_with(":ro")) {
-                    open.push("a writable mount's .git/hooks and protected names stay writable".to_string());
+                    open.push("a writable mount's protected names and repository files stay writable".to_string());
                 }
                 let sockets = self.closed_sockets();
                 if !sockets.is_empty() {
