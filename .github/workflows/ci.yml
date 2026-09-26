@@ -116,6 +116,14 @@ jobs:
           python3 scripts/fuzz.py target/porta cli --iterations 300 --seed 1
           python3 scripts/fuzz.py target/porta policy --iterations 150
           python3 scripts/fuzz.py target/porta proxy --iterations 4
+      # Operations strung together at random: runs with random grants and
+      # misbehaviour, snapshots and rollbacks, explain, init and up, runs
+      # killed part way. Seed 13 found two snapshots in one second rolled
+      # back to the wrong one; it stays, beside one fresh seed per push.
+      - name: Monkey
+        run: |
+          python3 scripts/monkey.py target/porta --steps 150 --seed 13
+          python3 scripts/monkey.py target/porta --steps 100
       # Not a gate: the numbers move with the runner. Printed so every push
       # leaves what porta cost on that commit in its log.
       - name: Overhead

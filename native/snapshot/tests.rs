@@ -9,6 +9,13 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[test]
+fn snapshots_taken_in_one_second_sort_by_the_nanosecond() {
+    let mut ids = vec!["1790000000.000000900-7".to_string(), "1790000000.000000010-9".to_string(), "1789999999-3".to_string()];
+    ids.sort_by_key(|id| taken(id));
+    assert_eq!(ids, vec!["1789999999-3", "1790000000.000000010-9", "1790000000.000000900-7"]);
+}
+
+#[test]
 fn a_changed_tree_is_described_and_put_back() -> std::io::Result<()> {
     let mount = scratch("mount");
     let copy = scratch("copy");
