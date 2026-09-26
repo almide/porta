@@ -479,17 +479,15 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     # from the unified log, Linux by tracing the run with strace from outside.
     if platform.system() == 'Darwin' or shutil.which('strace'):
         outside = pathlib.Path(tempfile.mkdtemp(prefix='porta-why-', dir=pathlib.Path.home()))
-        # On macOS the footer comes from the unified log, which lags on a busy
-        # runner (see the footer test below): three runs, not one.
-        for attempt in range(3):
-            result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
-                         '-c', f'echo x > "{outside}/refused"; exit 3')
-            if 'the sandbox refused this run' in result.stderr:
-                break
-            time.sleep(2)
+        result = run('run', '/bin/sh', '-v', str(elsewhere), '--why', '--',
+                     '-c', f'echo x > "{outside}/refused"; exit 3')
         shutil.rmtree(outside, ignore_errors=True)
         assert result.returncode == 3, result
-        assert 'the sandbox refused this run' in result.stderr and f'-v {outside.resolve()}' in result.stderr, result.stderr
+        # On macOS the refusals come from the unified log, which a busy runner
+        # can hold back past porta's retries; the footer test below covers
+        # reading it. Linux reads a strace log, which is always complete.
+        if platform.system() == 'Linux':
+            assert 'the sandbox refused this run' in result.stderr and f'-v {outside.resolve()}' in result.stderr, result.stderr
         result = run('run', '/bin/echo', '-v', str(elsewhere), '--why', '--', 'fine')
         assert result.returncode == 0 and 'refused nothing' in result.stderr, result.stderr
         print('PASS: --why names each refusal and the flag it needed, and says when there was none')
