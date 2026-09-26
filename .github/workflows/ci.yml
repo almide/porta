@@ -7,6 +7,8 @@ on:
 jobs:
   build-and-test:
     strategy:
+      # One platform's failure says nothing about the other's; let both finish.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
