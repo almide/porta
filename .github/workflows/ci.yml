@@ -7,6 +7,8 @@ on:
 jobs:
   build-and-test:
     strategy:
+      # One platform's failure says nothing about the other's; let both finish.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -100,6 +102,18 @@ jobs:
       # Ubuntu does from 23.10, so the two steps above prove the run without
       # them. The profile Ubuntu documents for such a program lets porta have
       # them, and the same two suites then prove the namespaces on x86_64.
+      # The .deb's postinst loads the AppArmor profile for /usr/bin/porta on a
+      # runner that restricts user namespaces, as this one does; removing the
+      # package must take the profile with it.
+      - name: The .deb gives porta its namespaces and removes cleanly
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cp target/porta "$RUNNER_TEMP/porta" && strip "$RUNNER_TEMP/porta"
+          bash scripts/build-deb.sh "$RUNNER_TEMP/porta" 0.0.0 amd64 "$RUNNER_TEMP/deb"
+          sudo apt-get install -y "$RUNNER_TEMP/deb/porta_0.0.0_amd64.deb"
+          /usr/bin/porta check | grep -E '^ok +own PID, mount and network namespace'
+          sudo apt-get remove -y porta
+          test ! -e /etc/apparmor.d/usr.bin.porta
       - name: Integration and escape corpus with user namespaces
         if: matrix.os == 'ubuntu-latest'
         run: |

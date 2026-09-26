@@ -30,14 +30,15 @@
 
 ## Done
 
-30 items
+31 items
 
 <details>
-<summary>Show all 30 completed items</summary>
+<summary>Show all 31 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
 | 2026-09-26 | [Monkey testing](done/14-monkey-test.md) | scripts/monkey.py: random sequences of real operations, checked after every step |
+| 2026-09-26 | [A .deb that brings the AppArmor profile](done/15-deb-package.md) | A .deb per release whose postinst gives /usr/bin/porta its namespaces on Ubuntu |
 | 2026-09-24 | [Why a run was refused, on Linux](done/10-why-on-linux.md) | --why: what the sandbox refused, on Linux too, traced with strace |
 | 2026-09-24 | [Recipes for the coding agents people run](done/11-agent-recipes.md) | porta init claude / codex: a porta.toml measured to what each agent needs |
 | 2026-09-24 | [Putting a run's writes back](done/12-snapshot-rollback.md) | --snapshot and porta rollback: see what a run changed, and put it back |

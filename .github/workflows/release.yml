@@ -60,12 +60,27 @@ jobs:
           mkdir -p "dist/porta-${{ matrix.target }}"
           cp target/porta README.md LICENSE "dist/porta-${{ matrix.target }}/"
           tar -czf "dist/porta-${{ matrix.target }}.tar.gz" -C dist "porta-${{ matrix.target }}"
-          shasum -a 256 "dist/porta-${{ matrix.target }}.tar.gz" \
-            | sed 's| .*/| |' > "dist/porta-${{ matrix.target }}.sha256"
+          # Debian and Ubuntu get a .deb as well, whose postinst loads the
+          # AppArmor profile porta's namespaces need on Ubuntu 23.10 and later.
+          tag="${{ inputs.tag || github.ref_name }}"
+          assets="porta-${{ matrix.target }}.tar.gz"
+          case "${{ matrix.target }}" in
+            linux-x86_64) deb_arch=amd64 ;;
+            linux-aarch64) deb_arch=arm64 ;;
+            *) deb_arch= ;;
+          esac
+          if [ -n "$deb_arch" ]; then
+            bash scripts/build-deb.sh target/porta "${tag#v}" "$deb_arch" dist
+            assets="$assets porta_${tag#v}_${deb_arch}.deb"
+          fi
+          # One space between hash and name, as install.sh reads the list.
+          (cd dist && shasum -a 256 $assets) | sed 's|  | |' > "dist/porta-${{ matrix.target }}.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: porta-${{ matrix.target }}
-          path: dist/porta-${{ matrix.target }}.*
+          path: |
+            dist/porta-${{ matrix.target }}.*
+            dist/porta_*.deb
 
   # Published as a prerelease first. A release that is "latest" is one the
   # install instructions hand to strangers, and until something has installed
@@ -111,13 +126,16 @@ jobs:
       # checks it.
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: true
           files: |
             dist/*.tar.gz
+            dist/*.deb
             dist/porta-checksums.sha256
             dist/porta-checksums.sha256.sigstore.json
           fail_on_unmatched_files: true
@@ -152,9 +170,30 @@ jobs:
         run: |
           gh release download "${{ inputs.tag || github.ref_name }}" --repo "${{ github.repository }}" \
             --pattern 'porta-*.tar.gz' --dir "$RUNNER_TEMP/provenance"
-          for archive in "$RUNNER_TEMP"/provenance/*.tar.gz; do
+          gh release download "${{ inputs.tag || github.ref_name }}" --repo "${{ github.repository }}" \
+            --pattern 'porta_*.deb' --dir "$RUNNER_TEMP/provenance"
+          for archive in "$RUNNER_TEMP"/provenance/*.tar.gz "$RUNNER_TEMP"/provenance/*.deb; do
             gh attestation verify "$archive" --repo "${{ github.repository }}"
           done
+      # The .deb on the runner it is for: installed as a user would, then the
+      # namespaces it exists to give must be there, and removing it must take
+      # the profile with it.
+      - name: Install the .deb and check the namespaces
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          arch=$(dpkg --print-architecture)
+          gh release download "${{ inputs.tag || github.ref_name }}" --repo "${{ github.repository }}" \
+            --pattern "porta_*_${arch}.deb" --dir "$RUNNER_TEMP/deb"
+          (cd "$RUNNER_TEMP/deb" && gh release download "${{ inputs.tag || github.ref_name }}" --repo "${{ github.repository }}" \
+            --pattern porta-checksums.sha256 \
+            && [ "$(grep "_${arch}.deb" porta-checksums.sha256 | cut -d' ' -f1)" = "$(sha256sum porta_*_"${arch}".deb | cut -d' ' -f1)" ])
+          sudo apt-get install -y "$RUNNER_TEMP"/deb/porta_*_"${arch}".deb
+          /usr/bin/porta check | grep -E '^ok +own PID, mount and network namespace'
+          /usr/bin/porta run /bin/sh -v "$RUNNER_TEMP" -- -c 'echo ok > "$0/written"' "$RUNNER_TEMP"
+          sudo apt-get remove -y porta
+          test ! -e /etc/apparmor.d/usr.bin.porta
 
   # Only now is it the release the install instructions point at.
   promote:

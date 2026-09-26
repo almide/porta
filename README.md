@@ -68,6 +68,12 @@ Wasmtime). Building by hand is in
 run` takes either a native command or a `.wasm` module, so anything that
 compiles to WASI runs under it.
 
+On Debian and Ubuntu, each release also carries a `.deb` (amd64, arm64).
+Installed with `sudo apt install ./porta_<version>_amd64.deb`, it puts porta
+at `/usr/bin/porta` and, on Ubuntu 23.10 and later, loads the AppArmor
+profile that lets porta give each command its own namespaces — the step the
+tarball leaves to `scripts/apparmor-userns.sh`.
+
 In a GitHub Actions workflow, the action installs a release the same checked
 way and, on Ubuntu runners, loads the AppArmor profile that gives porta the
 user namespaces the runner otherwise withholds:

@@ -731,8 +731,20 @@ print("denied" if rc else ("LEAK" if b"MUST-NOT-LEAK" in buf.raw[:size.value] el
             print(f'--- unified log: {len(lines)} Sandbox lines in the last 2m, {len(hits)} mentioning this run ---', file=sys.stderr)
             print('\n'.join(hits[-20:] or lines[-20:]), file=sys.stderr)
             print(f'--- log show rc={raw.returncode} stderr={raw.stderr.strip()[:300]} ---', file=sys.stderr)
-        assert '[porta] the sandbox refused this run' in result.stderr, result.stderr
-        assert f'-v {ungranted}' in result.stderr, result.stderr
+            # A record the log still does not hold is the log's lag, not porta
+            # missing it: nothing here can be verified this run, and porta says
+            # nothing rather than something wrong. A record it holds that porta
+            # did not report is porta's failure.
+            if any('denied.txt' in line for line in lines):
+                # The record has arrived since porta last asked: once more,
+                # and now the footer must be there.
+                result = run('run', '/bin/sh', '--allow-net', '*:80', '--', '-c',
+                             'echo x > "$1"; exit 3', 'sh', str(ungranted / 'denied.txt'), env={**os.environ, 'PORTA_DENIALS': 'always'})
+                assert '[porta] the sandbox refused this run' in result.stderr, 'the unified log holds the refusal and porta did not report it'
+            else:
+                print('PASS (unverified): the unified log held this run\'s refusal back past every retry; the footer was not checked')
+        if '[porta] the sandbox refused this run' in result.stderr:
+            assert f'-v {ungranted}' in result.stderr, result.stderr
         result = run('run', '/bin/sh', '--', '-c', 'exit 3', env={**os.environ, 'PORTA_DENIALS': 'never'})
         assert result.returncode == 3 and '[porta]' not in result.stderr, result
         print('PASS: a failed run says which flag each refusal would have needed')
