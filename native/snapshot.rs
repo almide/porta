@@ -29,8 +29,10 @@ pub(crate) fn take(mounts: &[String], command: &str) -> Result<String, String> {
     if let Some(mount) = mounts.iter().find(|mount| root.starts_with(mount.as_str())) {
         return Err(format!("--snapshot keeps its copies in {}, inside the mount {mount}; the command could rewrite them", root.display()));
     }
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
-    let id = format!("{seconds}-{}", std::process::id());
+    // To the nanosecond: two snapshots in one second must still sort, or
+    // "the latest" is whichever the directory listing gives first.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let id = format!("{}.{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id());
     let dir = root.join(&id);
     std::fs::create_dir_all(&dir).map_err(|error| format!("cannot create the snapshot in {}: {error}", dir.display()))?;
     for (index, mount) in mounts.iter().enumerate() {
@@ -42,7 +44,7 @@ pub(crate) fn take(mounts: &[String], command: &str) -> Result<String, String> {
     Ok(id)
 }
 
-/// The oldest snapshots past [`KEPT`], removed. Ids begin with the second
+/// The oldest snapshots past [`KEPT`], removed. Ids begin with the instant
 /// they were taken, so their order is their age.
 fn prune(root: &Path) {
     let mut ids = ids(root);
@@ -55,8 +57,16 @@ fn ids(root: &Path) -> Vec<String> {
     let mut ids: Vec<String> = std::fs::read_dir(root)
         .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();
-    ids.sort_by_key(|id| id.split('-').next().and_then(|seconds| seconds.parse::<u64>().ok()).unwrap_or(0));
+    ids.sort_by_key(|id| taken(id));
     ids
+}
+
+/// When snapshot `id` was taken, as (seconds, nanoseconds); an id from before
+/// nanoseconds were in it reads as its second.
+fn taken(id: &str) -> (u64, u32) {
+    let instant = id.split('-').next().unwrap_or("");
+    let (seconds, nanos) = instant.split_once('.').unwrap_or((instant, "0"));
+    (seconds.parse().unwrap_or(0), nanos.parse().unwrap_or(0))
 }
 
 /// `source` copied to `target`, which must not exist: one clone of the whole
