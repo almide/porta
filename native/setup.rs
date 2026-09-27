@@ -6,15 +6,20 @@
 //! installed any other way — the tarball's installer, `almide install` — sits
 //! in a directory its user can write, and a profile for that path would let
 //! anything the user runs take the name and the grant with it. So setup
-//! copies this binary to `/usr/local/bin/porta`, owned by root and writable by
-//! nothing else, and writes the profile for that path alone.
+//! copies this binary to a directory only root can write, every directory
+//! above it too, and writes the profile for that path alone:
+//! `/usr/local/bin/porta` where `/usr/local/bin` is root's alone, otherwise
+//! `/opt/porta/bin/porta` with a link to it from `/usr/local/bin` (a CI
+//! runner's image leaves `/usr/local/bin` writable by its user). A profile
+//! attaches to the file a link resolves to, so replacing the link grants
+//! nothing.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Where setup puts porta: a directory only root can write to.
-const TARGET: &str = "/usr/local/bin/porta";
-/// The profile for [`TARGET`], named after its path as Ubuntu names them.
-const PROFILE: &str = "/etc/apparmor.d/usr.local.bin.porta";
+/// The directories setup may put porta in, in order of preference.
+const DIRECTORIES: [&str; 2] = ["/usr/local/bin", "/opt/porta/bin"];
+/// Where a shell finds porta once set up.
+const LINK: &str = "/usr/local/bin/porta";
 
 /// Why this host needs no setup, or `None` when it does.
 fn not_needed() -> Option<&'static str> {
@@ -31,44 +36,76 @@ fn not_needed() -> Option<&'static str> {
     None
 }
 
-fn profile_text() -> String {
+/// Whether `dir` and every directory above it exist and only root can write
+/// them. A directory that does not exist yet counts when its parent does.
+fn root_only(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    dir.ancestors().all(|path| match std::fs::metadata(path) {
+        Ok(meta) => meta.uid() == 0 && meta.mode() & 0o022 == 0,
+        // setup creates it, as root, with no write for anyone else
+        Err(_) => true,
+    })
+}
+
+/// The first of [`DIRECTORIES`] only root can write, as the path porta goes to.
+fn target() -> Result<PathBuf, String> {
+    DIRECTORIES
+        .iter()
+        .map(Path::new)
+        .find(|dir| root_only(dir))
+        .map(|dir| dir.join("porta"))
+        .ok_or_else(|| format!("none of {} is root's alone, so a profile for porta there would grant userns to whoever replaces it", DIRECTORIES.join(", ")))
+}
+
+/// The profile for `target`, named after its path as Ubuntu names them.
+fn profile_path(target: &Path) -> PathBuf {
+    let name = target.to_string_lossy().trim_start_matches('/').replace('/', ".");
+    PathBuf::from("/etc/apparmor.d").join(name)
+}
+
+fn profile_text(target: &Path) -> String {
+    let name = profile_path(target).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
     format!(
-        "# Written by `porta setup`: lets {TARGET} create user namespaces, and\n\
+        "# Written by `porta setup`: lets {} create user namespaces, and\n\
          # nothing else; the program is otherwise unconfined, as it was before.\n\
          abi <abi/4.0>,\ninclude <tunables/global>\n\n\
-         profile usr.local.bin.porta {TARGET} flags=(unconfined) {{\n  userns,\n\n  include if exists <local/usr.local.bin.porta>\n}}\n"
+         profile {name} {} flags=(unconfined) {{\n  userns,\n\n  include if exists <local/{name}>\n}}\n",
+        target.display(),
+        target.display()
     )
 }
 
 /// What setup will do, in words, before it does it.
-fn plan(source: &Path) -> String {
-    format!(
-        "porta setup will:\n  copy {} to {TARGET}, owned by root, mode 0755\n  write {PROFILE} granting userns to {TARGET} alone, and load it\n",
-        source.display()
-    )
-}
-
-/// `/usr/local/bin` must be root's alone, or the copy is no safer than the original.
-fn target_dir_is_root_only() -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let dir = Path::new(TARGET).parent().unwrap_or(Path::new("/"));
-    let meta = std::fs::metadata(dir).map_err(|error| format!("{} cannot be used: {error}", dir.display()))?;
-    if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
-        return Err(format!("{} is writable by someone other than root; a profile for a binary there would grant userns to whoever replaces it", dir.display()));
+fn plan(source: &Path, target: &Path) -> String {
+    let mut text = format!(
+        "porta setup will:\n  copy {} to {}, owned by root, mode 0755\n  write {} granting userns to {} alone, and load it\n",
+        source.display(),
+        target.display(),
+        profile_path(target).display(),
+        target.display()
+    );
+    if target != Path::new(LINK) {
+        text.push_str(&format!("  link {LINK} to it (/usr/local/bin is not root's alone here)\n"));
     }
-    Ok(())
+    text
 }
 
-fn install(source: &Path) -> Result<(), String> {
+fn install(source: &Path, target: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    target_dir_is_root_only()?;
-    let staged = format!("{TARGET}.setup");
-    std::fs::copy(source, &staged).map_err(|error| format!("cannot copy porta to {staged}: {error}"))?;
+    let dir = target.parent().unwrap_or(Path::new("/"));
+    std::fs::create_dir_all(dir).map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    let staged = target.with_extension("setup");
+    std::fs::copy(source, &staged).map_err(|error| format!("cannot copy porta to {}: {error}", staged.display()))?;
     std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())?;
     std::os::unix::fs::chown(&staged, Some(0), Some(0)).map_err(|error| error.to_string())?;
-    std::fs::rename(&staged, TARGET).map_err(|error| format!("cannot put porta at {TARGET}: {error}"))?;
-    std::fs::write(PROFILE, profile_text()).map_err(|error| format!("cannot write {PROFILE}: {error}"))?;
-    apparmor_parser(&["-r", PROFILE])
+    std::fs::rename(&staged, target).map_err(|error| format!("cannot put porta at {}: {error}", target.display()))?;
+    if target != Path::new(LINK) && Path::new(LINK).parent().is_some_and(Path::exists) {
+        let _ = std::fs::remove_file(LINK);
+        std::os::unix::fs::symlink(target, LINK).map_err(|error| format!("cannot link {LINK}: {error}"))?;
+    }
+    let profile = profile_path(target);
+    std::fs::write(&profile, profile_text(target)).map_err(|error| format!("cannot write {}: {error}", profile.display()))?;
+    apparmor_parser(&["-r", &profile.to_string_lossy()])
 }
 
 fn apparmor_parser(args: &[&str]) -> Result<(), String> {
@@ -78,36 +115,44 @@ fn apparmor_parser(args: &[&str]) -> Result<(), String> {
 
 /// Whether the installed porta, run as the user who ran sudo, now has its
 /// namespaces: the check that matters is the one without root.
-fn verified() -> String {
+fn verified(target: &Path) -> String {
     use std::os::unix::process::CommandExt;
     let id = |name: &str| std::env::var(name).ok().and_then(|value| value.parse::<u32>().ok());
     let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
-        return format!("run `{TARGET} check` as yourself to see the namespaces\n");
+        return format!("run `{} check` as yourself to see the namespaces\n", target.display());
     };
-    let output = std::process::Command::new(TARGET).arg("check").uid(uid).gid(gid).output();
+    let output = std::process::Command::new(target).arg("check").uid(uid).gid(gid).output();
     match output {
         Ok(output) if String::from_utf8_lossy(&output.stdout).lines().any(|line| line.starts_with("ok") && line.contains("namespace")) => {
-            format!("verified: {TARGET} gives each command its own PID, mount and network namespace\n")
+            format!("verified: {} gives each command its own PID, mount and network namespace\n", target.display())
         }
-        _ => format!("the profile is loaded, but `{TARGET} check` does not show the namespaces yet; run it as yourself to see why\n"),
+        _ => format!("the profile is loaded, but `{} check` does not show the namespaces yet; run it as yourself to see why\n", target.display()),
     }
 }
 
 /// The porta a shell finds first, when it is not the one setup installed.
-fn shadowed() -> Option<String> {
+fn shadowed(target: &Path) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     let found = std::env::split_paths(&path).map(|dir| dir.join("porta")).find(|candidate| candidate.is_file())?;
     let found = std::fs::canonicalize(found).ok()?;
-    (found != Path::new(TARGET)).then(|| format!("note: `porta` on this PATH is {}; put /usr/local/bin first, or remove that one, to use the one set up\n", found.display()))
+    (found != target).then(|| format!("note: `porta` on this PATH is {}; put /usr/local/bin first, or remove that one, to use the one set up\n", found.display()))
 }
 
 fn undo() -> Result<String, String> {
-    if Path::new(PROFILE).exists() {
-        let _ = apparmor_parser(&["-R", PROFILE]);
-        std::fs::remove_file(PROFILE).map_err(|error| format!("cannot remove {PROFILE}: {error}"))?;
+    let mut removed = Vec::new();
+    for target in DIRECTORIES.iter().map(|dir| Path::new(dir).join("porta")) {
+        let profile = profile_path(&target);
+        if profile.exists() {
+            let _ = apparmor_parser(&["-R", &profile.to_string_lossy()]);
+            std::fs::remove_file(&profile).map_err(|error| format!("cannot remove {}: {error}", profile.display()))?;
+            let _ = std::fs::remove_file(&target);
+            removed.push(format!("{} and {}", profile.display(), target.display()));
+        }
     }
-    let _ = std::fs::remove_file(TARGET);
-    Ok(format!("removed {PROFILE} and {TARGET}\n"))
+    if std::fs::read_link(LINK).is_ok() {
+        let _ = std::fs::remove_file(LINK);
+    }
+    Ok(if removed.is_empty() { "nothing to undo\n".to_string() } else { format!("removed {}\n", removed.join("; ")) })
 }
 
 /// `porta setup [--dry-run | --undo]`.
@@ -127,7 +172,11 @@ fn setup(mode: &str) -> String {
         Ok(source) => source,
         Err(error) => return format!("Error: cannot find porta's own binary: {error}\n"),
     };
-    let mut text = plan(&source);
+    let target = match target() {
+        Ok(target) => target,
+        Err(reason) => return format!("Error: {reason}\n"),
+    };
+    let mut text = plan(&source, &target);
     if mode == "dry-run" {
         return text;
     }
@@ -135,10 +184,10 @@ fn setup(mode: &str) -> String {
         text.push_str("it needs root for both; run: sudo porta setup\n");
         return text;
     }
-    if let Err(reason) = install(&source) {
+    if let Err(reason) = install(&source, &target) {
         return format!("{text}Error: {reason}\n");
     }
-    text.push_str(&verified());
-    text.push_str(&shadowed().unwrap_or_default());
+    text.push_str(&verified(&target));
+    text.push_str(&shadowed(&target).unwrap_or_default());
     text
 }

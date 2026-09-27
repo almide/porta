@@ -22,7 +22,7 @@ as a definition does.
 | `pid_namespace.rs` + `pid_namespace/{covers,pid_one,probe}.rs` | the command's own user, PID and mount namespace on Linux, a fresh `/proc` in it, and the pid-1 helper that reports how the command ended; where the host refuses them the run goes ahead and says so |
 | `ceilings.rs`, `memory_ceiling.rs` | resource ceilings: rlimits set between fork and exec, and the supervised wait that kills the group at `--timeout` or, on macOS, at the CPU or memory ceiling; on Linux the memory ceiling is a cgroup v2 scope asked of the systemd user manager |
 | `denials.rs`, `denial_advice.rs`, `sandbox_check.rs` | what the kernel refused during a run (macOS, from the unified log via a per-run tag on every deny rule; Linux, under `--why`, from a `strace` of the run in `sandbox_exec/why.rs`) and which flag would have allowed it; what this host can enforce, for `porta check` |
-| `setup.rs` | `sudo porta setup`: a root-owned copy at `/usr/local/bin/porta` and the AppArmor profile that gives that copy user namespaces |
+| `setup.rs` | `sudo porta setup`: a copy in a directory only root can write (`/usr/local/bin`, else `/opt/porta/bin` linked from it) and the AppArmor profile that gives that copy user namespaces |
 | `snapshot.rs` | `--snapshot`: the writable mounts copied before a run to `~/.porta/snapshots`, what the run changed, and `porta rollback` |
 | `recipes.rs` + `recipes/*.toml` | `porta init claude` / `codex`: a `porta.toml` measured to what each agent needs |
 | `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
