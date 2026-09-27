@@ -64,6 +64,9 @@ fn outbound_advice(target: &str) -> String {
             Some((_, port)) => format!("--allow-net '*:{port}'"),
             None => format!("--allow-net '{endpoint}'"),
         },
+        // The resolver's socket is closed with the network, not as a
+        // credential socket: reopening it alone resolves names nothing can reach.
+        None if target.ends_with("/var/run/mDNSResponder") => "name resolution, closed with the network: --allow-net or --proxy-allow reopens it".to_string(),
         None if target.starts_with('/') => format!("--allow-unix {target}"),
         None => "the network is closed by --allow-net; name the port to reach".to_string(),
     }
