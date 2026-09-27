@@ -52,6 +52,9 @@ impl SandboxRequest {
         let mut inherited: Vec<&str> = INHERITED_ENV.iter().copied().filter(|key| std::env::var_os(key).is_some()).collect();
         let named: Vec<&str> = self.env_vars.iter().map(|(key, _)| key.as_str()).collect();
         inherited.extend(named.iter().copied());
+        if !named.contains(&"TMPDIR") {
+            inherited.push("TMPDIR=/tmp");
+        }
         text.push_str(&format!("environment  {}\n", inherited.join(" ")));
         text.push_str(&self.explain_enforcement());
         text

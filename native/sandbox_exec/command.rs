@@ -6,8 +6,9 @@ use super::*;
 /// Host variables a child keeps. Everything else the caller's shell holds —
 /// API keys, tokens, the SSH agent's socket — stays outside unless `-e` or
 /// `--env-pass` names it. A locale, a terminal and a path are what a command
-/// needs to start; a credential is not. `TMPDIR` is left out on purpose: the
-/// sandbox's temporary directory is `/tmp`, the one it is granted.
+/// needs to start; a credential is not. The caller's `TMPDIR` is left out on
+/// purpose: the sandbox's temporary directory is `/tmp`, the one it is granted,
+/// and `bare_command` says so to the child (almide/porta#38).
 pub(super) const INHERITED_ENV: [&str; 10] =
     ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "LANG", "LANGUAGE", "TZ"];
 
@@ -62,6 +63,11 @@ impl SandboxRequest {
         // bundle stands in for them. `-e` can override it.
         #[cfg(target_os = "macos")]
         command.env("SSL_CERT_FILE", "/etc/ssl/cert.pem");
+        // The temporary directory the sandbox grants. Without it a program
+        // asks the OS: Rust's `std::env::temp_dir` on macOS takes the per-user
+        // `/var/folders/…/T`, which stays closed, so every temporary file it
+        // made was refused (#38). `-e TMPDIR=…` overrides it.
+        command.env("TMPDIR", "/tmp");
         #[cfg(target_os = "linux")]
         if self.egress() == crate::seccomp::Egress::TcpPorts {
             command.env(RESOLVER_OVER_TCP.0, RESOLVER_OVER_TCP.1);

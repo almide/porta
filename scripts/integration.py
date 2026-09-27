@@ -219,6 +219,15 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert '--allow-net' in result.stderr, result.stderr
     print('PASS: the host environment stays outside unless named; --allow-bind needs --allow-net')
 
+    # The temporary directory is the one the sandbox grants, and the child is
+    # told so: a program that asks the OS instead (Rust's temp_dir on macOS)
+    # would reach the per-user directory porta closes (#38). -e overrides it.
+    result = run('run', '/bin/sh', '--', '-c', 'echo "tmp=$TMPDIR"; python3 -c "import tempfile; tempfile.NamedTemporaryFile()" && echo made', env={**os.environ, 'TMPDIR': '/var/folders/x/T/'})
+    assert result.returncode == 0 and result.stdout.split() == ['tmp=/tmp', 'made'], result
+    result = run('run', '/bin/sh', '-e', 'TMPDIR=/tmp/own', '--', '-c', 'echo "$TMPDIR"')
+    assert result.returncode == 0 and result.stdout.strip() == '/tmp/own', result
+    print('PASS: the child is told its temporary directory is /tmp, and -e overrides it')
+
     # What a shell sees. The command's own exit code passes through in every
     # mode; a run porta refused exits with porta's own code, so a script can
     # tell "the command failed" from "the command never ran".
