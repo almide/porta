@@ -5,12 +5,8 @@
 <h1 align="center">Porta</h1>
 
 <p align="center">
-  Run an agent with the permissions you actually granted it.<br>
-  OS-enforced limits for the CLI agents you already use, and a WASM runtime for the ones you build.
-</p>
-
-<p align="center">
-  <a href="https://github.com/almide/almide">Almide</a> + <a href="https://wasmtime.dev">Wasmtime</a> · No Docker required
+  Run a command — or an AI agent — with only what you granted it,<br>
+  enforced by the kernel on macOS and Linux. No container, no daemon.
 </p>
 
 <p align="center">
@@ -19,30 +15,27 @@
 
 ---
 
-## What Porta is
-
-Letting an AI agent run commands on your machine puts your keys, tokens and
-network within its reach. Porta runs the command and lets the OS kernel stop
-it — writes, reads, network and sockets enforced by Seatbelt on macOS or
-Landlock + seccomp on Linux, not by a wrapper or a prompt. A restriction the
-kernel cannot express refuses the run rather than weakening it (**fail-closed**).
-
-Shown, not claimed: a published jailbreak
-[corpus](docs/benchmarks/escapes.md) holds 22/22 on macOS and 28/28 on Linux (24/24 on hosts that refuse
-unprivileged user namespaces),
-zero escapes, losing rows kept in ([threat model](docs/threat-model.md)).
-The same corpus run under srt, Fence, nono and landrun is
-[published beside it](docs/benchmarks/competitors.md), including where porta loses,
-and so is [what each costs a command](docs/benchmarks/overhead.md): about
-16 ms under porta on macOS and 2 to 6 ms on Linux.
-
 ```text
-$ porta run sh -v ./work --read-policy strict --timeout 5 -- …
-  wrote ./work/out.txt              legitimate work goes through
-  read the SSH key       → refused
-  write outside ./work   → refused
-  # a hung command is killed at the deadline → exit 124
+$ porta run sh -v ./work --no-net -- -c 'echo ok > out.txt; cat ~/.ssh/id_ed25519; echo x > ~/elsewhere.txt; curl https://example.com'
+cat: /Users/me/.ssh/id_ed25519: Operation not permitted
+sh: /Users/me/elsewhere.txt: Operation not permitted
+curl: (6) Could not resolve host: example.com
+[porta] the sandbox refused this run 3 times; what each would have needed:
+  file-read-data /Users/me/.ssh/id_ed25519
+    → closed by the preset or --deny-read; no mount reopens it
+  file-write-create /Users/me/elsewhere.txt
+    → -v /Users/me
+  …
 ```
+
+`out.txt` was written; the key, the file outside and the network were not.
+
+Porta wraps one process and everything it starts. Writes go only to the
+directories you mount, credential stores stay unreadable, the network is
+narrowed to the ports or hosts you name, and CPU, memory, processes and time
+are capped. It is enforced by Seatbelt on macOS and by Landlock, seccomp and
+namespaces on Linux — not by a wrapper that asks nicely — and a rule the
+kernel cannot express refuses the run instead of weakening it.
 
 ## Install
 
@@ -50,173 +43,138 @@ $ porta run sh -v ./work --read-policy strict --timeout 5 -- …
 curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.sh | bash
 ```
 
-A single binary for macOS on Apple silicon and Linux on x86-64 and arm64,
-checked against its published SHA-256 before it is installed, and against
-the release's Sigstore signature where `cosign` is installed
-([verifying a release](docs/cli.md#verifying-a-release)). Or, with
-[Almide](https://github.com/almide/almide), the way `go install` does it
-— the route for an Intel Mac or any other target:
+| Where | How |
+|---|---|
+| macOS (Apple silicon), Linux (x86-64, arm64) | the script above: checks the SHA-256, and the Sigstore signature where `cosign` is installed |
+| Debian, Ubuntu | `sudo apt install ./porta_<version>_amd64.deb` from a [release](https://github.com/almide/porta/releases); on Ubuntu 23.10+ it also loads the AppArmor profile porta's namespaces need |
+| Ubuntu, installed any other way | `sudo porta setup` once, for the same profile |
+| GitHub Actions | `- uses: almide/porta@v0.6.16`, then `porta run …` in any step |
+| Anything else (Intel Mac…) | `almide install github.com/almide/porta --branch main` builds from source |
+
+Every release is signed and carries build provenance —
+[verifying a release](docs/cli.md#verifying-a-release).
+
+## Confine the coding agent you already use
 
 ```bash
-almide install github.com/almide/porta --branch main
+cd my-project
+porta init claude            # or: porta init codex
+porta up -- -p "Fix the failing test"
 ```
 
-`main` is the latest release; `--tag v0.6.6` pins one. It builds from source
-into `~/.local/bin` and takes a few minutes (the Rust side compiles
-Wasmtime). Building by hand is in
-[the CLI reference](docs/cli.md#build-from-source). `porta
-run` takes either a native command or a `.wasm` module, so anything that
-compiles to WASI runs under it.
+`porta init` writes a commented `porta.toml`, measured to what that agent
+needs: the project and the agent's own directory writable, its settings,
+hooks and global instructions there unwritable — so one session cannot plant
+something for the next — and its API key or token passed by name. On macOS
+the Keychain is closed, so the login goes in as `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`).
 
-On Debian and Ubuntu, each release also carries a `.deb` (amd64, arm64).
-Installed with `sudo apt install ./porta_<version>_amd64.deb`, it puts porta
-at `/usr/bin/porta` and, on Ubuntu 23.10 and later, loads the AppArmor
-profile that lets porta give each command its own namespaces. Installed any
-other way, `sudo porta setup` does the same: it copies porta to a root-owned
-`/usr/local/bin/porta` and loads the profile for that copy alone.
-
-In a GitHub Actions workflow, the action installs a release the same checked
-way and, on Ubuntu runners, loads the AppArmor profile that gives porta the
-user namespaces the runner otherwise withholds:
-
-```yaml
-- uses: almide/porta@v0.6.12
-- run: porta run ./scripts/untrusted-step.sh -v .
-```
-
-## Use it for
-
-Everything before `--` is porta's; everything after belongs to the command.
-
-### Restrict an AI agent you already run
-
-The agent installs deps, runs tests, edits files — on the machine that holds
-your keys. Give it one directory and one host, and close the rest.
+Any other command works the same way, with flags:
 
 ```bash
-cd project
-porta init claude          # or: porta init codex
-porta up -- -p "Fix the bug in main.rs"
+porta run ./installer -v ./sandbox --allow-net '*:443' --timeout 120 --max-procs 500
 ```
 
-`claude` runs unchanged, but it can write only inside the project and its own
-`~/.claude` — where its settings, commands and global `CLAUDE.md` stay
-unwritable, so one session cannot plant hooks for the next — and it cannot
-read `~/.ssh`, `~/.aws` or the Keychain. The recipe is a commented
-`porta.toml`, measured to what the agent needs; on macOS it takes its login
-as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
-since the Keychain is closed. No Docker daemon, no image, no change to the
-agent. Add `--snapshot` and porta lists what the session changed afterwards;
-`porta rollback --yes` puts it back.
+Everything before `--` is porta's; everything after is the command's.
 
-### Give a tool one API, and log every attempt
+## What it stops
 
-A tool needs one endpoint and nothing else. Route egress through porta's proxy
-and keep the record.
+| | macOS | Linux |
+|---|---|---|
+| **Writes** | only the `-v` mounts, `/tmp`, `/dev` | same |
+| **Inside a writable mount** | `.git/hooks`, `.git/config`, `.envrc`, shell rc files, agent settings and the like stay unwritable and cannot be renamed away | same (needs user namespaces — see below) |
+| **Reads** | everything but credential stores: `~/.ssh`, `~/.aws`, `~/.config/gh`, cloud and registry tokens, the Keychain, browser profiles; `--read-policy strict` confines reads to the mounts | same, minus the Keychain |
+| **Credential sockets** | SSH agent, gpg-agent, `docker.sock` refused unless `--allow-unix` | same |
+| **Network** | open, or TCP by port (`--allow-net`), or by host through porta's proxy (`--proxy-allow`), or none (`--no-net`) | same; UDP closed under a port rule |
+| **Other processes** | their arguments and environment unreadable; `open(1)` / Launch Services closed | not visible: own PID namespace |
+| **Resources** | `--timeout`, `--max-cpu`, `--max-procs`, `--max-file-size`, `--max-memory-mb` | same (memory through cgroup v2) |
+| **Environment** | starts empty; `PATH`, `HOME`, locale and terminal cross, the rest only by `-e` / `--env-pass` | same |
+
+What is closed is a preset — [`native/presets/default.toml`](native/presets/default.toml),
+shown by `porta explain` — not a list in code: `--deny-read`, `--protect` and
+`--deny-unix` add to it, `--preset <file>` replaces it. The full table, with
+the reasons, is in [enforcement](docs/enforcement.md).
+
+## When something is refused
 
 ```bash
-porta run ./agent --proxy-allow 'api.example.com' --proxy-audit egress.jsonl -v ./work
+porta explain ./tool -v ./work --allow-net '*:443'   # the policy, in words; nothing runs
+porta run ./tool -v ./work --why                      # afterwards: each refusal and the flag it needed
 ```
 
-Only `api.example.com` is reachable; direct TCP, UDP and Unix-socket egress are
-denied, a name resolving to a cloud-metadata or link-local address is refused,
-and every decision lands in `egress.jsonl`.
+```text
+[porta] the sandbox refused this run 2 times; what each would have needed:
+  file-write-data /home/me/notes/out.txt
+    → -v /home/me/notes
+  network-outbound remote:*:80
+    → --allow-net '*:80'
+  to run again with those granted:
+    porta run ./tool -v ./work -v /home/me/notes --allow-net '*:80'
+```
 
-### Try an unknown command without handing over the machine
+On macOS this comes from the kernel's denial log after any failed run; on
+Linux, `--why` traces the run with `strace` from outside the sandbox.
 
-Preview the policy before anything runs, then run it boxed in, with a deadline
-and resource ceilings the kernel enforces on everything it starts.
+## Undo what it changed
 
 ```bash
-porta explain ./sketchy-installer -v ./sandbox --allow-net github.com:443   # see the policy, run nothing
-porta run     ./sketchy-installer -v ./sandbox --allow-net github.com:443 \
-  --timeout 60 --max-cpu 30 --max-procs 500 --max-file-size 200
+porta run ./agent -v ./project --snapshot     # copies the mounts first; lists what changed after
+porta rollback --yes                          # puts them back
 ```
 
-A hang is killed at the deadline, a CPU burn ends with SIGXCPU, a fork bomb
-cannot fork, and a file stops growing at the ceiling. `--max-memory-mb 512`
-bounds resident memory for the whole run: a cgroup v2 ceiling on Linux (a
-systemd user session is needed, and the flag is refused without one), a
-supervisor that ends the run at the ceiling on macOS.
+A clone on APFS, so the copy costs next to nothing there. Snapshots live
+outside every mount, so the command cannot rewrite its own undo.
 
-### Run untrusted or generated WASM
+## How it compares
 
-Code from a user or a model, run with no host filesystem or network and bounded
-fuel, memory and time. A core module or a WASI 0.2 or 0.3 component, checked
-the same way: every import it declares needs a capability you granted.
+The same [escape corpus](docs/benchmarks/escapes.md) — real ways out, scored
+on what got through — run under five tools, each with its own defaults
+([full comparison](docs/benchmarks/competitors.md), losing rows included):
 
-```bash
-porta run plugin.wasm --profile worker --step-limit 5000000 --max-memory 256
-```
+| | porta | [srt](https://github.com/anthropics/sandbox-runtime) | [Fence](https://github.com/fencesandbox/fence) | [nono](https://github.com/nolabs-ai/nono) | [landrun](https://github.com/Zouuup/landrun) |
+|---|---|---|---|---|---|
+| macOS: tried / escaped | **22 / 0** | 17 / 5 | 14 / 5 | 13 / 5 | — |
+| Linux: tried / escaped | **28 / 0** | 23 / 2 | 21 / 3 | 24 / 5 | 22 / 7 |
 
-### Build an agent whose decision loop is WASM
+What the others do that porta does not: srt and Fence close the network by
+default; Fence filters commands by name; nono can ask for more access
+mid-run. What a command pays under porta: about 16 ms on macOS, 2–6 ms on
+Linux ([overhead](docs/benchmarks/overhead.md)).
 
-`porta run` restricts an agent someone else wrote. `porta agent` runs one whose
-loop is itself WASM: the loop and every tool run in separate instances that
-inherit no environment or directory, model credentials stay in the host, and a
-crashed run resumes without repeating completed writes.
+## Limits
 
-```bash
-porta agent agent.toml --record run.jsonl -- "Add 20 and 22 using the tool."
-porta agent-resume agent.toml run.jsonl    # completed writes are not repeated
-porta agent-journal run.jsonl              # read-only metadata, no code loaded
-```
+- **The network is open by default.** Close it with `--no-net`, `--allow-net`
+  or `--proxy-allow`.
+- **On Linux, some protections need user namespaces** — the hooks inside a
+  mount, credential sockets, hiding other processes. Ubuntu 23.10+ restricts
+  them until the `.deb` or `sudo porta setup` loads a profile; without one
+  porta runs and says what is left open.
+- **Same kernel.** This is a process sandbox, not a VM: a kernel exploit is
+  out of scope. The [threat model](docs/threat-model.md) lists what is and is
+  not defended.
+- **Tested by its authors.** The corpus, the fuzzer and the monkey test are
+  public and run in CI; there has been no third-party audit.
 
-See [agents you build](docs/agent-runtime.md), [completion
-checks](docs/completion-checks.md) the guest cannot bypass, and [artifact
-pins](docs/artifact-pins.md) that bind WASM to a reviewed SHA-256.
+## Also in the box
 
-### Keep the settings as project config
-
-```bash
-porta init native mytool                 # writes a porta.toml to edit
-porta up -- --some-flag
-```
-
-Or let a working invocation write its own: `porta explain claude … --save
-porta.toml`.
-
-## See a restriction actually stop something
-
-A working restriction is invisible, so watch one fail.
-
-```bash
-porta run curl -- https://example.com                     # network open by default
-porta run curl --allow-net '*:443' -- https://example.com # HTTPS allowed → works
-porta run curl --allow-net '*:80'  -- https://example.com # → exit 7, port 443 denied
-```
-
-A refused run does not leave you guessing: after a non-zero exit, porta reads
-the kernel's denial records and prints which flag each refusal would have
-needed (on macOS after every failed run; on Linux with `--why`, which traces
-the run with `strace`). Exit codes tell a script
-apart a command that failed from one that never ran — see
-[the CLI reference](docs/cli.md#when-a-run-is-refused).
-
-## Evidence
-
-Every published number keeps its raw report, source hashes and an audit that
-regrades it; CI runs those audits, and results that do not favour Porta are
-published in the same place.
-
-- [Escape corpus](docs/benchmarks/escapes.md) — known jailbreaks run against the
-  binary, scored on what escaped, losing rows included.
-- [Startup and memory](docs/benchmarks/startup-and-memory.md) — fixed-response
-  measurements with explicit comparison limits.
-- [Containment and recovery](docs/benchmarks/containment-evaluation.md) — under
-  hostile inputs; one of five scenarios separated the runtimes, and containment
-  cost task completion.
-- [Real-task quality](docs/benchmarks/README.md) — Porta has not demonstrated
-  general quality superiority, and the shared-compute follow-up was rejected
-  rather than published as a win.
+- **WASM with no ambient authority.** `porta run plugin.wasm --profile worker`
+  runs a core module or a WASI 0.2/0.3 component with no host filesystem or
+  network and bounded fuel, memory and time; every import needs a capability
+  you granted.
+- **Agents whose loop is WASM.** `porta agent agent.toml` runs the decision
+  loop and each tool in separate instances, keeps model credentials in the
+  host, and resumes a crashed run without repeating completed writes
+  ([agent runtime](docs/agent-runtime.md)).
+- **One API and a log.** `--proxy-allow api.example.com --proxy-audit
+  egress.jsonl` lets through only that host and records every decision.
 
 ## Docs
 
-- [CLI reference](docs/cli.md) — every command, flag, `porta.toml` key and exit code.
-- [Enforcement](docs/enforcement.md) — exactly what macOS and Linux each stop.
-- [Threat model](docs/threat-model.md) — what it defends against, and what it does not.
-- [Architecture](docs/architecture.md) — Almide decides policy, Rust enforces it.
+- [CLI reference](docs/cli.md) — every command, flag, `porta.toml` key and exit code
+- [Enforcement](docs/enforcement.md) — exactly what each platform stops, and how
+- [Threat model](docs/threat-model.md) — what it defends against, and what it does not
+- [Benchmarks](docs/benchmarks/README.md) — the escape corpus, the comparison, overhead
+- [Architecture](docs/architecture.md) — Almide decides policy, Rust enforces it
 
-## License
-
-Apache-2.0
+Built with [Almide](https://github.com/almide/almide) and
+[Wasmtime](https://wasmtime.dev). Apache-2.0.
