@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 
 | 環境 | 方法 |
 |---|---|
-| macOS (Apple silicon)、Linux (x86-64, arm64) | 上のスクリプト。SHA-256 を検証し、`cosign` があれば Sigstore 署名も検証 |
+| macOS (Apple silicon)、Linux (x86-64, arm64。glibc 2.31 以降：Debian 11、Ubuntu 20.04 以降) | 上のスクリプト。SHA-256 を検証し、`cosign` があれば Sigstore 署名も検証 |
 | Debian、Ubuntu | [リリース](https://github.com/almide/porta/releases)の `sudo apt install ./porta_<version>_amd64.deb`。Ubuntu 23.10 以降では namespace に必要な AppArmor プロファイルも読み込む |
 | それ以外の方法で入れた Ubuntu | 一度だけ `sudo porta setup` で同じプロファイルを入れる |
 | GitHub Actions | `- uses: almide/porta@v0.6.16` の後、どのステップでも `porta run …` |

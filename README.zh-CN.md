@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 
 | 平台 | 方法 |
 |---|---|
-| macOS (Apple silicon)、Linux (x86-64, arm64) | 上面的脚本：校验 SHA-256，安装了 `cosign` 时还会校验 Sigstore 签名 |
+| macOS (Apple silicon)、Linux (x86-64, arm64；glibc 2.31+：Debian 11、Ubuntu 20.04 及以上) | 上面的脚本：校验 SHA-256，安装了 `cosign` 时还会校验 Sigstore 签名 |
 | Debian、Ubuntu | 从 [release](https://github.com/almide/porta/releases) 下载后 `sudo apt install ./porta_<version>_amd64.deb`；在 Ubuntu 23.10+ 上还会加载命名空间所需的 AppArmor 配置 |
 | 以其他方式安装的 Ubuntu | 运行一次 `sudo porta setup`，加载同样的配置 |
 | GitHub Actions | `- uses: almide/porta@v0.6.16`，之后任意步骤中都可 `porta run …` |
