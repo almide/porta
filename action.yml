@@ -55,16 +55,23 @@ runs:
         if "$PORTA" check | grep -qE '^ok +own PID, mount and network namespace'; then
           echo "this runner already gives porta its namespaces"
         elif command -v apparmor_parser >/dev/null; then
-          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" "$PORTA"
+          # A root-owned copy with the profile for it alone (what `porta setup`
+          # does, spelled out so any release can use it). The runner's
+          # /usr/local/bin is writable by its user, so the copy goes in a
+          # directory root alone owns, put first on the PATH.
+          sudo install -d -o root -g root -m 0755 /usr/libexec/porta
+          sudo install -o root -g root -m 0755 "$PORTA" /usr/libexec/porta/porta
+          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" /usr/libexec/porta/porta
+          echo /usr/libexec/porta >> "$GITHUB_PATH"
         else
           echo "::warning::this runner refuses unprivileged user namespaces and has no AppArmor to grant them; porta runs without them and says what that leaves open"
         fi
     - if: runner.os == 'Linux' && inputs.why == 'true'
       shell: bash
       run: command -v strace >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq strace)
+    # The porta the following steps find, which after the profile step is the
+    # root-owned copy.
     - shell: bash
-      env:
-        PORTA: ${{ steps.install.outputs.path }}
       run: |
-        "$PORTA" --version
-        "$PORTA" check
+        porta --version
+        porta check

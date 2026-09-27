@@ -117,10 +117,19 @@ jobs:
       - name: Integration and escape corpus with user namespaces
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo bash scripts/apparmor-userns.sh target/porta
-          target/porta check | grep -E '^ok +own PID, mount and network namespace'
-          python3 scripts/integration.py target/porta
-          python3 scripts/escapes.py target/porta
+          # The build sits in the checkout, which the runner's user can write;
+          # the helper script refuses it, and porta setup makes a root-owned
+          # copy with the profile for that copy alone.
+          ! sudo bash scripts/apparmor-userns.sh target/porta
+          # The runner's /usr/local/bin is not root's alone, so setup puts the
+          # copy in /usr/libexec/porta and links /usr/local/bin/porta to it.
+          sudo target/porta setup
+          set_up=$(readlink -f /usr/local/bin/porta)
+          "$set_up" check | grep -E '^ok +own PID, mount and network namespace'
+          python3 scripts/integration.py "$set_up"
+          python3 scripts/escapes.py "$set_up"
+          sudo "$set_up" setup --undo
+          ! ls /etc/apparmor.d/*.porta 2>/dev/null
       # The seeds that found each fixed bug, so the fix stays fixed, then one
       # fresh seed per push, printed, so a new find can be replayed.
       - name: Fuzz

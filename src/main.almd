@@ -68,6 +68,14 @@ effect fn main() -> Result[Unit, String] = {
       help.print_help("")
       ok(())
     },
+    "setup" => {
+      let flag = list.get(args, 2) ?? ""
+      let mode = if flag == "--undo" then "undo" else if flag == "--dry-run" then "dry-run" else ""
+      let reply = wasm_rt.wt_setup(mode)
+      println(reply)
+      if string.starts_with(reply, "Error:") or string.contains(reply, "\nError:") then process.exit(125) else ()
+      ok(())
+    },
     "rollback" => {
       let rest = list.drop(args, 2)
       let id = list.find(rest, (a) => a != "--yes") ?? ""
