@@ -55,7 +55,12 @@ runs:
         if "$PORTA" check | grep -qE '^ok +own PID, mount and network namespace'; then
           echo "this runner already gives porta its namespaces"
         elif command -v apparmor_parser >/dev/null; then
-          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" "$PORTA"
+          # A root-owned copy at /usr/local/bin with the profile for it alone
+          # (what `porta setup` does, spelled out so any release can use it),
+          # put first on the PATH for the steps that follow.
+          sudo install -o root -g root -m 0755 "$PORTA" /usr/local/bin/porta
+          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" /usr/local/bin/porta
+          echo /usr/local/bin >> "$GITHUB_PATH"
         else
           echo "::warning::this runner refuses unprivileged user namespaces and has no AppArmor to grant them; porta runs without them and says what that leaves open"
         fi

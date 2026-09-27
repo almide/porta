@@ -77,6 +77,14 @@ fn print_help(topic: String) -> Unit =
       println("Run agent from porta.toml in the current directory.")
       println("Supports both WASM and native runtimes.")
     },
+    "setup" => {
+      println("porta setup [--dry-run | --undo]")
+      println("")
+      println("On a Linux host that restricts user namespaces through AppArmor (Ubuntu 23.10+),")
+      println("copy this porta to /usr/local/bin/porta, owned by root, and load the profile that")
+      println("lets that copy give each command its own namespaces. Run it with sudo. The .deb")
+      println("does this for /usr/bin/porta; this is for a porta installed any other way.")
+    },
     "init" => {
       println("porta init <recipe>  |  porta init [native|wasm] <command>")
       println("")

@@ -71,6 +71,11 @@ fn wt_exec_inner(request_json: String) -> String
 @extern(rs, "wasmtime_bridge", "wt_rollback")
 fn wt_rollback(id: String, apply: Bool) -> String
 
+// sudo porta setup: a root-owned copy at /usr/local/bin/porta and the AppArmor
+// profile that gives it user namespaces. mode is "", "dry-run" or "undo".
+@extern(rs, "wasmtime_bridge", "wt_setup")
+fn wt_setup(mode: String) -> String
+
 // A ready-made porta.toml for a coding agent, or "" when there is none.
 @extern(rs, "wasmtime_bridge", "wt_recipe")
 fn wt_recipe(name: String) -> String

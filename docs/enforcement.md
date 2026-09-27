@@ -139,8 +139,10 @@ host execution and HTTP requests go through the checked MCP built-in tools.
   restricts them through AppArmor, and most container runtimes refuse them.
   There porta runs without them and says so, `porta check` shows it, and
   `--no-net` falls back to Landlock and seccomp. On Ubuntu,
-  `sudo bash scripts/apparmor-userns.sh "$(command -v porta)"` loads the
-  profile Ubuntu documents for a program that needs them, for porta alone;
+  `sudo porta setup` copies porta to a root-owned `/usr/local/bin/porta` and
+  loads the profile Ubuntu documents for a program that needs them, for that
+  copy alone (a profile for a path its user can write would grant userns to
+  whatever the user puts there);
   in GitHub Actions, `uses: almide/porta@<tag>` does it for the runner, and
   the release's `.deb` does it at install for `/usr/bin/porta`.
 - **Linux protects inside a mount, and closes credential sockets, only in a

@@ -63,8 +63,9 @@ almide install github.com/almide/porta --branch main
 Debian / Ubuntu 向けには各リリースに `.deb`（amd64・arm64）も付きます。
 `sudo apt install ./porta_<version>_amd64.deb` で `/usr/bin/porta` に入り、
 Ubuntu 23.10 以降では porta がコマンドごとに namespace を持てるようにする
-AppArmor プロファイルも読み込みます（tar 版では `scripts/apparmor-userns.sh` で
-手動で行う手順）。
+AppArmor プロファイルも読み込みます。ほかの方法で入れた場合は `sudo porta setup`
+で同じ状態にできます（root 所有の `/usr/local/bin/porta` にコピーし、そのコピー
+だけにプロファイルを入れます）。
 
 GitHub Actions では action が同じ検証つきでリリースを入れ、Ubuntu ランナーでは
 ランナーが本来与えない user namespace を porta にだけ許す AppArmor プロファイルも

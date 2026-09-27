@@ -30,13 +30,14 @@
 
 ## Done
 
-31 items
+32 items
 
 <details>
-<summary>Show all 31 completed items</summary>
+<summary>Show all 32 completed items</summary>
 
 | Done | Item | Description |
 |------|------|-------------|
+| 2026-09-27 | [porta setup](done/16-porta-setup.md) | sudo porta setup gives any porta its namespaces on Ubuntu, safely |
 | 2026-09-26 | [Monkey testing](done/14-monkey-test.md) | scripts/monkey.py: random sequences of real operations, checked after every step |
 | 2026-09-26 | [A .deb that brings the AppArmor profile](done/15-deb-package.md) | A .deb per release whose postinst gives /usr/bin/porta its namespaces on Ubuntu |
 | 2026-09-24 | [Why a run was refused, on Linux](done/10-why-on-linux.md) | --why: what the sandbox refused, on Linux too, traced with strace |
