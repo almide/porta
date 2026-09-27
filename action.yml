@@ -59,10 +59,10 @@ runs:
           # does, spelled out so any release can use it). The runner's
           # /usr/local/bin is writable by its user, so the copy goes in a
           # directory root alone owns, put first on the PATH.
-          sudo install -d -o root -g root -m 0755 /opt/porta/bin
-          sudo install -o root -g root -m 0755 "$PORTA" /opt/porta/bin/porta
-          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" /opt/porta/bin/porta
-          echo /opt/porta/bin >> "$GITHUB_PATH"
+          sudo install -d -o root -g root -m 0755 /usr/libexec/porta
+          sudo install -o root -g root -m 0755 "$PORTA" /usr/libexec/porta/porta
+          sudo bash "$GITHUB_ACTION_PATH/scripts/apparmor-userns.sh" /usr/libexec/porta/porta
+          echo /usr/libexec/porta >> "$GITHUB_PATH"
         else
           echo "::warning::this runner refuses unprivileged user namespaces and has no AppArmor to grant them; porta runs without them and says what that leaves open"
         fi

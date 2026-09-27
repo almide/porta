@@ -9,15 +9,16 @@
 //! copies this binary to a directory only root can write, every directory
 //! above it too, and writes the profile for that path alone:
 //! `/usr/local/bin/porta` where `/usr/local/bin` is root's alone, otherwise
-//! `/opt/porta/bin/porta` with a link to it from `/usr/local/bin` (a CI
-//! runner's image leaves `/usr/local/bin` writable by its user). A profile
+//! `/usr/libexec/porta/porta` with a link to it from `/usr/local/bin` (a CI
+//! runner's image leaves `/usr/local/bin`, and `/opt`, writable by its user;
+//! `/usr/libexec` is the package manager's). A profile
 //! attaches to the file a link resolves to, so replacing the link grants
 //! nothing.
 
 use std::path::{Path, PathBuf};
 
 /// The directories setup may put porta in, in order of preference.
-const DIRECTORIES: [&str; 2] = ["/usr/local/bin", "/opt/porta/bin"];
+const DIRECTORIES: [&str; 2] = ["/usr/local/bin", "/usr/libexec/porta"];
 /// Where a shell finds porta once set up.
 const LINK: &str = "/usr/local/bin/porta";
 
@@ -36,25 +37,26 @@ fn not_needed() -> Option<&'static str> {
     None
 }
 
-/// Whether `dir` and every directory above it exist and only root can write
-/// them. A directory that does not exist yet counts when its parent does.
-fn root_only(dir: &Path) -> bool {
+/// The first of `dir` and the directories above it that someone other than
+/// root can write, or `None` when root alone can. One that does not exist yet
+/// is setup's to create, as root, with no write for anyone else.
+fn writable_by_others(dir: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
-    dir.ancestors().all(|path| match std::fs::metadata(path) {
-        Ok(meta) => meta.uid() == 0 && meta.mode() & 0o022 == 0,
-        // setup creates it, as root, with no write for anyone else
-        Err(_) => true,
-    })
+    dir.ancestors()
+        .find(|path| std::fs::metadata(path).is_ok_and(|meta| meta.uid() != 0 || meta.mode() & 0o022 != 0))
+        .map(Path::to_path_buf)
 }
 
 /// The first of [`DIRECTORIES`] only root can write, as the path porta goes to.
 fn target() -> Result<PathBuf, String> {
-    DIRECTORIES
-        .iter()
-        .map(Path::new)
-        .find(|dir| root_only(dir))
-        .map(|dir| dir.join("porta"))
-        .ok_or_else(|| format!("none of {} is root's alone, so a profile for porta there would grant userns to whoever replaces it", DIRECTORIES.join(", ")))
+    let mut reasons = Vec::new();
+    for dir in DIRECTORIES.iter().map(Path::new) {
+        match writable_by_others(dir) {
+            None => return Ok(dir.join("porta")),
+            Some(open) => reasons.push(format!("{} (through {})", dir.display(), open.display())),
+        }
+    }
+    Err(format!("someone other than root can write {}, so a profile for porta there would grant userns to whoever replaces it", reasons.join(" and ")))
 }
 
 /// The profile for `target`, named after its path as Ubuntu names them.

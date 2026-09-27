@@ -15,7 +15,7 @@ there: the restriction undone for that user.
 
 - `sudo porta setup` copies the running porta to `/usr/local/bin/porta` where
   that directory and every one above it are root's alone, and otherwise to
-  `/opt/porta/bin/porta` with a link from `/usr/local/bin` (the GitHub runner
+  `/usr/libexec/porta/porta` with a link from `/usr/local/bin` (the GitHub runner
   image leaves `/usr/local/bin` writable by its user, and setup refused it
   there). It writes the profile for that copy alone and loads it,
   then runs `porta check` as the user who ran sudo to confirm the
