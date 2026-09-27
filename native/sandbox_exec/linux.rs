@@ -40,6 +40,7 @@ impl SandboxRequest {
     /// the macOS ones come through [`Self::profile`].
     #[cfg(target_os = "linux")]
     pub(super) fn ruleset(&self) -> Result<crate::landlock::Ruleset, String> {
+        self.note_unwritable_mounts();
         let abi = crate::landlock::abi_version().unwrap_or(0);
         if self.no_network && !self.network_isolated() && abi < 4 {
             return Err(format!(
@@ -68,6 +69,32 @@ impl SandboxRequest {
         // covered there; without one, Landlock has to leave them out.
         let closed: &[String] = if crate::pid_namespace::available().is_ok() { &[] } else { &self.closures.deny_read };
         crate::landlock_policy::ruleset(&self.allowed_dirs, network, &self.read_policy, closed)
+    }
+
+    /// Says, once, which writable mounts sit on a filesystem where Landlock
+    /// lets a file be created but not written. The ruleset grants them all the
+    /// same; the kernel refuses the open for writing anyway, and the command is
+    /// left with empty files and a bare `Permission denied` (#36).
+    #[cfg(target_os = "linux")]
+    fn note_unwritable_mounts(&self) {
+        static NOTED: std::sync::Once = std::sync::Once::new();
+        let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else { return };
+        let unwritable: Vec<String> = self
+            .allowed_dirs
+            .iter()
+            .filter(|dir| !dir.ends_with(":ro"))
+            .filter(|dir| filesystem_of(&mountinfo, dir).is_some_and(|fstype| UNWRITABLE_UNDER_LANDLOCK.contains(&fstype)))
+            .cloned()
+            .collect();
+        if !unwritable.is_empty() {
+            NOTED.call_once(|| {
+                eprintln!(
+                    "porta: {} is a Docker Desktop shared folder (fakeowner), where under Landlock a command can create a file but not write to it; \
+                     give the command a Docker volume or a tmpfs to write to, and copy out after the run",
+                    unwritable.join(", ")
+                )
+            });
+        }
     }
 
     /// The credential sockets bound on this host now that the preset closes
@@ -182,6 +209,56 @@ impl SandboxRequest {
     }
 }
 
+/// Filesystems a granted directory cannot be written on under Landlock:
+/// Docker Desktop's `fakeowner`, which shares a macOS folder into its Linux VM.
+/// Creating a file passes and opening it for writing does not, whatever the
+/// ruleset grants (seen on Docker Desktop 4.82, Landlock ABI 6).
+#[cfg(target_os = "linux")]
+const UNWRITABLE_UNDER_LANDLOCK: [&str; 1] = ["fakeowner"];
+
+/// The filesystem type `path` lives on, from `/proc/self/mountinfo`: the
+/// deepest mount point containing it, and of several on the same point the
+/// last, which is the one on top.
+#[cfg(target_os = "linux")]
+fn filesystem_of<'a>(mountinfo: &'a str, path: &str) -> Option<&'a str> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let point = unescape_mount_point(fields.get(4)?);
+            let fstype = fields.iter().position(|field| *field == "-").and_then(|dash| fields.get(dash + 1))?;
+            let within = point == "/" || path == point || path.starts_with(&format!("{point}/"));
+            within.then_some((point.len(), *fstype))
+        })
+        .fold(None, |deepest: Option<(usize, &str)>, (depth, fstype)| match deepest {
+            Some((best, _)) if best > depth => deepest,
+            _ => Some((depth, fstype)),
+        })
+        .map(|(_, fstype)| fstype)
+}
+
+/// mountinfo writes a space, tab, newline and backslash in a path as `\ooo`.
+#[cfg(target_os = "linux")]
+fn unescape_mount_point(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let octal = bytes.get(i + 1..i + 4).filter(|digits| bytes[i] == b'\\' && digits.iter().all(|d| (b'0'..=b'7').contains(d)));
+        match octal {
+            Some(digits) => {
+                out.push(digits.iter().fold(0u8, |n, d| n.wrapping_mul(8).wrapping_add(d - b'0')));
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn exec_sandboxed_linux(request: &SandboxRequest) -> String {
     use std::os::unix::process::CommandExt;
@@ -272,4 +349,29 @@ pub(super) fn supervise_sandboxed(request: &SandboxRequest) -> Result<i64, Strin
     let code = wait_within(child, request.timeout, request.max_cpu, 0).map_err(|error| format!("waiting for the command failed: {error}"))?;
     super::why::point_at_why(code);
     Ok(code)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    const MOUNTINFO: &str = "\
+600 500 0:52 / / rw,relatime - overlay overlay rw,lowerdir=/l
+601 600 0:60 / /h rw,relatime - fakeowner grpcfuse rw
+602 600 0:61 / /h/vol rw,relatime - ext4 /dev/vdb1 rw
+603 600 0:62 / /tmp rw - tmpfs tmpfs rw
+604 603 0:63 / /tmp rw - fakeowner grpcfuse rw
+605 600 0:64 / /my\\040dir rw - fakeowner grpcfuse rw
+";
+
+    #[test]
+    fn the_deepest_mount_and_the_one_on_top_decide() {
+        assert_eq!(filesystem_of(MOUNTINFO, "/h"), Some("fakeowner"));
+        assert_eq!(filesystem_of(MOUNTINFO, "/h/sub/dir"), Some("fakeowner"));
+        assert_eq!(filesystem_of(MOUNTINFO, "/h/vol/x"), Some("ext4"));
+        assert_eq!(filesystem_of(MOUNTINFO, "/hx"), Some("overlay"));
+        assert_eq!(filesystem_of(MOUNTINFO, "/tmp"), Some("fakeowner"));
+        assert_eq!(filesystem_of(MOUNTINFO, "/my dir/a"), Some("fakeowner"));
+        assert_eq!(filesystem_of("", "/h"), None);
+    }
 }

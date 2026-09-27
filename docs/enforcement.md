@@ -59,6 +59,12 @@ Linux uses Landlock unprivileged, without namespaces and without an external
 runtime. A rule the running kernel cannot express refuses the run rather than
 widening it: partial enforcement is never silently accepted.
 
+One place a grant does not hold is Docker Desktop's shared folders: a macOS
+directory bind-mounted into a container is a `fakeowner` filesystem, and under
+Landlock a command there can create a file but not write to it. porta cannot
+change that, so it says so before the run when a writable `-v` lies on one; give
+the command a Docker volume or a tmpfs to write to, and copy out afterwards.
+
 ## Host-filtered HTTPS
 
 ```bash
