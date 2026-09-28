@@ -79,6 +79,9 @@ fn blocked_v6(v6: &std::net::Ipv6Addr) -> bool {
 /// connected within ten seconds. Resolved once and dialled by address, so
 /// what was checked is what is connected.
 pub(crate) fn dial(host: &str, port: u16) -> Result<TcpStream, Dial> {
+    if let Some(address) = test_upstream(host) {
+        return TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| Dial::Failed(format!("upstream connect failed: {e}")));
+    }
     let addresses: Vec<std::net::SocketAddr> = (host, port)
         .to_socket_addrs()
         .map_err(|e| Dial::Failed(format!("resolve failed: {e}")))?
@@ -94,4 +97,17 @@ pub(crate) fn dial(host: &str, port: u16) -> Result<TcpStream, Dial> {
     };
     TcpStream::connect_timeout(address, Duration::from_secs(10))
         .map_err(|e| Dial::Failed(format!("upstream connect failed: {e}")))
+}
+
+/// For scripts/integration.py alone: `PORTA_TEST_UPSTREAM=host=127.0.0.1:port,...`
+/// sends a CONNECT for `host` to a local test server, past the address guard,
+/// so the credential broker can be exercised end to end without the internet.
+/// It is read from porta's own environment, which the confined command
+/// cannot set; whoever can set it already runs porta.
+fn test_upstream(host: &str) -> Option<std::net::SocketAddr> {
+    let spec = std::env::var("PORTA_TEST_UPSTREAM").ok()?;
+    spec.split(',').find_map(|entry| {
+        let (name, address) = entry.split_once('=')?;
+        if name.trim().eq_ignore_ascii_case(host) { address.trim().parse().ok() } else { None }
+    })
 }

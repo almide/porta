@@ -8,6 +8,7 @@
 //! Split out of wasmtime_bridge so the FFI surface there stays a surface: this
 //! module owns the listener and the policy matching.
 
+use crate::credential_broker::{Broker, Requested};
 use crate::locking::locked;
 use crate::proxy_egress::{basic_credential, dial, mint_token, Dial};
 use crate::proxy_audit::{audit_log, Decision};
@@ -33,11 +34,17 @@ struct ProxyPolicy {
     /// carrying this run's allow-list. The token is minted per run and handed
     /// to the child in its `HTTPS_PROXY`.
     credential: String,
+    /// The credentials handed in as placeholders (#37), and the CA their
+    /// hosts' connections are opened with. None when the run has none: then
+    /// every CONNECT is a tunnel, as it always was.
+    broker: Option<Arc<Broker>>,
 }
 
 struct ProxyInstance {
     port: u16,
     shutdown: Arc<AtomicBool>,
+    /// The broker's CA and trust bundle, removed when the proxy stops.
+    credentials_dir: Option<String>,
 }
 
 static PROXIES: Mutex<Vec<Option<ProxyInstance>>> = Mutex::new(Vec::new());
@@ -48,7 +55,7 @@ static PROXIES: Mutex<Vec<Option<ProxyInstance>>> = Mutex::new(Vec::new());
 /// the same name, as DNS reads it: `evil.com.` resolves where `evil.com` does,
 /// and before this a deny-list naming `evil.com` let it through (found by
 /// `scripts/fuzz.py proxy`).
-fn host_matches(host: &str, pattern: &str) -> bool {
+pub(crate) fn host_matches(host: &str, pattern: &str) -> bool {
     let host = host.strip_suffix('.').unwrap_or(host);
     let pattern = pattern.strip_suffix('.').unwrap_or(pattern);
     if pattern.eq_ignore_ascii_case(host) {
@@ -95,7 +102,10 @@ fn handle_connection(client: TcpStream, policy: Arc<ProxyPolicy>, audit_path: Ar
     let mut reader = BufReader::new(client);
     let Some((request_line, headers)) = read_request(&mut reader) else { return };
     match connect_target(&request_line, &headers, &policy) {
-        Ok((host, port)) => tunnel(client_for_write, &audit_path, &host, port),
+        Ok((host, port)) => match &policy.broker {
+            Some(broker) if broker.intercepts(&host, port) => broker.intercept(client_for_write, &audit_path, &host, port),
+            _ => tunnel(client_for_write, &audit_path, &host, port),
+        },
         Err((status, decision)) => {
             let _ = client_for_write.write_all(status.as_bytes());
             audit_log(&audit_path, &decision);
@@ -188,16 +198,38 @@ fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: 
 /// Start the CONNECT proxy on 127.0.0.1:<random>.
 /// `allow_json` and `deny_json` are JSON arrays of hostname patterns; only one
 /// should be non-empty. `audit_path` is a file path for JSONL logging (empty = disabled).
-/// Returns JSON: {"handle":<i64>,"port":<u16>} on success, {"error":"..."} otherwise.
+/// `credentials_json` is `[{"name","value","hosts":[...]}]`, the credentials to
+/// hand in as placeholders; with any, the proxy may run with neither list,
+/// and then every host is reachable through it.
+/// Returns JSON: {"handle","port","token","env":[[name,value],...]} on success,
+/// {"error":"..."} otherwise. `env` is what the command's environment gains.
 pub fn wt_proxy_start(
     allow_json: impl AsRef<str>,
     deny_json: impl AsRef<str>,
     audit_path: impl AsRef<str>,
+    credentials_json: impl AsRef<str>,
 ) -> String {
-    let policy = match requested_policy(allow_json.as_ref(), deny_json.as_ref()) {
+    let requested: Vec<Requested> = match serde_json::from_str(credentials_json.as_ref()) {
+        Ok(requested) => requested,
+        Err(e) => return error_json(&format!("credentials: {e}")),
+    };
+    let broker = if requested.is_empty() {
+        None
+    } else {
+        match Broker::new(requested) {
+            Ok(broker) => Some(Arc::new(broker)),
+            Err(reason) => return error_json(&reason),
+        }
+    };
+    let mut policy = match requested_policy(allow_json.as_ref(), deny_json.as_ref(), broker.is_some()) {
         Ok(policy) => policy,
         Err(reason) => return format!("{{\"error\":\"{}\"}}", reason),
     };
+    // A credential bound to a host the allow-list leaves out would be handed
+    // in for nothing; binding it says the host is meant to be reached.
+    if let (ProxyMode::Allow, Some(broker)) = (policy.mode, &broker) {
+        policy.patterns.extend(broker.hosts());
+    }
     let listener = match loopback_listener() {
         Ok(listener) => listener,
         Err(reason) => return format!("{{\"error\":\"{}\"}}", reason),
@@ -209,28 +241,43 @@ pub fn wt_proxy_start(
     let shutdown = Arc::new(AtomicBool::new(false));
     let audit = Some(audit_path.as_ref().to_string()).filter(|path| !path.is_empty());
     let token = mint_token();
-    let policy = ProxyPolicy { credential: basic_credential(&token), ..policy };
+    let env: Vec<(String, String)> = broker.as_ref().map(|b| b.child_env()).unwrap_or_default();
+    let credentials_dir = broker.as_ref().map(|b| b.dir.clone());
+    let policy = ProxyPolicy { credential: basic_credential(&token), broker, ..policy };
     serve(listener, Arc::new(policy), Arc::new(audit), shutdown.clone());
 
     let handle = {
         let mut proxies = locked(&PROXIES);
-        proxies.push(Some(ProxyInstance { port, shutdown }));
+        proxies.push(Some(ProxyInstance { port, shutdown, credentials_dir }));
         (proxies.len() - 1) as i64
     };
-    format!("{{\"handle\":{},\"port\":{},\"token\":\"{}\"}}", handle, port, token)
+    format!(
+        "{{\"handle\":{},\"port\":{},\"token\":\"{}\",\"env\":{}}}",
+        handle,
+        port,
+        token,
+        serde_json::to_string(&env).unwrap_or_else(|_| "[]".into())
+    )
 }
 
-/// The policy these two lists ask for. Exactly one of them must be given:
-/// an allow-list and a deny-list together have no single meaning. The
-/// credential is filled in by the caller once the run's token is minted.
-fn requested_policy(allow_json: &str, deny_json: &str) -> Result<ProxyPolicy, &'static str> {
+fn error_json(reason: &str) -> String {
+    format!("{{\"error\":{}}}", serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".into()))
+}
+
+/// The policy these two lists ask for. At most one of them may be given: an
+/// allow-list and a deny-list together have no single meaning. Neither is an
+/// error unless the run hands credentials in, which is reason enough for a
+/// proxy: then nothing is denied. The credential and the broker are filled in
+/// by the caller.
+fn requested_policy(allow_json: &str, deny_json: &str, has_credentials: bool) -> Result<ProxyPolicy, &'static str> {
     let allow: Vec<String> = serde_json::from_str(allow_json).unwrap_or_default();
     let deny: Vec<String> = serde_json::from_str(deny_json).unwrap_or_default();
     let credential = String::new();
     match (allow.is_empty(), deny.is_empty()) {
         (false, false) => Err("allow and deny are mutually exclusive"),
-        (false, true) => Ok(ProxyPolicy { mode: ProxyMode::Allow, patterns: allow, credential }),
-        (true, false) => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: deny, credential }),
+        (false, true) => Ok(ProxyPolicy { mode: ProxyMode::Allow, patterns: allow, credential, broker: None }),
+        (true, false) => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: deny, credential, broker: None }),
+        (true, true) if has_credentials => Ok(ProxyPolicy { mode: ProxyMode::Deny, patterns: vec![], credential, broker: None }),
         (true, true) => Err("neither allow nor deny list provided"),
     }
 }
@@ -271,6 +318,9 @@ pub fn wt_proxy_stop(handle: i64) -> i64 {
     }
     if let Some(inst) = &proxies[idx] {
         inst.shutdown.store(true, Ordering::Relaxed);
+        if let Some(dir) = &inst.credentials_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
     proxies[idx] = None;
     0

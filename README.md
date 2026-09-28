@@ -169,6 +169,10 @@ Linux ([overhead](docs/benchmarks/overhead.md)).
   ([agent runtime](docs/agent-runtime.md)).
 - **One API and a log.** `--proxy-allow api.example.com --proxy-audit
   egress.jsonl` lets through only that host and records every decision.
+- **Keys the command cannot read.** `--credential ANTHROPIC_API_KEY=api.anthropic.com`
+  hands the command a placeholder; porta's proxy puts the real key on requests
+  to that host alone, and refuses the placeholder anywhere else it looks
+  ([enforcement](docs/enforcement.md#credentials-as-placeholders)).
 
 ## Docs
 

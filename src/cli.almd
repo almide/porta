@@ -4,6 +4,7 @@ import process
 import self.dispatch
 import self.sandbox
 import self.manifest
+import self.proxy
 import self.util
 type Options = {
   path: String,
@@ -25,6 +26,8 @@ type Options = {
   proxy_allow: List[String],
   proxy_deny: List[String],
   proxy_audit: String,
+  // Credentials handed in as placeholders and put on in the proxy (--credential, [[credentials]]).
+  credentials: List[proxy.Credential],
   read_policy: String,
   allow_root: Bool,
   // Host variables copied into the child by name; its environment otherwise starts empty.
@@ -75,6 +78,7 @@ fn default_options() -> Options = {
   proxy_allow: [],
   proxy_deny: [],
   proxy_audit: "",
+  credentials: [],
   read_policy: "open",
   allow_root: false,
   env_pass: [],
@@ -130,6 +134,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--proxy-allow" => valued({...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
     "--proxy-deny" => valued({...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
     "--proxy-audit" => valued({...opts, proxy_audit: next}),
+    "--credential" => valued(with_credential(opts, next)),
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
     "--no-net" => flag({...opts, no_net: true}),
@@ -175,6 +180,15 @@ fn unrecognized(opts: Options, arg: String) -> Result[ParsedOption, String] =
 fn with_env(opts: Options, text: String) -> Options =
   match util.split_at_eq(text) {
     some(kv) => {...opts, env_vars: opts.env_vars + [kv]},
+    none => opts,
+  }
+
+// --credential NAME=HOST[,HOST...]: the host variable NAME, handed in as a
+// placeholder and put on for requests to these hosts (`host[:443][/path]`).
+fn with_credential(opts: Options, text: String) -> Options =
+  match util.split_at_eq(text) {
+    some(kv) => {...opts, credentials: opts.credentials + [{name: kv.key, from_env: kv.key,
+      hosts: string.split(kv.val, ",") |> list.map(string.trim) |> list.filter((h) => h != "")}]},
     none => opts,
   }
 
@@ -270,6 +284,11 @@ fn line_when(present: Bool, line: String) -> List[String] =
 fn policy_toml(opts: Options) -> String = {
   let mounts = if list.len(opts.preopen_dirs) > 0 then opts.preopen_dirs else ["."]
   let proxy_on = list.len(opts.proxy_allow) > 0 or list.len(opts.proxy_deny) > 0 or opts.proxy_audit != ""
+  // Where each credential goes is policy and is saved; its value is read from
+  // the named variable when the run starts, never written here.
+  let credential_tables = opts.credentials |> list.flat_map((c) =>
+    ["", "[[credentials]]", "name = " + toml_quote(c.name), "from = { env = " + toml_quote(c.from_env) + " }",
+     "hosts = " + toml_strings(c.hosts)])
   let has_env = list.len(opts.env_vars) > 0 or list.len(opts.secrets) > 0
   let lines =
     ["[runtime]", "type = \"native\"", "command = " + toml_quote(opts.path), "", "[sandbox]",
@@ -294,6 +313,7 @@ fn policy_toml(opts: Options) -> String = {
     + line_when(list.len(opts.proxy_allow) > 0, "allow = " + toml_strings(opts.proxy_allow))
     + line_when(list.len(opts.proxy_deny) > 0, "deny = " + toml_strings(opts.proxy_deny))
     + line_when(opts.proxy_audit != "", "audit = " + toml_quote(opts.proxy_audit))
+    + credential_tables
     + line_when(has_env, "\n# -e values and secrets were not saved; add [env] and [secrets] yourself")
   string.join(lines, "\n") + "\n"
 }

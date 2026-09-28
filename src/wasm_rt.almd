@@ -100,7 +100,7 @@ fn wt_sandbox_check() -> String
 fn wt_sandbox_check_json() -> String
 
 @extern(rs, "wasmtime_bridge", "wt_proxy_start")
-fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String) -> String
+fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String, credentials_json: String) -> String
 
 @extern(rs, "wasmtime_bridge", "wt_proxy_stop")
 fn wt_proxy_stop(handle: Int) -> Int

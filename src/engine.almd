@@ -66,7 +66,7 @@ effect fn run_foreground(opts: cli.Options) -> Result[Unit, String] = {
 // --- Native sandbox execution ---
 
 fn proxy_config(opts: cli.Options) -> proxy.ProxyConfig =
-  {allow: opts.proxy_allow, deny: opts.proxy_deny, audit_path: opts.proxy_audit}
+  {allow: opts.proxy_allow, deny: opts.proxy_deny, audit_path: opts.proxy_audit, credentials: opts.credentials}
 
 // Runs a native command under the policy the options describe and returns
 // the command's own exit code, so the caller can exit with it.
@@ -164,7 +164,7 @@ effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) ->
     {key: "http_proxy", val: endpoint},
     {key: "https_proxy", val: endpoint},
     {key: "NODE_USE_ENV_PROXY", val: "1"},
-  ]
+  ] + h.env
   // Net: strictly the proxy port. Anything else must be blocked at the OS level.
   let request = native_request(opts, [proxy.sandbox_net_rule(h)], proxy_env, true)!
   let reply = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))

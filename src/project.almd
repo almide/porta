@@ -28,6 +28,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
         proxy_allow: cfg.proxy_allow,
         proxy_deny: cfg.proxy_deny,
         proxy_audit: cfg.proxy_audit,
+        credentials: cfg.credentials,
         env_pass: cfg.env_pass,
         allow_unix: cfg.allow_unix,
         allow_bind: cfg.allow_bind,
