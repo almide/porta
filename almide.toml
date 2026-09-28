@@ -17,3 +17,9 @@ libc = "0.2"
 regex = "1"
 
 toml = "0.8"
+# The credential broker (#37): TLS terminated for bound hosts with a CA made
+# per run, and re-opened to the real server. ring, the provider reqwest's
+# rustls already builds, so no second crypto library and no OpenSSL.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem"] }
+webpki-roots = "1"

@@ -64,6 +64,7 @@ line, never dropped.
 | `--proxy-allow <hosts>` | Route egress through porta's CONNECT proxy and allow only these hosts |
 | `--proxy-deny <hosts>` | Same, denying these hosts |
 | `--proxy-audit <path>` | Append every proxy decision to a JSONL file |
+| `--credential <NAME=HOST[,HOST]>` | Hand host variable NAME in as a placeholder; the proxy puts the real value on requests to `host[:443][/path]` only (repeatable) |
 | `--read-policy <open\|strict>` | `strict` confines reads to your mounts and the system directories (default `open`) |
 | `--allow-root` | Run as root anyway. Refused by default: for root, the file permissions this policy leans on separate nothing |
 | `--env-pass <NAME,...>` | Copy these host variables into the command. The child starts from an empty environment plus `PATH`, `HOME`, `USER`, `SHELL`, `TERM` and the locale; nothing else of your shell crosses unless `-e` or this names it |
@@ -123,6 +124,11 @@ network = ["*:443"]       # Restrict to these ports (empty = all open)
 [proxy]
 # allow = ["api.example.com"]   # egress only through the CONNECT proxy, these hosts
 # audit = "egress.jsonl"
+
+# [[credentials]]               # a placeholder inside, the real value put on by the proxy
+# name  = "ANTHROPIC_API_KEY"
+# from  = { env = "ANTHROPIC_API_KEY" }
+# hosts = ["api.anthropic.com/v1"]
 
 [env]
 NODE_ENV = "production"

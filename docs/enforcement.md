@@ -86,8 +86,50 @@ allow-list. An allowed name that resolves to loopback, a link-local or cloud
 metadata address, or a multicast group is refused: a hostname on the list is a
 promise about a public service, not a route to this machine. Private ranges
 stay reachable. Every decision is written and synced to the audit file before
-the connection proceeds. Deny lists are weaker than explicit allow lists, and
-this is not a credential broker.
+the connection proceeds. Deny lists are weaker than explicit allow lists.
+
+## Credentials as placeholders
+
+```bash
+porta run claude -v . --credential ANTHROPIC_API_KEY=api.anthropic.com
+```
+
+Or in `porta.toml`:
+
+```toml
+[[credentials]]
+name  = "ANTHROPIC_API_KEY"            # the variable the command sees
+from  = { env = "ANTHROPIC_API_KEY" }  # where porta reads the real value (default: the name)
+hosts = ["api.anthropic.com/v1"]       # host[:443][/path], *.wildcard allowed
+```
+
+The command's `ANTHROPIC_API_KEY` is `porta-cred-ANTHROPIC_API_KEY-<random>`,
+minted for this run. The real value stays in porta. A credential turns the
+proxy on (with no `--proxy-allow`, every host is reachable through it; with one,
+the bound hosts are added to it), and for a bound host porta terminates the
+command's TLS with a certificate from a CA made for this run, replaces the
+placeholder wherever it appears in the request line, query or headers
+(`Authorization: Bearer …`, `x-api-key: …` alike), and sends the request on
+over its own TLS connection, which verifies the real server against the
+webpki roots. The same placeholder in a request to a bound host on a path its
+credential is not bound to is refused with 403 before anything is sent. Every
+substitution and refusal goes to stderr and the audit file with the
+credential's name, never its value.
+
+The command is pointed at the run's CA with `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` (a bundle of the
+system's roots plus the CA, since those replace the trust store) and
+`NODE_EXTRA_CA_CERTS` (the CA alone, since Node adds it). The CA is valid for
+a week, lives in memory, and its certificate and the bundle are removed when
+the run ends. A client that ignores all of these (Go on macOS, which asks the
+Keychain) will not trust the intercepted connection, and fails closed.
+
+Only bound hosts are intercepted. Every other CONNECT is tunnelled as before,
+end to end and unread; a placeholder sent there is only a random string. Each
+intercepted connection carries one request (porta asks the server for
+`Connection: close`), and speaks HTTP/1.1 only; request bodies are passed on,
+not inspected. Values come from porta's environment for now; a file, the
+Keychain or a command as the source are left for later.
 
 ## WASM sandbox
 
