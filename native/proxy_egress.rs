@@ -6,8 +6,10 @@
 //! Kept apart from `http_proxy` so that module stays the listener and the
 //! policy match, and this one holds the credential and the dial.
 
-use std::io::Read;
+use crate::proxy_audit::{audit_log, Decision};
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::thread;
 use std::time::Duration;
 
 /// A fresh token for one run: 16 random bytes, as hex. A label for a client,
@@ -109,5 +111,55 @@ fn test_upstream(host: &str) -> Option<std::net::SocketAddr> {
     spec.split(',').find_map(|entry| {
         let (name, address) = entry.split_once('=')?;
         if name.trim().eq_ignore_ascii_case(host) { address.trim().parse().ok() } else { None }
+    })
+}
+
+/// Opens the tunnel and copies bytes both ways until either side closes. An
+/// unreachable upstream is answered and recorded rather than left hanging.
+pub(crate) fn tunnel(mut client: TcpStream, audit_path: &Option<String>, host: &str, port: u16) {
+    let upstream = match dial(host, port) {
+        Ok(upstream) => upstream,
+        Err(Dial::Blocked(reason)) => {
+            let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
+            return audit_log(audit_path, &Decision::new(host, port, "deny", reason));
+        }
+        Err(Dial::Failed(reason)) => {
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return audit_log(audit_path, &Decision::new(host, port, "error", reason));
+        }
+    };
+    let _ = client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+    audit_log(audit_path, &Decision::new(host, port, "allow", "policy match"));
+    let (Ok(client_side), Ok(upstream_side)) = (client.try_clone(), upstream.try_clone()) else { return };
+    let outbound = thread::spawn(move || { let _ = copy_bytes(client_side, upstream); });
+    let inbound = thread::spawn(move || { let _ = copy_bytes(upstream_side, client); });
+    let _ = outbound.join();
+    let _ = inbound.join();
+}
+
+fn copy_bytes(mut src: TcpStream, mut dst: TcpStream) -> std::io::Result<()> {
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = src.read(&mut buf)?;
+        if n == 0 {
+            let _ = dst.shutdown(std::net::Shutdown::Write);
+            return Ok(());
+        }
+        dst.write_all(&buf[..n])?;
+    }
+}
+
+/// Use the same URL parser as the HTTP transport, never a string split.
+pub fn wt_is_host_allowed(url: impl AsRef<str>, allowed_json: impl AsRef<str>) -> bool {
+    let Ok(url) = reqwest::Url::parse(url.as_ref()) else { return false };
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
+    let Ok(allowed) = serde_json::from_str::<Vec<String>>(allowed_json.as_ref()) else { return false };
+    allowed.iter().any(|rule| {
+        let Some((allowed_host, allowed_port)) = rule.rsplit_once(':') else { return false };
+        (allowed_host == "*" || allowed_host.eq_ignore_ascii_case(host)) &&
+            (allowed_port == "*" || allowed_port.parse::<u16>().ok() == Some(port))
     })
 }

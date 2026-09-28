@@ -6,6 +6,7 @@ import json
 import process
 import self.wasm_rt
 import self.dispatch
+import self.util
 
 // A credential handed in as a placeholder (#37): the name the command sees it
 // under, the host variable its real value is read from, and the hosts it may
@@ -110,3 +111,19 @@ fn endpoint(h: ProxyHandle) -> String = "http://porta:${h.token}@127.0.0.1:${int
 
 // sandbox-exec allow rule that restricts net to just the proxy port.
 fn sandbox_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"
+
+// --credential NAME=HOST[,HOST...]: the host variable NAME, handed in as a
+// placeholder and put on for requests to these hosts (`host[:443][/path]`).
+fn parse_credential(text: String) -> Credential? =
+  match util.split_at_eq(text) {
+    some(kv) => some({name: kv.key, from_env: kv.key,
+      hosts: string.split(kv.val, ",") |> list.map(string.trim) |> list.filter((h) => h != "")}),
+    none => none,
+  }
+
+// [[credentials]] tables for a saved policy: where each credential goes and
+// which variable it is read from, never its value.
+fn toml_tables(credentials: List[Credential]) -> List[String] =
+  credentials |> list.flat_map((c) =>
+    ["", "[[credentials]]", "name = " + util.toml_quote(c.name), "from = { env = " + util.toml_quote(c.from_env) + " }",
+     "hosts = " + util.toml_strings(c.hosts)])
