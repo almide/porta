@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 
 | Where | How |
 |---|---|
-| macOS (Apple silicon), Linux (x86-64, arm64) | the script above: checks the SHA-256, and the Sigstore signature where `cosign` is installed |
+| macOS (Apple silicon), Linux (x86-64, arm64; glibc 2.31+: Debian 11, Ubuntu 20.04 and later) | the script above: checks the SHA-256, and the Sigstore signature where `cosign` is installed |
 | Debian, Ubuntu | `sudo apt install ./porta_<version>_amd64.deb` from a [release](https://github.com/almide/porta/releases); on Ubuntu 23.10+ it also loads the AppArmor profile porta's namespaces need |
 | Ubuntu, installed any other way | `sudo porta setup` once, for the same profile |
 | GitHub Actions | `- uses: almide/porta@v0.6.16`, then `porta run …` in any step |
