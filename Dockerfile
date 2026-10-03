@@ -25,8 +25,8 @@ RUN python3 scripts/job_integration.py target/porta
 
 FROM debian:trixie-slim AS runtime
 ARG PORTA_UID=10001
-# libssl: porta's HTTP client links OpenSSL on Linux (see THIRD_PARTY_LICENSES.md).
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libssl3t64 ca-certificates \
+# CA certificates for the TLS porta's own clients speak (rustls; no OpenSSL).
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid ${PORTA_UID} --create-home --home-dir /var/lib/porta porta
 COPY --from=build /home/dev/src/target/porta /usr/local/bin/porta

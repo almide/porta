@@ -20,7 +20,7 @@ code, a test, or a measurement — not at an opinion.
 
 | # | Gap | Evidence |
 |---|---|---|
-| 6 | Full licence texts of all 312 crates are not shipped in the image, only the list. | [distribution](distribution.md) § Licences |
+| 6 | Full licence texts of all 300 crates are not shipped in the image, only the list. | [distribution](distribution.md) § Licences |
 | 7 | Total disk use per job is not capped (only per file). | threat model T12 |
 | 8 | Host memory beyond linear memory is not capped per job. | threat model, "not defended"; `memory_mib` is a store limit |
 | 9 | No queue: the job after `max_concurrent` is refused with 429. | `supervisor.rs` `admit` |

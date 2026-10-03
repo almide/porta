@@ -5,7 +5,7 @@
 | Artifact | Built by | Contains |
 |---|---|---|
 | `porta` binary | `almide build src/main.almd -o target/porta` (or the release workflow) | porta, including the job service, statically linking its Rust dependencies |
-| Evaluation image | `docker build -t porta-eval .` ([`Dockerfile`](../../Dockerfile)) | `debian:trixie-slim`, libssl, CA certificates, the binary, the sample module and catalog, two policies, `LICENSE`, `THIRD_PARTY_LICENSES.md` |
+| Evaluation image | `docker build -t porta-eval .` ([`Dockerfile`](../../Dockerfile)) | `debian:trixie-slim`, CA certificates, the binary, the sample module and catalog, two policies, `LICENSE`, `THIRD_PARTY_LICENSES.md` |
 | Sample job | `almide build examples/enterprise/sample-job/src/main.almd --target wasm` | `sample-job.wasm`, committed; its digest is pinned in both example policies |
 | Deployment templates | — | [`deploy/`](../../deploy/) |
 
@@ -38,7 +38,7 @@ option to use one) and pin base images by digest.
 
 porta is Apache-2.0 ([`LICENSE`](../../LICENSE)).
 
-[`THIRD_PARTY_LICENSES.md`](../../THIRD_PARTY_LICENSES.md) lists the 312
+[`THIRD_PARTY_LICENSES.md`](../../THIRD_PARTY_LICENSES.md) lists the 300
 Rust crates in the binary for Linux (x86-64, arm64) and macOS (arm64), with
 their licence expressions. All are permissive or offer a permissive option:
 MIT, Apache-2.0 (with or without the LLVM exception), BSD-2/3-Clause, ISC,
@@ -54,8 +54,8 @@ text, which a release should (`cargo about` or similar can collect them).
 This is item 6 in [gaps](gaps.md). This page is an engineering inventory, not
 legal advice.
 
-Run-time libraries not compiled in: glibc (LGPL-2.1+) and OpenSSL 3
-(Apache-2.0), dynamically linked from the image or host. The base image's
+Run-time library not compiled in: glibc (LGPL-2.1+), dynamically linked
+from the image or host. TLS is rustls; porta links no OpenSSL. The base image's
 Debian packages carry their own copyright files under `/usr/share/doc`.
 
 Regenerate the list after a dependency change:
