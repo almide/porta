@@ -1,0 +1,41 @@
+# The policy the evaluation image starts with. Replace it by mounting your own
+# at /etc/porta/policy.toml. Paths here are absolute inside the image.
+version = 1
+label = "container-evaluation-1"
+env_names = ["REPORT_CURRENCY"]
+
+[service]
+records = "/var/lib/porta/records"
+workspaces = "/var/lib/porta/workspaces"
+max_concurrent = 4
+retain_output = true
+max_request_bytes = 1048576
+# "required": every worker also runs under porta's own OS sandbox, and the
+# service refuses to start where the kernel cannot apply it. "off": the WASM
+# boundary alone. See docs/enterprise/compatibility.md for which platforms
+# allow "required".
+os_sandbox = "required"
+
+[limits]
+timeout_ms = 10000
+fuel = 100000000000
+memory_mib = 64
+max_output_bytes = 1048576
+max_input_bytes = 524288
+
+[defaults]
+timeout_ms = 3000
+fuel = 1000000000
+memory_mib = 32
+max_output_bytes = 65536
+max_input_bytes = 65536
+
+[[modules]]
+name = "sample-job"
+wasm = "/opt/porta/modules/sample-job.wasm"
+sha256 = "6a187188ce3dda6d5252e46bfc70899a21728336abd8857dbc7aca3a56c90a00"
+
+[[directories]]
+name = "catalog"
+host = "/opt/porta/catalog"
+access = "read"

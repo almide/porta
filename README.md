@@ -167,6 +167,11 @@ Linux ([overhead](docs/benchmarks/overhead.md)).
   loop and each tool in separate instances, keeps model credentials in the
   host, and resumes a crashed run without repeating completed writes
   ([agent runtime](docs/agent-runtime.md)).
+- **A job API with records.** `porta job-serve --policy policy.toml` takes
+  WASM jobs over HTTP, checks each against an operator policy, runs it in its
+  own worker under fuel, memory, time and output limits, and returns the
+  result, why it stopped, and a run record — the evaluation build of
+  [Porta Enterprise](docs/enterprise/README.md).
 - **One API and a log.** `--proxy-allow api.example.com --proxy-audit
   egress.jsonl` lets through only that host and records every decision.
 - **Keys the command cannot read.** `--credential ANTHROPIC_API_KEY=api.anthropic.com`

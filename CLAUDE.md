@@ -30,6 +30,7 @@ as a definition does.
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
 | `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
 | `agent_journal.rs` | durable broker records, exclusive access, replay validation |
+| `job_service.rs` + `job_service/{policy,spec,worker,http,supervisor}.rs`, `supervisor/{launch,collect}.rs` | the evaluation job API (`job-check`, `job-run`, `job-serve`): operator policy, job validation, one worker process per job (under `porta run` when `os_sandbox = "required"`), run records and `events.jsonl`; see `docs/enterprise/` |
 | `agent_mcp.rs` | explicitly granted remote MCP tool calls |
 | `json_text.rs`, `locking.rs` | JSON escaping for hand-built replies; lock acquisition that survives poisoning |
 

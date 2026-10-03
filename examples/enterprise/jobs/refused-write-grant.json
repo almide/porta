@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "module": "sample-job",
+  "args": ["report"],
+  "directories": [{"name": "catalog", "access": "read-write"}]
+}

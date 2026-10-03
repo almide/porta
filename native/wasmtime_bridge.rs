@@ -55,6 +55,7 @@ pub use crate::sandbox_profile::wt_sandbox_profile;
 pub use crate::http_client::wt_http_request;
 pub use crate::host_process::{wt_exec_command, wt_getpid, wt_home_dir, wt_kill, wt_spawn};
 pub use crate::wasm_inspect::wt_inspect;
+pub use crate::job_service::{job_check, job_run, job_serve, job_worker};
 
 mod run;
 pub use run::wt_run;

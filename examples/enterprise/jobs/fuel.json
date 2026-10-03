@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "module": "sample-job",
+  "args": ["spin"],
+  "limits": {"fuel": 50000000}
+}

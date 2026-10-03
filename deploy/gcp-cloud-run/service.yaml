@@ -1,0 +1,36 @@
+# gcloud run services replace deploy/gcp-cloud-run/service.yaml --region <REGION>
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: porta-eval
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+spec:
+  template:
+    metadata:
+      annotations:
+        # gen2 is a microVM with full syscall compatibility; gen1 is gVisor.
+        # A service without this may land on either.
+        run.googleapis.com/execution-environment: gen2
+        autoscaling.knative.dev/maxScale: "1"
+    spec:
+      containerConcurrency: 16
+      timeoutSeconds: 300
+      containers:
+        - image: <REGION>-docker.pkg.dev/<PROJECT>/porta/porta-eval:<TAG>
+          args: ["--policy", "/etc/porta/policy.toml", "--listen", "0.0.0.0:8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORTA_JOB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: porta-eval-token
+                  key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /healthz

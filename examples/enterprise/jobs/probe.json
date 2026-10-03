@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "module": "sample-job",
+  "args": [
+    "probe"
+  ],
+  "directories": [
+    {
+      "name": "catalog",
+      "access": "read"
+    }
+  ],
+  "limits": {
+    "timeout_ms": 2000
+  }
+}

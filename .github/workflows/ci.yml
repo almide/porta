@@ -104,6 +104,10 @@ jobs:
         run: command -v strace || (sudo apt-get update -qq && sudo apt-get install -y -qq strace)
       - name: Integration
         run: python3 scripts/integration.py target/porta
+      # The job service: policy, worker, records and the HTTP API, with every
+      # worker under the OS sandbox (os_sandbox = "required").
+      - name: Job service
+        run: python3 scripts/job_integration.py target/porta
       - name: Escape corpus
         run: python3 scripts/escapes.py target/porta
       # The runner restricts unprivileged user namespaces through AppArmor, as

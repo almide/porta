@@ -1,0 +1,40 @@
+# Porta Enterprise evaluation policy, version 1.
+# Paths are relative to this file. Run: porta job-check --policy policy.toml
+version = 1
+label = "evaluation-2026-10"          # your name for this version of the rules
+
+# Environment variable names a job may set. Nothing of the host's crosses.
+env_names = ["REPORT_CURRENCY"]
+
+[service]
+records = "state/records"             # run records and events.jsonl
+workspaces = "state/workspaces"       # one per running job, removed when it ends
+max_concurrent = 4
+retain_output = true                  # keep stdout and /output files with the record
+max_request_bytes = 1048576
+
+# Ceilings: a job asking for more is refused, not narrowed.
+[limits]
+timeout_ms = 10000
+fuel = 100000000000
+memory_mib = 64
+max_output_bytes = 1048576
+max_input_bytes = 524288
+
+# What a job gets when it does not say.
+[defaults]
+timeout_ms = 3000
+fuel = 1000000000
+memory_mib = 32
+max_output_bytes = 65536
+max_input_bytes = 65536
+
+[[modules]]
+name = "sample-job"
+wasm = "sample-job/sample-job.wasm"
+sha256 = "6a187188ce3dda6d5252e46bfc70899a21728336abd8857dbc7aca3a56c90a00"
+
+[[directories]]
+name = "catalog"                      # mounted at /data/catalog
+host = "catalog"
+access = "read"                       # the most a job may ask for
