@@ -21,9 +21,12 @@ is `interrupted`, its workspace removed, nothing re-run; records persist on
 the volume across restarts; without `PORTA_JOB_TOKEN` the image refuses to
 start.
 
-Not run: Linux x86-64 (the code is the same; porta's CI builds it, but the job
-suite has not run there), Intel macOS, any distribution other than Debian
-trixie, a kernel without Landlock, gVisor.
+GitHub Actions also runs `job_integration.py` on every push, on
+`ubuntu-latest` (Linux x86-64) and `macos-latest`; it passed for the 0.6.17
+release ([run 37110357864](https://github.com/almide/porta/actions/runs/37110357864)).
+
+Not run: Intel macOS, any distribution other than Debian trixie and the
+GitHub Ubuntu runner, a kernel without Landlock, gVisor.
 
 ## Cloud platforms
 

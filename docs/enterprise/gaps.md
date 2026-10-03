@@ -29,7 +29,6 @@ code, a test, or a measurement — not at an opinion.
 | 12 | No metrics endpoint; health does not cover disk or sandbox after start. | [operations](operations.md) § Health |
 | 13 | Component network denial is untested (no WASI 0.2 socket fixture). | threat model T6 |
 | 14 | Concurrency isolation is tested with 2 jobs, not under load; no soak or fuzz of the HTTP parser. | `job_integration.py` |
-| 15 | Linux x86-64 has not run the job suite (arm64 only). | [compatibility](compatibility.md) |
 
 ## P2 — product and commercial
 
