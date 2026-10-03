@@ -16,6 +16,15 @@ test "wt_http_request: invalid URL" {
   }
 }
 
+test "wt_http_request: unsupported method is valid JSON" {
+  // Rejected before a request is sent, even when the method contains JSON
+  // delimiters, control characters or Unicode.
+  let method = "BAD" + string.from_bytes([34, 92, 10, 13, 9, 0, 1, 8, 12, 31]) + "日"
+  let resp = wasm_rt.wt_http_request(method, "http://127.0.0.1", "{}", "")!
+  let parsed = json.parse(resp)!
+  assert_eq(json.get_string(parsed, "error") ?? "", "unsupported method: " + method)
+}
+
 // --- wt_exec_command ---
 
 test "wt_exec_command: echo" {

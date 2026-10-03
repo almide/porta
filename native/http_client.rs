@@ -10,16 +10,16 @@ use crate::json_text::escape_json_text;
 pub fn wt_http_request(method: impl AsRef<str>, url: impl AsRef<str>, headers_json: impl AsRef<str>, body: impl AsRef<str>) -> String {
     let client = match checked_client() {
         Ok(client) => client,
-        Err(reason) => return format!("{{\"error\":\"client error: {}\"}}", reason),
+        Err(reason) => return format!("{{\"error\":\"client error: {}\"}}", escape_json_text(&reason.to_string())),
     };
     let Some(mut request) = request_for(&client, method.as_ref(), url.as_ref()) else {
-        return format!("{{\"error\":\"unsupported method: {}\"}}", method.as_ref());
+        return format!("{{\"error\":\"unsupported method: {}\"}}", escape_json_text(method.as_ref()));
     };
     request = with_headers(request, headers_json.as_ref());
     if !body.as_ref().is_empty() { request = request.body(body.as_ref().to_string()); }
     match request.send() {
         Ok(response) => encoded_response(response),
-        Err(error) => format!("{{\"error\":\"request failed: {}\"}}", error),
+        Err(error) => format!("{{\"error\":\"request failed: {}\"}}", escape_json_text(&error.to_string())),
     }
 }
 
@@ -62,6 +62,6 @@ fn encoded_response(response: reqwest::blocking::Response) -> String {
     let status = response.status().as_u16();
     match response.text() {
         Ok(text) => format!("{{\"status\":{},\"body\":\"{}\"}}", status, escape_json_text(&text)),
-        Err(error) => format!("{{\"error\":\"read error: {}\"}}", error),
+        Err(error) => format!("{{\"error\":\"read error: {}\"}}", escape_json_text(&error.to_string())),
     }
 }
