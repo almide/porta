@@ -51,6 +51,7 @@ true.
 | Proxy mode: the loopback proxy is the only egress | Landlock TCP port rule + seccomp socket-family filter; Seatbelt profile | integration "proxy mode is the only egress" |
 | The proxy serves only this run's client, and never tunnels to loopback/metadata addresses | per-run credential; resolved-address guard | integration "CONNECT needs the run credential" |
 | Syscalls that reach around a file policy are refused (Linux, every mode) | seccomp baseline: `ptrace`, `process_vm_*`, mounts, namespaces, `io_uring`, `execveat(AT_EMPTY_PATH)`, … | `escapes.py` "ptrace", "fileless exec", "io_uring", "new user namespace" |
+| A credential given with `--credential` / `[[credentials]]` is never in the child's environment, and its value goes only on requests to the hosts and paths it is bound to; a placeholder on any other path of an intercepted host is refused and recorded | per-run placeholder; the proxy terminates TLS for bound hosts only, with a per-run CA, and verifies the real server | integration "a credential is a placeholder inside" |
 | The child inherits no host environment beyond `PATH`, `HOME`, locale, terminal | `env_clear` then a named allow-list | integration "the host environment stays outside" |
 | A policy the platform cannot express refuses the run | `prepare` returns an error; `run` exits 125 | integration "unexpressible rule refused" |
 
@@ -59,6 +60,10 @@ true.
 These are out of scope by design, not undiscovered. A report that porta does
 not stop one of them is accurate and not a vulnerability.
 
+- **Use of a credential where it is bound.** A credential handed in as a
+  placeholder cannot be read or sent anywhere else, but the command can still
+  make any request it likes to the host the credential is bound to, and porta
+  will put the key on it. Bind to the narrowest path that does the job.
 - **Kernel exploits.** porta's boundary is the kernel's. A privilege escalation
   through a kernel bug defeats it — and defeats a container on the same kernel.
   Those belong upstream.

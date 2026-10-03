@@ -3,12 +3,27 @@ import value
 // Almide owns config shape and lifecycle; the accept loop runs in a native thread.
 
 import json
+import process
 import self.wasm_rt
+import self.dispatch
+import self.util
+
+// A credential handed in as a placeholder (#37): the name the command sees it
+// under, the host variable its real value is read from, and the hosts it may
+// be put on for (`host[:443][/path]`). The command never holds the value; the
+// proxy puts it on requests to those hosts and refuses the placeholder
+// anywhere else it opens.
+type Credential = {
+  name: String,
+  from_env: String,
+  hosts: List[String],
+}
 
 type ProxyConfig = {
   allow: List[String],
   deny: List[String],
   audit_path: String,
+  credentials: List[Credential],
 }
 
 type ProxyHandle = {
@@ -18,16 +33,23 @@ type ProxyHandle = {
   // process of the same user can reach; only a client presenting the token
   // is served, so the proxy is not an open relay carrying this run's policy.
   token: String,
+  // What the command's environment gains with credentials: each placeholder
+  // under its credential's name, and the variables that make TLS clients
+  // trust the run's CA. Empty without credentials.
+  env: List[dispatch.EnvVar],
 }
 
 fn empty_config() -> ProxyConfig = {
   allow: [],
   deny: [],
   audit_path: "",
+  credentials: [],
 }
 
+// A credential needs the proxy even with no list: it is where the real value
+// is put on.
 fn is_enabled(c: ProxyConfig) -> Bool =
-  list.len(c.allow) > 0 or list.len(c.deny) > 0
+  list.len(c.allow) > 0 or list.len(c.deny) > 0 or list.len(c.credentials) > 0
 
 // Mutually exclusive: returns an error message when both allow and deny are set.
 fn validate(c: ProxyConfig) -> Result[Unit, String] =
@@ -39,7 +61,8 @@ effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
   validate(c)!
   let allow_json = json.stringify(value.array(c.allow |> list.map(value.str)))
   let deny_json = json.stringify(value.array(c.deny |> list.map(value.str)))
-  let result_json = wasm_rt.wt_proxy_start(allow_json, deny_json, c.audit_path)
+  let credentials_json = json.stringify(value.array(credential_values(c.credentials)!))
+  let result_json = wasm_rt.wt_proxy_start(allow_json, deny_json, c.audit_path, credentials_json)
   let parsed = json.parse(result_json)!
   let error = json.get_string(parsed, "error") ?? ""
   if error != "" then err(error)
@@ -48,9 +71,33 @@ effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
     let port = json.get_int(parsed, "port") ?? 0
     let token = json.get_string(parsed, "token") ?? ""
     if handle < 0 or port == 0 or token == "" then err("proxy start returned invalid handle, port or token")
-    else ok({handle: handle, port: port, token: token})
+    else ok({handle: handle, port: port, token: token, env: env_pairs(parsed)})
   }
 }
+
+// The credentials as the proxy takes them, each with its real value read from
+// porta's own environment now. A variable the host does not have is an error
+// here, before anything runs, rather than a key handed in empty.
+effect fn credential_values(credentials: List[Credential]) -> Result[List[Value], String] = {
+  var out: List[Value] = []
+  var missing = ""
+  for c in credentials {
+    let found = process.env(c.from_env) ?? ""
+    if found == "" and missing == "" then missing = "credential ${c.name}: ${c.from_env} is not set in porta's environment, so there is nothing to hand in"
+    out = out + [value.object([("name", value.str(c.name)), ("value", value.str(found)),
+      ("hosts", value.array(c.hosts |> list.map(value.str)))])]
+  }
+  if missing != "" then err(missing) else ok(out)
+}
+
+fn env_pairs(parsed: Value) -> List[dispatch.EnvVar] =
+  (json.get_array(parsed, "env") ?? []) |> list.filter_map((pair) => {
+    let items = value.as_array(pair) ?? []
+    match (list.get(items, 0), list.get(items, 1)) {
+      (some(k), some(v)) => some({key: value.as_string(k) ?? "", val: value.as_string(v) ?? ""}),
+      _ => none,
+    }
+  })
 
 effect fn stop(h: ProxyHandle) -> Result[Unit, String] = {
   let rc = wasm_rt.wt_proxy_stop(h.handle)
@@ -64,3 +111,19 @@ fn endpoint(h: ProxyHandle) -> String = "http://porta:${h.token}@127.0.0.1:${int
 
 // sandbox-exec allow rule that restricts net to just the proxy port.
 fn sandbox_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"
+
+// --credential NAME=HOST[,HOST...]: the host variable NAME, handed in as a
+// placeholder and put on for requests to these hosts (`host[:443][/path]`).
+fn parse_credential(text: String) -> Credential? =
+  match util.split_at_eq(text) {
+    some(kv) => some({name: kv.key, from_env: kv.key,
+      hosts: string.split(kv.val, ",") |> list.map(string.trim) |> list.filter((h) => h != "")}),
+    none => none,
+  }
+
+// [[credentials]] tables for a saved policy: where each credential goes and
+// which variable it is read from, never its value.
+fn toml_tables(credentials: List[Credential]) -> List[String] =
+  credentials |> list.flat_map((c) =>
+    ["", "[[credentials]]", "name = " + util.toml_quote(c.name), "from = { env = " + util.toml_quote(c.from_env) + " }",
+     "hosts = " + util.toml_strings(c.hosts)])

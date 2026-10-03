@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/almide/porta/main/scripts/install.s
 
 | Where | How |
 |---|---|
-| macOS (Apple silicon), Linux (x86-64, arm64) | the script above: checks the SHA-256, and the Sigstore signature where `cosign` is installed |
+| macOS (Apple silicon), Linux (x86-64, arm64; glibc 2.31+: Debian 11, Ubuntu 20.04 and later) | the script above: checks the SHA-256, and the Sigstore signature where `cosign` is installed |
 | Debian, Ubuntu | `sudo apt install ./porta_<version>_amd64.deb` from a [release](https://github.com/almide/porta/releases); on Ubuntu 23.10+ it also loads the AppArmor profile porta's namespaces need |
 | Ubuntu, installed any other way | `sudo porta setup` once, for the same profile |
 | GitHub Actions | `- uses: almide/porta@v0.6.16`, then `porta run …` in any step |
@@ -167,8 +167,17 @@ Linux ([overhead](docs/benchmarks/overhead.md)).
   loop and each tool in separate instances, keeps model credentials in the
   host, and resumes a crashed run without repeating completed writes
   ([agent runtime](docs/agent-runtime.md)).
+- **A job API with records.** `porta job-serve --policy policy.toml` takes
+  WASM jobs over HTTP, checks each against an operator policy, runs it in its
+  own worker under fuel, memory, time and output limits, and returns the
+  result, why it stopped, and a run record — the evaluation build of
+  [Porta Enterprise](docs/enterprise/README.md).
 - **One API and a log.** `--proxy-allow api.example.com --proxy-audit
   egress.jsonl` lets through only that host and records every decision.
+- **Keys the command cannot read.** `--credential ANTHROPIC_API_KEY=api.anthropic.com`
+  hands the command a placeholder; porta's proxy puts the real key on requests
+  to that host alone, and refuses the placeholder anywhere else it looks
+  ([enforcement](docs/enforcement.md#credentials-as-placeholders)).
 
 ## Docs
 

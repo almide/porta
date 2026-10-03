@@ -1,0 +1,7 @@
+.git
+target
+.tools
+.references
+docs/benchmarks
+examples/enterprise/state
+**/__pycache__

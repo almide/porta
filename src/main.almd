@@ -8,6 +8,7 @@ import self.ops
 import self.build
 import self.project
 import self.agent
+import self.jobs
 import self.util
 import self.wasm_rt
 
@@ -87,6 +88,10 @@ effect fn main() -> Result[Unit, String] = {
       process.exit(125)
       ok(())
     },
+    "__job-worker" => jobs.worker_command(list.drop(args, 2)),
+    "job-check" => jobs.check_command(list.drop(args, 2)),
+    "job-run" => jobs.run_command(list.drop(args, 2)),
+    "job-serve" => jobs.serve_command(list.drop(args, 2)),
     "agent-journal" => agent.journal_info(list.drop(args, 2)),
     "agent-check" => agent.inspect_config(list.drop(args, 2)),
     "agent" => agent.command(list.drop(args, 2), "run"),

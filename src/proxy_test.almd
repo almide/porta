@@ -1,3 +1,4 @@
+import self.cli
 import self.proxy
 
 test "is_enabled: empty config is disabled" {
@@ -6,17 +7,17 @@ test "is_enabled: empty config is disabled" {
 }
 
 test "is_enabled: allow-only enables proxy" {
-  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: ""}
+  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: "", credentials: []}
   assert_eq(proxy.is_enabled(c), true)
 }
 
 test "is_enabled: deny-only enables proxy" {
-  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: ""}
+  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: "", credentials: []}
   assert_eq(proxy.is_enabled(c), true)
 }
 
 test "validate: allow only is ok" {
-  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: ""}
+  let c: proxy.ProxyConfig = {allow: ["api.anthropic.com"], deny: [], audit_path: "", credentials: []}
   match proxy.validate(c) {
     ok(_) => assert(true),
     err(_) => assert(false),
@@ -24,7 +25,7 @@ test "validate: allow only is ok" {
 }
 
 test "validate: deny only is ok" {
-  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: ""}
+  let c: proxy.ProxyConfig = {allow: [], deny: ["google.com"], audit_path: "", credentials: []}
   match proxy.validate(c) {
     ok(_) => assert(true),
     err(_) => assert(false),
@@ -32,7 +33,7 @@ test "validate: deny only is ok" {
 }
 
 test "validate: both allow and deny is an error" {
-  let c: proxy.ProxyConfig = {allow: ["a.com"], deny: ["b.com"], audit_path: ""}
+  let c: proxy.ProxyConfig = {allow: ["a.com"], deny: ["b.com"], audit_path: "", credentials: []}
   match proxy.validate(c) {
     ok(_) => assert(false),
     err(msg) => assert(string.contains(msg, "mutually exclusive")),
@@ -40,11 +41,31 @@ test "validate: both allow and deny is an error" {
 }
 
 test "endpoint: carries the run's credential to 127.0.0.1:PORT" {
-  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123"}
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123", env: []}
   assert_eq(proxy.endpoint(h), "http://porta:abc123@127.0.0.1:42123")
 }
 
 test "sandbox_net_rule: formats as 127.0.0.1:PORT, no credential" {
-  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123"}
+  let h: proxy.ProxyHandle = {handle: 0, port: 42123, token: "abc123", env: []}
   assert_eq(proxy.sandbox_net_rule(h), "127.0.0.1:42123")
+}
+
+test "is_enabled: a credential alone needs the proxy" {
+  let c: proxy.ProxyConfig = {...proxy.empty_config(), credentials: [{name: "KEY", from_env: "KEY", hosts: ["api.example.com"]}]}
+  assert_eq(proxy.is_enabled(c), true)
+}
+
+test "--credential NAME=HOSTS reads NAME from the host and binds it to each host" {
+  let opts = cli.parse_options(["run", "--credential", "KEY=api.example.com/v1, other.example.com", "--credential", "B=b.example.com"], 1, cli.default_options()) ?? cli.default_options()
+  assert_eq(list.len(opts.credentials), 2)
+  let first = list.get(opts.credentials, 0) ?? {name: "", from_env: "", hosts: []}
+  assert_eq(first.name, "KEY")
+  assert_eq(first.from_env, "KEY")
+  assert_eq(first.hosts, ["api.example.com/v1", "other.example.com"])
+}
+
+test "explain --save writes where a credential goes, never its value" {
+  let opts = {...cli.default_options(), path: "/bin/sh", credentials: [{name: "KEY", from_env: "HOST_KEY", hosts: ["api.example.com"]}]}
+  let saved = cli.policy_toml(opts)
+  assert(string.contains(saved, "[[credentials]]\nname = \"KEY\"\nfrom = { env = \"HOST_KEY\" }\nhosts = [\"api.example.com\"]"))
 }

@@ -1,0 +1,20 @@
+// npx wrangler deploy   (from this directory; needs a Workers Paid plan)
+{
+  "name": "porta-eval",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "containers": [
+    {
+      "class_name": "PortaContainer",
+      // The repository's Dockerfile; wrangler builds it for linux/amd64.
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "PORTA", "class_name": "PortaContainer" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PortaContainer"] }]
+}

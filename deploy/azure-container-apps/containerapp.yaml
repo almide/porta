@@ -1,0 +1,38 @@
+# az containerapp create -n porta-eval -g <RESOURCE_GROUP> --yaml deploy/azure-container-apps/containerapp.yaml
+location: <LOCATION>
+properties:
+  managedEnvironmentId: /subscriptions/<SUBSCRIPTION>/resourceGroups/<RESOURCE_GROUP>/providers/Microsoft.App/managedEnvironments/<ENVIRONMENT>
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: false
+      targetPort: 8080
+      transport: http
+    registries:
+      - server: <REGISTRY>.azurecr.io
+        identity: system
+    secrets:
+      - name: porta-job-token
+        keyVaultUrl: https://<VAULT>.vault.azure.net/secrets/porta-eval-token
+        identity: system
+  template:
+    scale:
+      minReplicas: 1
+      maxReplicas: 1
+    containers:
+      - name: porta
+        image: <REGISTRY>.azurecr.io/porta-eval:<TAG>
+        args: ["--policy", "/etc/porta/policy.toml", "--listen", "0.0.0.0:8080"]
+        env:
+          - name: PORTA_JOB_TOKEN
+            secretRef: porta-job-token
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+        probes:
+          - type: Startup
+            httpGet:
+              path: /healthz
+              port: 8080
+identity:
+  type: SystemAssigned

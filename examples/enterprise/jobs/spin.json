@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "module": "sample-job",
+  "args": ["spin"],
+  "limits": {"timeout_ms": 2000, "fuel": 100000000000}
+}

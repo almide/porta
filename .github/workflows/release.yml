@@ -39,9 +39,19 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
       - name: Install pinned Almide
+        if: runner.os == 'macOS'
         run: bash scripts/install-almide.sh
       - name: Build
+        if: runner.os == 'macOS'
         run: .tools/almide/almide build src/main.almd -o target/porta
+      # Linux builds in Debian bullseye, not on the runner: a binary linked on
+      # Ubuntu 24.04 asks for glibc 2.39 and does not start on Debian 12,
+      # Ubuntu 22.04 or the python:*-slim images, which is most containers an
+      # agent runs in (#35). The script refuses a result past glibc 2.31 or one
+      # linking OpenSSL.
+      - name: Build (Debian bullseye, glibc 2.31)
+        if: runner.os == 'Linux'
+        run: bash scripts/build-linux.sh target/porta
       # A binary nobody checked is worse than no binary: the same suite that
       # gates a commit gates a release, on the machine that produced the file.
       - name: Verify the binary that will ship

@@ -1,0 +1,111 @@
+// Jobs: an operator's policy, a client's job, and the record of each run.
+// The broker is native/job_service.rs; this file is the command line.
+import json
+import process
+import self.util
+
+@extern(rs, "wasmtime_bridge", "job_check")
+fn check(policy: String, job: String) -> String
+
+@extern(rs, "wasmtime_bridge", "job_run")
+fn run_one(version: String, policy: String, job: String) -> String
+
+@extern(rs, "wasmtime_bridge", "job_serve")
+fn serve(version: String, policy: String, listen: String, no_auth: Bool) -> String
+
+@extern(rs, "wasmtime_bridge", "job_worker")
+fn worker(dir: String, lifeline: String) -> Int
+
+type JobArgs = { policy: String, listen: String, no_auth: Bool, rest: List[String] }
+
+fn print_usage() -> Unit = {
+  println("porta job-check --policy <policy.toml> [job.json]")
+  println("    Show the policy as a client sees it, or whether it accepts a job. Nothing runs.")
+  println("porta job-run --policy <policy.toml> <job.json>")
+  println("    Run one job and print its record. Exit 0 succeeded, 2 refused, 1 otherwise.")
+  println("porta job-serve --policy <policy.toml> [--listen 127.0.0.1:8640] [--no-auth]")
+  println("    Serve the job API. The bearer token is read from PORTA_JOB_TOKEN;")
+  println("    --no-auth is accepted only on a loopback address.")
+}
+
+effect fn parse(args: List[String]) -> Result[JobArgs, String] = {
+  var policy = ""
+  var listen = "127.0.0.1:8640"
+  var no_auth = false
+  var rest: List[String] = []
+  var problem = ""
+  var index = 0
+  while index < list.len(args) {
+    let arg = list.get(args, index) ?? ""
+    let next = list.get(args, index + 1) ?? ""
+    if arg == "--policy" or arg == "--listen" then {
+      if next == "" or string.starts_with(next, "--") then problem = "${arg} requires a value"
+      else if arg == "--policy" then policy = next
+      else listen = next
+      index = index + 2
+    } else if arg == "--no-auth" then {
+      no_auth = true
+      index = index + 1
+    } else if string.starts_with(arg, "--") then {
+      problem = "unknown option: ${arg}"
+      index = index + 1
+    } else {
+      rest = rest + [arg]
+      index = index + 1
+    }
+  }
+  if problem != "" then err(problem)
+  else if policy == "" then err("--policy <policy.toml> is required")
+  else ok({ policy: policy, listen: listen, no_auth: no_auth, rest: rest })
+}
+
+fn wants_help(args: List[String]) -> Bool =
+  list.is_empty(args) or list.any(args, (a) => a == "--help" or a == "-h")
+
+// A reply carrying `error` is a refusal by porta itself, before any job.
+effect fn print_reply(reply: String) -> Result[Unit, String] = {
+  let parsed = json.parse(reply)!
+  let error = json.get_string(parsed, "error") ?? ""
+  if error != "" then err(error) else { println(reply); ok(()) }
+}
+
+effect fn check_command(args: List[String]) -> Result[Unit, String] =
+  if wants_help(args) then { print_usage(); ok(()) }
+  else {
+    let parsed = parse(args)!
+    let reply = check(parsed.policy, list.get(parsed.rest, 0) ?? "")
+    print_reply(reply)!
+    let accepted = json.get_bool(json.parse(reply)!, "accepted") ?? true
+    if not accepted then process.exit(2) else ()
+    ok(())
+  }
+
+effect fn run_command(args: List[String]) -> Result[Unit, String] =
+  if wants_help(args) then { print_usage(); ok(()) }
+  else {
+    let parsed = parse(args)!
+    if list.len(parsed.rest) != 1 then err("expected one job file")
+    else {
+      let reply = run_one(util.version(), parsed.policy, list.get(parsed.rest, 0) ?? "")
+      print_reply(reply)!
+      let outcome = json.get_string(json.parse(reply)!, "outcome") ?? ""
+      if outcome == "refused" then process.exit(2)
+      else if outcome != "succeeded" then process.exit(1)
+      else ()
+      ok(())
+    }
+  }
+
+effect fn serve_command(args: List[String]) -> Result[Unit, String] =
+  if wants_help(args) then { print_usage(); ok(()) }
+  else {
+    let parsed = parse(args)!
+    let reply = serve(util.version(), parsed.policy, parsed.listen, parsed.no_auth)
+    if reply == "" then ok(()) else print_reply(reply)
+  }
+
+effect fn worker_command(args: List[String]) -> Result[Unit, String] = {
+  let code = worker(list.get(args, 0) ?? "", list.get(args, 1) ?? "")
+  if code != 0 then process.exit(code) else ()
+  ok(())
+}

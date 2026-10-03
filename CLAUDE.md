@@ -25,10 +25,12 @@ as a definition does.
 | `setup.rs` | `sudo porta setup`: a copy in a directory only root can write (`/usr/local/bin`, else `/usr/libexec/porta` linked from it) and the AppArmor profile that gives that copy user namespaces |
 | `snapshot.rs` | `--snapshot`: the writable mounts copied before a run to `~/.porta/snapshots`, what the run changed, and `porta rollback` |
 | `recipes.rs` + `recipes/*.toml` | `porta init claude` / `codex`: a `porta.toml` measured to what each agent needs |
-| `http_proxy.rs`, `proxy_audit.rs` | the loopback CONNECT proxy and its decision trail |
+| `http_proxy.rs`, `proxy_egress.rs`, `proxy_audit.rs` | the loopback CONNECT proxy, its run credential and address guard, and its decision trail |
+| `credential_broker.rs` | credentials as placeholders: the run's CA, TLS terminated for bound hosts only, the real value put on where it is bound and refused elsewhere |
 | `http_client.rs`, `host_process.rs`, `wasm_inspect.rs` | checked host services: one HTTP request, process helpers, module inspection |
 | `agent_runtime.rs` + `agent_runtime/` | the broker: `loading` (config, pins, team), `guest`, `model`, `verification`, `tools`, `inspect`, `ffi` |
 | `agent_journal.rs` | durable broker records, exclusive access, replay validation |
+| `job_service.rs` + `job_service/{policy,spec,worker,http,supervisor}.rs`, `supervisor/{launch,collect}.rs` | the evaluation job API (`job-check`, `job-run`, `job-serve`): operator policy, job validation, one worker process per job (under `porta run` when `os_sandbox = "required"`), run records and `events.jsonl`; see `docs/enterprise/` |
 | `agent_mcp.rs` | explicitly granted remote MCP tool calls |
 | `json_text.rs`, `locking.rs` | JSON escaping for hand-built replies; lock acquisition that survives poisoning |
 
@@ -136,6 +138,9 @@ accessors use `value.*`; serialization and typed key lookups use `json.*`.
 - Proxy mode permits only the loopback proxy endpoint, without UDP, Unix
   sockets or any other egress channel — including a ring that would open a
   socket without `socket(2)`.
+- A credential's value never enters the child's environment, never reaches a
+  log, and is put on only for a host and path it is bound to; a host no
+  credential names is tunnelled, never intercepted.
 - MCP stdio uses newline-delimited JSON; diagnostics belong on stderr.
 - MCP result adaptation must preserve multi-field payloads and error status; only legacy single-key Result envelopes unwrap.
 - Agent and tool instances inherit no host environment or implicit directories.

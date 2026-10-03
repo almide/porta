@@ -4,7 +4,7 @@
 
 ## Active
 
-4 items
+5 items
 
 | Item | Description |
 |------|-------------|
@@ -12,6 +12,7 @@
 | [WASM Agent Runtime](active/02-wasm-agent-runtime.md) | Guest-driven WASM agents and teams with shared execution budgets |
 | [Linux Native Enforcement](active/03-linux-native-enforcement.md) | Enforce native command restrictions on Linux, not just macOS |
 | [The Production Sandbox](active/04-production-sandbox.md) | What porta must do to be the sandbox people trust in production |
+| [Porta Enterprise evaluation build](active/05-enterprise-evaluation.md) | Porta Enterprise evaluation build: job API, run records, container |
 
 ## On Hold
 

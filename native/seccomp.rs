@@ -56,6 +56,13 @@ const SYS_CLONE3: u32 = 435;
 const SYS_PIDFD_GETFD: u32 = 438;
 const SYS_MOUNT_SETATTR: u32 = 442;
 
+/// By number: the libc crate's musl table for aarch64 has no `SYS_kexec_file_load`,
+/// so a static musl build would not compile with it.
+#[cfg(target_arch = "x86_64")]
+const SYS_KEXEC_FILE_LOAD: u32 = 320;
+#[cfg(target_arch = "aarch64")]
+const SYS_KEXEC_FILE_LOAD: u32 = 294;
+
 /// Syscalls refused with `EPERM` in every mode: attaching to or reading
 /// another process, mounting, entering or creating namespaces, loading kernel
 /// code, machine-wide state, and the fileless-exec and bypass primitives.
@@ -85,7 +92,7 @@ const DENIED: &[u32] = &[
     libc::SYS_open_by_handle_at as u32,
     libc::SYS_personality as u32,
     libc::SYS_kexec_load as u32,
-    libc::SYS_kexec_file_load as u32,
+    SYS_KEXEC_FILE_LOAD,
     libc::SYS_init_module as u32,
     libc::SYS_finit_module as u32,
     libc::SYS_delete_module as u32,

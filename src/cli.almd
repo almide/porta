@@ -4,6 +4,7 @@ import process
 import self.dispatch
 import self.sandbox
 import self.manifest
+import self.proxy
 import self.util
 type Options = {
   path: String,
@@ -25,6 +26,8 @@ type Options = {
   proxy_allow: List[String],
   proxy_deny: List[String],
   proxy_audit: String,
+  // Credentials handed in as placeholders and put on in the proxy (--credential, [[credentials]]).
+  credentials: List[proxy.Credential],
   read_policy: String,
   allow_root: Bool,
   // Host variables copied into the child by name; its environment otherwise starts empty.
@@ -75,6 +78,7 @@ fn default_options() -> Options = {
   proxy_allow: [],
   proxy_deny: [],
   proxy_audit: "",
+  credentials: [],
   read_policy: "open",
   allow_root: false,
   env_pass: [],
@@ -130,6 +134,7 @@ fn apply_option(opts: Options, arg: String, next: String) -> Result[ParsedOption
     "--proxy-allow" => valued({...opts, proxy_allow: opts.proxy_allow + string.split(next, ",")}),
     "--proxy-deny" => valued({...opts, proxy_deny: opts.proxy_deny + string.split(next, ",")}),
     "--proxy-audit" => valued({...opts, proxy_audit: next}),
+    "--credential" => valued({...opts, credentials: opts.credentials + list.filter_map([next], proxy.parse_credential)}),
     "--read-policy" => valued({...opts, read_policy: next}),
     "--allow-root" => flag({...opts, allow_root: true}),
     "--no-net" => flag({...opts, no_net: true}),
@@ -252,14 +257,6 @@ fn build_config(wasm_path: String, opts: Options, caps: sandbox.CapabilitySet, e
 
 // --- Policy capture ---
 
-// A TOML basic string: backslash and double-quote escaped so a path holding
-// either stays valid TOML rather than closing the string early.
-fn toml_quote(s: String) -> String =
-  "\"" + string.replace(string.replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
-
-fn toml_strings(items: List[String]) -> String =
-  "[" + string.join(items |> list.map(toml_quote), ", ") + "]"
-
 fn line_when(present: Bool, line: String) -> List[String] =
   if present then [line] else []
 
@@ -272,28 +269,29 @@ fn policy_toml(opts: Options) -> String = {
   let proxy_on = list.len(opts.proxy_allow) > 0 or list.len(opts.proxy_deny) > 0 or opts.proxy_audit != ""
   let has_env = list.len(opts.env_vars) > 0 or list.len(opts.secrets) > 0
   let lines =
-    ["[runtime]", "type = \"native\"", "command = " + toml_quote(opts.path), "", "[sandbox]",
-     "mounts = " + toml_strings(mounts)]
-    + line_when(list.len(opts.allow_net) > 0, "network = " + toml_strings(opts.allow_net))
+    ["[runtime]", "type = \"native\"", "command = " + util.toml_quote(opts.path), "", "[sandbox]",
+     "mounts = " + util.toml_strings(mounts)]
+    + line_when(list.len(opts.allow_net) > 0, "network = " + util.toml_strings(opts.allow_net))
     + line_when(opts.no_net, "no-net = true")
-    + line_when(opts.preset != "", "preset = " + toml_quote(opts.preset))
-    + line_when(list.len(opts.deny_read) > 0, "deny-read = " + toml_strings(opts.deny_read))
-    + line_when(list.len(opts.protect) > 0, "protect = " + toml_strings(opts.protect))
-    + line_when(list.len(opts.deny_unix) > 0, "deny-unix = " + toml_strings(opts.deny_unix))
+    + line_when(opts.preset != "", "preset = " + util.toml_quote(opts.preset))
+    + line_when(list.len(opts.deny_read) > 0, "deny-read = " + util.toml_strings(opts.deny_read))
+    + line_when(list.len(opts.protect) > 0, "protect = " + util.toml_strings(opts.protect))
+    + line_when(list.len(opts.deny_unix) > 0, "deny-unix = " + util.toml_strings(opts.deny_unix))
     + line_when(opts.read_policy == "strict", "read-policy = \"strict\"")
-    + line_when(list.len(opts.env_pass) > 0, "env-pass = " + toml_strings(opts.env_pass))
-    + line_when(list.len(opts.allow_unix) > 0, "unix = " + toml_strings(opts.allow_unix))
-    + line_when(list.len(opts.allow_bind) > 0, "bind = " + toml_strings(opts.allow_bind))
+    + line_when(list.len(opts.env_pass) > 0, "env-pass = " + util.toml_strings(opts.env_pass))
+    + line_when(list.len(opts.allow_unix) > 0, "unix = " + util.toml_strings(opts.allow_unix))
+    + line_when(list.len(opts.allow_bind) > 0, "bind = " + util.toml_strings(opts.allow_bind))
     + line_when(opts.timeout > 0, "timeout = " + int.to_string(opts.timeout))
     + line_when(opts.max_cpu > 0, "max-cpu = " + int.to_string(opts.max_cpu))
     + line_when(opts.max_procs > 0, "max-procs = " + int.to_string(opts.max_procs))
     + line_when(opts.max_file_size > 0, "max-file-size = " + int.to_string(opts.max_file_size))
     + line_when(opts.max_memory_mb > 0, "max-memory-mb = " + int.to_string(opts.max_memory_mb))
-    + line_when(opts.profile != "", "profile = " + toml_quote(opts.profile))
+    + line_when(opts.profile != "", "profile = " + util.toml_quote(opts.profile))
     + (if proxy_on then ["", "[proxy]"] else [])
-    + line_when(list.len(opts.proxy_allow) > 0, "allow = " + toml_strings(opts.proxy_allow))
-    + line_when(list.len(opts.proxy_deny) > 0, "deny = " + toml_strings(opts.proxy_deny))
-    + line_when(opts.proxy_audit != "", "audit = " + toml_quote(opts.proxy_audit))
+    + line_when(list.len(opts.proxy_allow) > 0, "allow = " + util.toml_strings(opts.proxy_allow))
+    + line_when(list.len(opts.proxy_deny) > 0, "deny = " + util.toml_strings(opts.proxy_deny))
+    + line_when(opts.proxy_audit != "", "audit = " + util.toml_quote(opts.proxy_audit))
+    + proxy.toml_tables(opts.credentials)
     + line_when(has_env, "\n# -e values and secrets were not saved; add [env] and [secrets] yourself")
   string.join(lines, "\n") + "\n"
 }

@@ -7,7 +7,7 @@ import self.sandbox
 // chances for `porta --version` and the manifest porta generates to disagree
 // about what produced a file. `almide.toml` carries it too, because the build
 // needs it before this module exists; `src/mod_test.almd` asserts they match.
-fn version() -> String = "0.6.16"
+fn version() -> String = "0.6.17"
 
 // --- Int parsing ---
 
@@ -73,3 +73,11 @@ fn resolve_serve_caps(profile: String, manifest_caps: List[String]) -> sandbox.C
     }
   else if list.len(manifest_caps) > 0 then sandbox.from_manifest(manifest_caps)
   else sandbox.profile_ai_agent()
+
+// A TOML basic string: backslash and double-quote escaped so a path holding
+// either stays valid TOML rather than closing the string early.
+fn toml_quote(s: String) -> String =
+  "\"" + string.replace(string.replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+
+fn toml_strings(items: List[String]) -> String =
+  "[" + string.join(items |> list.map(toml_quote), ", ") + "]"

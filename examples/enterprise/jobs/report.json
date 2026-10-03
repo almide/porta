@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "module": "sample-job",
+  "args": ["report"],
+  "files": {"orders.csv": "item,quantity\nwidget,4\ngadget,1\nbolt,20\n"},
+  "directories": [{"name": "catalog", "access": "read"}]
+}

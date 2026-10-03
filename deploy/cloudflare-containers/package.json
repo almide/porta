@@ -1,0 +1,7 @@
+{
+  "name": "porta-eval-cloudflare",
+  "private": true,
+  "scripts": { "deploy": "wrangler deploy" },
+  "dependencies": { "@cloudflare/containers": "*" },
+  "devDependencies": { "wrangler": "^4.0.0", "typescript": "^5.0.0" }
+}

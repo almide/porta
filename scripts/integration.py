@@ -2,6 +2,8 @@
 """Offline process-level regressions; run against the newly built binary."""
 import json
 import http.server
+import os
+import ssl
 import threading
 import pathlib
 import platform
@@ -168,6 +170,92 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
         thread.join()
     print('PASS: checked HTTP tool does not follow redirects')
 
+    # Credentials handed in as placeholders (#37). The command sees
+    # porta-cred-TEST_KEY-<random>; the proxy opens its TLS to the bound host
+    # with the run's CA, puts the real value on, and verifies the real server
+    # (here a local one, through the test-only PORTA_TEST_UPSTREAM and
+    # PORTA_TEST_UPSTREAM_CA). The same placeholder on a path it is not bound
+    # to is refused before anything is sent; a host no credential names is
+    # tunnelled as before, its TLS never touched.
+    tls = root / 'credential-tls'
+    tls.mkdir()
+    def openssl(*args):
+        subprocess.run(['openssl', *args], cwd=tls, check=True, capture_output=True)
+    (tls / 'ca.ext').write_text('basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,digitalSignature\nsubjectKeyIdentifier=hash\n')
+    (tls / 'server.ext').write_text('subjectAltName=DNS:api.example.test,DNS:other.example.test\nextendedKeyUsage=serverAuth\n'
+                                  'subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n')
+    openssl('req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.csr', '-subj', '/CN=porta test upstream CA')
+    openssl('x509', '-req', '-in', 'ca.csr', '-signkey', 'ca.key', '-out', 'ca.pem', '-days', '2', '-extfile', 'ca.ext')
+    openssl('req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=api.example.test')
+    openssl('x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem',
+            '-days', '2', '-extfile', 'server.ext')
+    seen = []
+    class KeyedServer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.headers.get('Host', '').split(':')[0], self.path, self.headers.get('x-api-key')))
+            body = b'upstream ok'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *args):
+            """Silence the request log; these tests assert on their own output."""
+    upstream = http.server.ThreadingHTTPServer(('127.0.0.1', 0), KeyedServer)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(tls / 'server.pem', tls / 'server.key')
+    upstream.socket = context.wrap_socket(upstream.socket, server_side=True)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    probe = r"""import os, ssl, sys, urllib.error, urllib.request
+key = os.environ['TEST_KEY']
+print('placeholder', key.startswith('porta-cred-TEST_KEY-') and 'real-secret' not in key)
+def get(url, cafile=None):
+    context = ssl.create_default_context(cafile=cafile)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(), urllib.request.HTTPSHandler(context=context))
+    try:
+        with opener.open(urllib.request.Request(url, headers={'x-api-key': key}), timeout=10) as reply:
+            return reply.status
+    except urllib.error.HTTPError as error:
+        return error.code
+print('bound', get('https://api.example.test/v1/models'))
+print('unbound-path', get('https://api.example.test/admin'))
+print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.argv[1]))
+"""
+    audit = root / 'credential-audit.jsonl'
+    secret = 'real-secret-value-for-the-test'
+    try:
+        environment = {**os.environ, 'TEST_KEY': secret, 'PORTA_TEST_UPSTREAM_CA': str(tls / 'ca.pem'),
+                       'PORTA_TEST_UPSTREAM': f'api.example.test=127.0.0.1:{upstream.server_port},'
+                                              f'other.example.test=127.0.0.1:{upstream.server_port}'}
+        result = run('run', sys.executable, '--credential', 'TEST_KEY=api.example.test/v1', '--proxy-audit', str(audit),
+                     '--', '-c', probe, str(tls / 'ca.pem'), env=environment)
+        assert result.returncode == 0, result.stderr
+        lines = dict(line.split(' ', 1) for line in result.stdout.splitlines())
+        assert lines == {'placeholder': 'True', 'bound': '200', 'unbound-path': '403', 'unbound-host': '200'}, (result.stdout, result.stderr)
+        # The bound request reached the server with the real value; the refused
+        # one never reached it; the tunnelled one carried the placeholder.
+        assert ('api.example.test', '/v1/models', secret) in seen, seen
+        assert not any(path == '/admin' for _, path, _ in seen), seen
+        assert any(host == 'other.example.test' and key.startswith('porta-cred-TEST_KEY-') for host, _, key in seen), seen
+        trail = audit.read_text()
+        assert '"substitute"' in trail and 'credential TEST_KEY put on for /v1/models' in trail, trail
+        assert 'credential TEST_KEY is not bound to api.example.test/admin' in trail, trail
+        assert secret not in trail and secret not in result.stderr and secret not in result.stdout
+        # The run's CA and trust bundle go when the run does.
+        assert not list(pathlib.Path('/tmp').glob('porta-credentials-*')) or all(
+            p.stat().st_mtime < time.time() - 60 for p in pathlib.Path('/tmp').glob('porta-credentials-*'))
+        result = run('run', '/bin/sh', '--credential', 'PORTA_UNSET_FOR_TEST=api.example.test', '--', '-c', 'exit 0',
+                     env={k: v for k, v in os.environ.items() if k != 'PORTA_UNSET_FOR_TEST'})
+        assert result.returncode != 0 and 'PORTA_UNSET_FOR_TEST is not set' in result.stderr, result
+        result = run('run', '/bin/sh', '--credential', 'TEST_KEY=api.example.test:8443', '--', '-c', 'exit 0', env=environment)
+        assert result.returncode != 0 and 'port 443 only' in result.stderr, result
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        upstream_thread.join()
+    print('PASS: a credential is a placeholder inside, put on for its bound host and path only; '
+          'refused elsewhere and recorded without its value; other hosts tunnelled untouched')
+
     # A directory the run is never granted. It has to be somewhere an ordinary
     # user can create — porta refuses to run as root, so /opt is out — and
     # outside both the always-writable roots and the strict read set, or the
@@ -218,6 +306,15 @@ assert denied(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect(
     assert result.returncode != 0 and 'must-not-execute' not in result.stdout, result
     assert '--allow-net' in result.stderr, result.stderr
     print('PASS: the host environment stays outside unless named; --allow-bind needs --allow-net')
+
+    # The temporary directory is the one the sandbox grants, and the child is
+    # told so: a program that asks the OS instead (Rust's temp_dir on macOS)
+    # would reach the per-user directory porta closes (#38). -e overrides it.
+    result = run('run', '/bin/sh', '--', '-c', 'echo "tmp=$TMPDIR"; python3 -c "import tempfile; tempfile.NamedTemporaryFile()" && echo made', env={**os.environ, 'TMPDIR': '/var/folders/x/T/'})
+    assert result.returncode == 0 and result.stdout.split() == ['tmp=/tmp', 'made'], result
+    result = run('run', '/bin/sh', '-e', 'TMPDIR=/tmp/own', '--', '-c', 'echo "$TMPDIR"')
+    assert result.returncode == 0 and result.stdout.strip() == '/tmp/own', result
+    print('PASS: the child is told its temporary directory is /tmp, and -e overrides it')
 
     # What a shell sees. The command's own exit code passes through in every
     # mode; a run porta refused exits with porta's own code, so a script can

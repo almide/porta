@@ -30,7 +30,7 @@ does not show you where.
 | **Write** | denied outside `-v` mounts, `/tmp`, `/dev` | denied outside `-v` mounts, `/tmp`, `/dev` |
 | **Inside a writable mount** | the existing repository's `.git/hooks` and `.git/config`, and the names the preset protects (shell rc files, `.gitconfig`, `.mcp.json`, `.envrc`, `.claude/commands`, `.vscode`, `porta.toml`, …) stay unwritable; the mount root and those paths cannot be renamed away | same, each bind-mounted read-only onto itself in the command's mount namespace; where the host refuses one, not protected (the run says so) |
 | **Read, default** | what the preset closes denied — by default credential stores: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.netrc`, Keychains, browser profiles, …; everything else readable | same, each covered by an empty mount in the command's mount namespace; where the host refuses one, Landlock grants reads everywhere else, and a closed path inside a grant (`-v ~`, `/tmp`) refuses the run |
-| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass`; and `SSL_CERT_FILE=/etc/ssl/cert.pem`, since the Keychain a tool would list its roots from is closed | same, without `SSL_CERT_FILE`; under `--allow-net`, `RES_OPTIONS=use-vc` |
+| **Environment** | empty, plus `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `COLORTERM` `LANG` `LANGUAGE` `LC_*` `TZ`, `-e` and `--env-pass`; `TMPDIR=/tmp`, the temporary directory the run is granted (a program without it asks the OS and gets the closed per-user `/var/folders/…/T`); and `SSL_CERT_FILE=/etc/ssl/cert.pem`, since the Keychain a tool would list its roots from is closed | same, with `TMPDIR=/tmp` and without `SSL_CERT_FILE`; under `--allow-net`, `RES_OPTIONS=use-vc` |
 | **Other processes** | their arguments and environment unreadable (`procargs`, `proc_pidinfo`); signals to them not restricted | invisible: the command runs in PID, mount and user namespaces of its own with a fresh `/proc`, where the host allows unprivileged user namespaces (otherwise porta says so and only `strict` closes `/proc`); signals and abstract sockets scoped to the sandbox on Landlock ABI 6 |
 | **Host facilities** | Keychain, `open(1)`/Launch Services, mounting, disk and packet devices, Apple Events, network-share agents closed | `ptrace`, `process_vm_*`, `pidfd_getfd`, `mount*`, `unshare`/`setns`/`clone(CLONE_NEW*)`, `bpf`, `perf_event_open`, `userfaultfd`, `keyctl`, `io_uring`, `clone3`, `execveat(AT_EMPTY_PATH)`, kernel modules, `TIOCSTI` refused by seccomp in every mode |
 | **Read, `--read-policy strict`** | your mounts plus `/usr`, `/System`, `/bin`, `/sbin`, `/etc`, `/tmp`, `/dev` | your mounts plus `/usr`, `/lib`, `/bin`, `/sbin`, `/tmp`, `/dev`, and under `/etc` only the files a command needs to start (loader cache, resolver, trust store, `passwd`, `localtime`…) — never `shadow`, `sudoers` or the host keys, and not the listing |
@@ -59,6 +59,12 @@ Linux uses Landlock unprivileged, without namespaces and without an external
 runtime. A rule the running kernel cannot express refuses the run rather than
 widening it: partial enforcement is never silently accepted.
 
+One place a grant does not hold is Docker Desktop's shared folders: a macOS
+directory bind-mounted into a container is a `fakeowner` filesystem, and under
+Landlock a command there can create a file but not write to it. porta cannot
+change that, so it says so before the run when a writable `-v` lies on one; give
+the command a Docker volume or a tmpfs to write to, and copy out afterwards.
+
 ## Host-filtered HTTPS
 
 ```bash
@@ -80,8 +86,50 @@ allow-list. An allowed name that resolves to loopback, a link-local or cloud
 metadata address, or a multicast group is refused: a hostname on the list is a
 promise about a public service, not a route to this machine. Private ranges
 stay reachable. Every decision is written and synced to the audit file before
-the connection proceeds. Deny lists are weaker than explicit allow lists, and
-this is not a credential broker.
+the connection proceeds. Deny lists are weaker than explicit allow lists.
+
+## Credentials as placeholders
+
+```bash
+porta run claude -v . --credential ANTHROPIC_API_KEY=api.anthropic.com
+```
+
+Or in `porta.toml`:
+
+```toml
+[[credentials]]
+name  = "ANTHROPIC_API_KEY"            # the variable the command sees
+from  = { env = "ANTHROPIC_API_KEY" }  # where porta reads the real value (default: the name)
+hosts = ["api.anthropic.com/v1"]       # host[:443][/path], *.wildcard allowed
+```
+
+The command's `ANTHROPIC_API_KEY` is `porta-cred-ANTHROPIC_API_KEY-<random>`,
+minted for this run. The real value stays in porta. A credential turns the
+proxy on (with no `--proxy-allow`, every host is reachable through it; with one,
+the bound hosts are added to it), and for a bound host porta terminates the
+command's TLS with a certificate from a CA made for this run, replaces the
+placeholder wherever it appears in the request line, query or headers
+(`Authorization: Bearer …`, `x-api-key: …` alike), and sends the request on
+over its own TLS connection, which verifies the real server against the
+webpki roots. The same placeholder in a request to a bound host on a path its
+credential is not bound to is refused with 403 before anything is sent. Every
+substitution and refusal goes to stderr and the audit file with the
+credential's name, never its value.
+
+The command is pointed at the run's CA with `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` (a bundle of the
+system's roots plus the CA, since those replace the trust store) and
+`NODE_EXTRA_CA_CERTS` (the CA alone, since Node adds it). The CA is valid for
+a week, lives in memory, and its certificate and the bundle are removed when
+the run ends. A client that ignores all of these (Go on macOS, which asks the
+Keychain) will not trust the intercepted connection, and fails closed.
+
+Only bound hosts are intercepted. Every other CONNECT is tunnelled as before,
+end to end and unread; a placeholder sent there is only a random string. Each
+intercepted connection carries one request (porta asks the server for
+`Connection: close`), and speaks HTTP/1.1 only; request bodies are passed on,
+not inspected. Values come from porta's environment for now; a file, the
+Keychain or a command as the source are left for later.
 
 ## WASM sandbox
 

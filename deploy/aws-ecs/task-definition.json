@@ -1,0 +1,35 @@
+{
+  "family": "porta-eval",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": { "operatingSystemFamily": "LINUX", "cpuArchitecture": "ARM64" },
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/porta-eval-execution",
+  "volumes": [{ "name": "state" }],
+  "containerDefinitions": [
+    {
+      "name": "porta",
+      "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/porta-eval:<TAG>",
+      "essential": true,
+      "user": "10001",
+      "readonlyRootFilesystem": true,
+      "command": ["--policy", "/etc/porta/policy.toml", "--listen", "0.0.0.0:8080"],
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "secrets": [
+        { "name": "PORTA_JOB_TOKEN", "valueFrom": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:porta-eval-token" }
+      ],
+      "mountPoints": [{ "sourceVolume": "state", "containerPath": "/var/lib/porta" }],
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/porta-eval",
+          "awslogs-region": "<REGION>",
+          "awslogs-stream-prefix": "porta",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
