@@ -15,6 +15,32 @@ import urllib.request
 from job_integration import REPORT_ORDERS, TOKEN, check, workers_running
 
 
+def read_status_line(stream, timeout=10, max_bytes=4096):
+    """Read through CRLF across TCP fragments, within one time and size budget."""
+    deadline = time.monotonic() + timeout
+    previous_timeout = stream.gettimeout()
+    reply = bytearray()
+    try:
+        while len(reply) < max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError('timed out reading HTTP status line')
+            stream.settimeout(remaining)
+            try:
+                chunk = stream.recv(max_bytes - len(reply))
+            except socket.timeout as error:
+                raise AssertionError('timed out reading HTTP status line') from error
+            if not chunk:
+                raise AssertionError(f'EOF before complete HTTP status line: {bytes(reply)!r}')
+            reply.extend(chunk)
+            end = reply.find(b'\r\n')
+            if end != -1:
+                return reply[:end].decode()
+        raise AssertionError(f'HTTP status line exceeds {max_bytes} bytes')
+    finally:
+        stream.settimeout(previous_timeout)
+
+
 class Server:
     def __init__(self, env, token=TOKEN, flags=None):
         """`flags` replaces the default `--listen 127.0.0.1:<free port>`."""
@@ -168,7 +194,7 @@ def service(env):
         # Headers only: the refusal must come before the body is read.
         with socket.create_connection(('127.0.0.1', server.port), timeout=10) as raw:
             raw.sendall(f'POST /v1/runs HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: 70000\r\n\r\n'.encode())
-            reply = raw.recv(4096).decode()
+            reply = read_status_line(raw)
         check(reply.startswith('HTTP/1.1 413'), 'an oversized request is refused before it is read', reply)
 
         # The module changes on disk after the policy pinned it.
