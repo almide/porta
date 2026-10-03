@@ -64,7 +64,8 @@ host = "catalog"
 access = "read"                    # "read" or "read-write": the most a job may ask
 ```
 
-Load-time refusals (the service does not start): running as root; a module whose bytes do not
+Load-time refusals (the service does not start): running as root; a
+`records` or `workspaces` directory it cannot write; a module whose bytes do not
 match its `sha256`; a directory that does not exist, overlaps `records` or
 `workspaces`, or is writable and holds the policy file or a module; a default
 above its ceiling; `os_sandbox = "required"` on a host where `porta run`

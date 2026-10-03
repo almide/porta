@@ -82,6 +82,12 @@ def policy_refusals(env):
             env.policy.write_text(text)
             done = subprocess.run([env.porta, 'job-check', '--policy', str(env.policy)], capture_output=True, text=True, timeout=30)
             check(done.returncode != 0 and needle in done.stdout + done.stderr, f'a policy is refused at load: {needle}', done.stdout + done.stderr)
+        env.policy.write_text(original)
+        env.records.chmod(0o500)
+        done = subprocess.run([env.porta, 'job-check', '--policy', str(env.policy)], capture_output=True, text=True, timeout=30)
+        env.records.chmod(0o700)
+        check(done.returncode != 0 and 'is not writable' in done.stdout + done.stderr,
+              'a state directory the service cannot write is refused at load', done.stdout + done.stderr)
         env.policy.write_text(original.replace('[service]', '[service]\nos_sandbox = "off"'))
         code, record = env.run(env.job(args=['report'], files={'orders.csv': REPORT_ORDERS}, directories=[{'name': 'catalog', 'access': 'read'}]))
         check(code == 0 and record['isolation']['os_sandbox'] is False, 'with os_sandbox off a job runs on the WASM boundary alone', record['isolation'])

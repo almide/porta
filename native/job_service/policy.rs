@@ -256,17 +256,23 @@ fn complete(file: &LimitsFile, ceilings: Option<Limits>, section: &str) -> Resul
     })
 }
 
-/// A state directory is created owner-only when missing and named by the
-/// path the kernel resolves, never by a symlink to it.
+/// A state directory is created owner-only when missing, must be writable,
+/// and is named by the path the kernel resolves, never by a symlink to it.
 fn state_dir(base: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
     let path = base.join(value);
-    std::fs::create_dir_all(&path).map_err(|e| format!("{field}: create {}: {e}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+    // Owner-only when porta creates it; an existing directory keeps the
+    // permissions the operator gave it.
+    if !path.exists() {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&path).map_err(|e| format!("{field}: create {}: {e}", path.display()))?;
     }
-    std::fs::canonicalize(&path).map_err(|e| format!("{field}: resolve {}: {e}", path.display()))
+    let resolved = std::fs::canonicalize(&path).map_err(|e| format!("{field}: resolve {}: {e}", path.display()))?;
+    // Refuse now, not on every job: a state directory the service cannot
+    // write (a read-only root filesystem without a volume, say) runs nothing.
+    let probe = resolved.join(".porta-write-check");
+    std::fs::write(&probe, b"").and_then(|_| std::fs::remove_file(&probe))
+        .map_err(|e| format!("{field}: {} is not writable: {e}", resolved.display()))?;
+    Ok(resolved)
 }
 
 pub(super) fn valid_name(name: &str) -> bool {

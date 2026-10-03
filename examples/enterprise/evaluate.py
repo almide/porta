@@ -28,7 +28,7 @@ def job(args, **extra):
 
 SCENARIO = [
     ('granted work succeeds', job(['report'], files={'orders.csv': ORDERS}, directories=CATALOG),
-     lambda r: r['outcome'] == 'succeeded' and 'total 2500 cents' in r['stdout'].get('text', '')),
+     lambda r: r['outcome'] == 'succeeded' and 'total 2500 cents' in r.get('stdout', {}).get('text', '')),
     ('asking for write access the policy does not grant is refused', job(['report'], directories=[{'name': 'catalog', 'access': 'read-write'}]),
      lambda r: r['outcome'] == 'refused' and r['stop_reason'] == 'access_exceeds_grant'),
     ('asking for a directory the policy does not list is refused', job(['report'], directories=[{'name': 'home', 'access': 'read'}]),
@@ -36,7 +36,7 @@ SCENARIO = [
     ('asking past a limit ceiling is refused', job(['spin'], limits={'timeout_ms': 3600000}),
      lambda r: r['outcome'] == 'refused' and r['stop_reason'] == 'limit_exceeds_ceiling'),
     ('ungranted reads and writes are denied inside the sandbox', job(['probe'], directories=CATALOG),
-     lambda r: r['outcome'] == 'succeeded' and r['stdout'].get('text', '').count(': denied') == 6),
+     lambda r: r['outcome'] == 'succeeded' and r.get('stdout', {}).get('text', '').count(': denied') == 6),
     ('an infinite loop stops at its deadline', job(['spin'], limits={'timeout_ms': 2000, 'fuel': 100000000000}),
      lambda r: r['stop_reason'] == 'timeout'),
     ('an infinite loop stops when its fuel runs out', job(['spin'], limits={'fuel': 50000000}),
@@ -44,7 +44,7 @@ SCENARIO = [
     ('unbounded allocation stops at the memory ceiling', job(['grow'], limits={'memory_mib': 16}),
      lambda r: r['stop_reason'] == 'memory_limit'),
     ('unbounded output stops at its cap', job(['flood'], limits={'max_output_bytes': 4096}),
-     lambda r: r['stdout']['capped'] and r['outcome'] == 'stopped'),
+     lambda r: r.get('stdout', {}).get('capped') and r['outcome'] == 'stopped'),
 ]
 
 
