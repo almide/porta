@@ -12,7 +12,10 @@ machine), **template** (a deployment file exists and has never been applied),
 | Linux 6.12 (Docker Desktop 29.6, linuxkit), arm64, `rust:1-trixie`, unprivileged user | `docker build --target test` | passed | — | applied (Landlock + seccomp; user namespaces refused by Docker's default profile, which porta reports and proceeds without) |
 | Same kernel, `porta-eval` runtime image (`debian:trixie-slim`), `--read-only` root, non-root uid 10001 | `docker build` | — | passed with `policy.toml` and with `policy-wasm-only.toml` | applied |
 
-Also checked in the container: `docker stop` during a run → the run ends as
+Also checked: a fresh `git clone` of the commit, `docker build --no-cache`
+(3 minutes on this machine) and the README's run steps verbatim — all 11
+`evaluate.py` checks passed. In the container: either policy refuses to start
+as root; `docker stop` during a run → the run ends as
 `service_shutdown`; `docker kill` during a run → after `docker start` the run
 is `interrupted`, its workspace removed, nothing re-run; records persist on
 the volume across restarts; without `PORTA_JOB_TOKEN` the image refuses to

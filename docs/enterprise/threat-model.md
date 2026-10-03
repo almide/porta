@@ -64,7 +64,7 @@ did.
 | T15 | Persist state into the next job | workspaces are removed after every run, including stopped ones; records are outside every mount | `workspace_removed`; tested |
 | T16 | Replace the module after it was approved | SHA-256 pinned in the policy, checked at load and by every worker on the bytes it compiles | `module_changed`; tested |
 | T17 | Make the record lie | the record is written by the supervisor, not the guest; the guest controls only its own output and trap text, which are bounded and labelled as such | design; partially tested |
-| T18 | Escalate through the policy | a writable grant may not contain the policy or a module; state directories may not overlap a grant | load-time refusal; not yet a test |
+| T18 | Escalate through the policy | a writable grant may not contain the policy or a module; state directories may not overlap a grant | load-time refusals (module in a writable grant, grant overlapping state); tested |
 | T19 | Unauthenticated API use | bearer token, constant-time compare; no-token mode only on loopback | tested |
 | T20 | Oversized or slow requests | header ≤ 16 KiB, body ≤ `max_request_bytes`, 30 s socket timeouts, ≤ 64 concurrent connections | oversized body → 413; tested |
 
@@ -72,7 +72,10 @@ did.
 
 - **A wasmtime or Cranelift bug** that lets a guest escape linear memory. The
   OS sandbox narrows what such an escape reaches; with `os_sandbox = "off"` it
-  reaches whatever the service user can.
+  reaches whatever the service user can. Either way, such an escape runs as
+  the worker and can write the worker's `result.json`, so the stop reason and
+  usage in that run's record would be the attacker's. The supervisor's own
+  facts — timestamps, kills it performed, output digests — stay its own.
 - **Kernel bugs.** Same kernel as the host; no VM.
 - **Side channels** (timing, Spectre-class) between jobs on one host.
 - **Total disk use** by a job: `RLIMIT_FSIZE` bounds each file, not their
