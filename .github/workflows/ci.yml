@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Job HTTP harness tests
+        run: python3 -m unittest discover -s scripts -p 'test_job_server_checks.py'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
