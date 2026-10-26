@@ -72,7 +72,7 @@ effect fn porta_up(extra_args: List[String]) -> Result[Int, String] = {
 effect fn porta_init_recipe(name: String, recipe: String) -> Result[Unit, String] =
   if fs.exists("porta.toml") then { println("porta.toml already exists."); ok(()) }
   else {
-    fs.write("porta.toml", recipe)!
+    fs.write_text("porta.toml", recipe)!
     println("Created porta.toml for ${name}; read it, then run:")
     println("  porta up")
     ok(())
@@ -86,7 +86,7 @@ effect fn porta_init(runtime_type: String, command: String) -> Result[Unit, Stri
   else {
     let content = if runtime_type == "native" then config.generate_native_toml(command)
       else config.generate_wasm_toml(command)
-    fs.write("porta.toml", content)!
+    fs.write_text("porta.toml", content)!
     println("Created porta.toml")
     println("")
     println("Edit porta.toml to configure your sandbox, then run:")

@@ -95,7 +95,7 @@ error[E0423]: expected function, found macro `eprintln`
 ## 0.63.0 WASM error propagation observation (2026-09-19)
 
 During the real WASM agent/tool integration, the demo's `write_file` branch using
-`fs.write(path, content)!` reported `{"ok":"wrote 19 bytes to result.txt"}` even
+`fs.write_text(path, content)!` reported `{"ok":"wrote 19 bytes to result.txt"}` even
 though a read-only WASI preopen correctly prevented creation of the file.
 Replacing that call with an explicit `match fs.write(...) { ok(_) => ..., err(e)
 => ... }` produced the expected error result. `read_file` now uses the same

@@ -8,22 +8,22 @@ import fs
 
 effect fn main() -> Result[Unit, String] = {
   // Read 4-byte length prefix (little-endian)
-  let b0 = io.read_byte()
-  let b1 = io.read_byte()
-  let b2 = io.read_byte()
-  let b3 = io.read_byte()
+  let b0 = io.read(io.stdin()!, 1)!
+  let b1 = io.read(io.stdin()!, 1)!
+  let b2 = io.read(io.stdin()!, 1)!
+  let b3 = io.read(io.stdin()!, 1)!
   let len = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
 
   // Read JSON payload
-  let payload = io.read_n_bytes(len)
-  let cmd = json.parse(string.from_bytes(payload))!
-  let tool = json.get_string(cmd, "tool") ?? ""
-  let args = value.field(cmd, "arguments") ?? value.object([])
+  let payload = bytes.to_list(io.read(io.stdin()!, len)!)
+  let cmd = json.parse(bytes.to_string_lossy(bytes.from_list(payload)))!
+  let tool = value.get_string(cmd, "tool") ?? ""
+  let args = value.get(cmd, "arguments") ?? value.object([])
 
   let result = dispatch(tool, args)
   match result {
     ok(v) => println(json.stringify(v)),
-    err(e) => println(json.stringify(value.object([("err", value.str(e))]))),
+    err(e) => println(json.stringify(value.object([("err", value.string(e))]))),
   }
   ok(())
 }
@@ -31,40 +31,40 @@ effect fn main() -> Result[Unit, String] = {
 effect fn dispatch(tool: String, args: Value) -> Result[Value, String] =
   match tool {
     "hello" => {
-      let name = json.get_string(args, "name") ?? "world"
-      ok(value.object([("ok", value.str("Hello, ${name}!"))]))
+      let name = value.get_string(args, "name") ?? "world"
+      ok(value.object([("ok", value.string("Hello, ${name}!"))]))
     },
     "add" => {
-      let a = json.get_int(args, "a") ?? 0
-      let b = json.get_int(args, "b") ?? 0
-      ok(value.object([("ok", value.str(int.to_string(a + b)))]))
+      let a = value.get_int(args, "a") ?? 0
+      let b = value.get_int(args, "b") ?? 0
+      ok(value.object([("ok", value.string(int.to_string(a + b)))]))
     },
     "read_file" => {
-      let path = json.get_string(args, "path") ?? ""
-      if path == "" then ok(value.object([("err", value.str("path is required"))]))
+      let path = value.get_string(args, "path") ?? ""
+      if path == "" then ok(value.object([("err", value.string("path is required"))]))
       else {
         match fs.read_text(path) {
-          ok(content) => ok(value.object([("ok", value.str(content))])),
-          err(error) => ok(value.object([("err", value.str(error))])),
+          ok(content) => ok(value.object([("ok", value.string(content))])),
+          err(error) => ok(value.object([("err", value.string(error))])),
         }
       }
     },
     "list_files" => {
-      let dir = json.get_string(args, "directory") ?? "."
+      let dir = value.get_string(args, "directory") ?? "."
       let files = fs.list_dir(dir)!
-      let file_list = files |> list.map(value.str) |> value.array
+      let file_list = files |> list.map(value.string) |> value.array
       ok(value.object([("ok", file_list)]))
     },
     "write_file" => {
-      let path = json.get_string(args, "path") ?? ""
-      let content = json.get_string(args, "content") ?? ""
-      if path == "" then ok(value.object([("err", value.str("path is required"))]))
+      let path = value.get_string(args, "path") ?? ""
+      let content = value.get_string(args, "content") ?? ""
+      if path == "" then ok(value.object([("err", value.string("path is required"))]))
       else {
-        match fs.write(path, content) {
-          ok(_) => ok(value.object([("ok", value.str("wrote ${int.to_string(string.len(content))} bytes to ${path}"))])),
-          err(error) => ok(value.object([("err", value.str(error))])),
+        match fs.write_text(path, content) {
+          ok(_) => ok(value.object([("ok", value.string("wrote ${int.to_string(string.len(content))} bytes to ${path}"))])),
+          err(error) => ok(value.object([("err", value.string(error))])),
         }
       }
     },
-    _ => ok(value.object([("err", value.str("unknown tool: ${tool}"))])),
+    _ => ok(value.object([("err", value.string("unknown tool: ${tool}"))])),
   }

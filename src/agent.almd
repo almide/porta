@@ -32,17 +32,17 @@ effect fn drive(handle: Int, pause_after: Int) -> Result[Unit, String] = {
   var steps = 0
   while not done and (pause_after == 0 or steps < pause_after) {
     let event = json.parse(step(handle))!
-    let error = json.get_string(event, "error") ?? ""
+    let error = value.get_string(event, "error") ?? ""
     if error != "" then err(error)! else ()
-    done = json.get_bool(event, "done") ?? false
+    done = value.get_bool(event, "done") ?? false
     steps = steps + 1
-    let metrics = value.field(event, "metrics") ?? value.object([])
+    let metrics = value.get(event, "metrics") ?? value.object([])
     eprintln("[porta agent] " + json.stringify(metrics))
-    if done then println(json.get_string(event, "output") ?? "") else ()
+    if done then println(value.get_string(event, "output") ?? "") else ()
   }
   if not done then {
     let saved = json.parse(checkpoint(handle))!
-    let error = json.get_string(saved, "error") ?? ""
+    let error = value.get_string(saved, "error") ?? ""
     if error != "" then err(error)! else ()
     eprintln("[porta agent] checkpoint saved; use agent-resume to continue")
   } else ()
@@ -51,10 +51,10 @@ effect fn drive(handle: Int, pause_after: Int) -> Result[Unit, String] = {
 
 effect fn execute(opened_json: String, pause_after: Int) -> Result[Unit, String] = {
   let opened = json.parse(opened_json)!
-  let error = json.get_string(opened, "error") ?? ""
+  let error = value.get_string(opened, "error") ?? ""
   if error != "" then err(error)
   else {
-    let handle = json.get_int(opened, "handle") ?? -1
+    let handle = value.get_int(opened, "handle") ?? -1
     match drive(handle, pause_after) {
       ok(_) => { let _ = close(handle); ok(()) },
       err(message) => { let _ = close(handle); err(message) },
@@ -74,7 +74,7 @@ effect fn journal_info(args: List[String]) -> Result[Unit, String] = {
   else {
     let report = inspect_journal(path)
     let parsed = json.parse(report)!
-    let error = json.get_string(parsed, "error") ?? ""
+    let error = value.get_string(parsed, "error") ?? ""
     if error != "" then err(error)
     else { println(report); ok(()) }
   }
@@ -90,7 +90,7 @@ effect fn inspect_config(args: List[String]) -> Result[Unit, String] = {
   else {
     let report = check_config(path)
     let parsed = json.parse(report)!
-    let error = json.get_string(parsed, "error") ?? ""
+    let error = value.get_string(parsed, "error") ?? ""
     if error != "" then err(error)
     else { println(report); ok(()) }
   }
@@ -134,7 +134,7 @@ effect fn command(args: List[String], mode: String) -> Result[Unit, String] = {
         index = list.len(args)
       }
     }
-    let task = string.join(task_args, " ")
+    let task = list.join(task_args, " ")
     if pause_after > 0 and journal == "" then err("--pause-after requires --record")
     else if journal == "" then execute(open(path, task), 0)
     else execute(open_record(path, task, journal), pause_after)

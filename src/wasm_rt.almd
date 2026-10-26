@@ -3,6 +3,7 @@ import value
 
 import process
 import json
+import env
 
 // --- Wasmtime (must stay in Rust) ---
 
@@ -121,8 +122,8 @@ effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result
   let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
   let result = process.exec(cmd, args)
   match result {
-    ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(value.str(stdout)) + ",\"stderr\":\"\"}"),
-    err(e) => ok("{\"error\":" + json.stringify(value.str(e)) + "}"),
+    ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(value.string(stdout)) + ",\"stderr\":\"\"}"),
+    err(e) => ok("{\"error\":" + json.stringify(value.string(e)) + "}"),
   }
 }
 
@@ -140,13 +141,13 @@ fn native_sandbox_profile(dirs_json: String, net_json: String, read_policy: Stri
 
 fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String], read_policy: String) -> String =
   native_sandbox_profile(
-    json.stringify(value.array(allowed_dirs |> list.map(value.str))),
-    json.stringify(value.array(allowed_net |> list.map(value.str))),
+    json.stringify(value.array(allowed_dirs |> list.map(value.string))),
+    json.stringify(value.array(allowed_net |> list.map(value.string))),
     read_policy)
 
 // --- Process management (pure Almide) ---
 
-fn wt_home_dir() -> String = process.env("HOME") ?? "/tmp"
+fn wt_home_dir() -> String = env.get("HOME") ?? "/tmp"
 
 fn wt_getpid() -> Int = process.pid()
 
@@ -155,7 +156,7 @@ effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
 
 effect fn wt_spawn(cmd: String, args_json: String) -> Result[Int, String] = {
   let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
-  match process.spawn(cmd, args) { ok(pid) => ok(pid), err(_) => ok(-1) }
+  match process.start(process.ProcessCommand { cmd: cmd, args: args }) { ok(c) => ok(process.child_pid(c)!), err(_) => ok(-1) }
 }
 
 @extern(rs, "wasmtime_bridge", "wt_parse_toml")

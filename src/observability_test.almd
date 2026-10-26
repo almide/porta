@@ -46,7 +46,7 @@ test "format_summary: includes restarts when non-zero" {
   let m2 = {...m, steps: 10, memory_pages: 1, restarts: 2}
   let s = observability.format_summary(m2)
   // Should contain "restarts: 2"
-  let bytes = string.to_bytes(s)
+  let bytes = bytes.to_list(bytes.from_string(s))
   assert(list.len(bytes) > 30)
 }
 
@@ -54,7 +54,7 @@ test "format_summary: includes tool_calls when non-zero" {
   let m = observability.empty_metrics()
   let m2 = {...m, steps: 10, memory_pages: 1, tool_calls: 5, total_tool_steps: 2500}
   let s = observability.format_summary(m2)
-  let bytes = string.to_bytes(s)
+  let bytes = bytes.to_list(bytes.from_string(s))
   assert(list.len(bytes) > 40)
 }
 

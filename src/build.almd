@@ -14,41 +14,41 @@ effect fn build_package(opts: cli.Options) -> Result[Unit, String] = {
   // Use native inspect
   let info_json = wasm_rt.wt_inspect(opts.path)
   let info = json.parse(info_json)!
-  let all_exports = json.get_array(info, "exports") ?? []
-  let all_imports = json.get_array(info, "imports") ?? []
+  let all_exports = value.get_array(info, "exports") ?? []
+  let all_imports = value.get_array(info, "imports") ?? []
 
   let export_tools = all_exports
-    |> list.filter((exp) => json.get_string(exp, "kind") ?? "" == "func")
+    |> list.filter((exp) => value.get_string(exp, "kind") ?? "" == "func")
     |> list.filter((exp) => {
-      let name = json.get_string(exp, "name") ?? ""
+      let name = value.get_string(exp, "name") ?? ""
       name != "_start" and name != "__alloc" and name != "memory"
     })
     |> list.map((exp) => {
-      let name = json.get_string(exp, "name") ?? ""
+      let name = value.get_string(exp, "name") ?? ""
       value.object([
-        ("name", value.str(name)),
-        ("description", value.str(name)),
-        ("inputSchema", value.object([("type", value.str("object"))])),
+        ("name", value.string(name)),
+        ("description", value.string(name)),
+        ("inputSchema", value.object([("type", value.string("object"))])),
       ])
     })
 
   let wasi_imports = all_imports
-    |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
-    |> list.map((imp) => value.str(json.get_string(imp, "name") ?? ""))
+    |> list.filter((imp) => value.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1")
+    |> list.map((imp) => value.string(value.get_string(imp, "name") ?? ""))
 
   let manifest_json = value.object([
-    ("schema_version", value.str("1.0")),
-    ("name", value.str(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
-    ("version", value.str(util.version())),
-    ("description", value.str("")),
-    ("entry", value.str("_start")),
+    ("schema_version", value.string("1.0")),
+    ("name", value.string(string.replace(string.replace(opts.path, ".wasm", ""), "/", "-"))),
+    ("version", value.string(util.version())),
+    ("description", value.string("")),
+    ("entry", value.string("_start")),
     ("capabilities", value.array([])),
     ("tools", value.array(export_tools)),
     ("wasi_imports", value.array(wasi_imports)),
   ])
 
   let content = json.stringify(manifest_json)
-  fs.write(output_path, content)!
+  fs.write_text(output_path, content)!
   println("Built ${output_path}")
   println("  Tools: ${int.to_string(list.len(export_tools))}")
   println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")

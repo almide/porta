@@ -12,7 +12,7 @@ type JsonRpcRequest = {
 
 fn make_response(id: Value, result: Value) -> String = {
   let resp = value.object([
-    ("jsonrpc", value.str("2.0")),
+    ("jsonrpc", value.string("2.0")),
     ("id", id),
     ("result", result),
   ])
@@ -21,11 +21,11 @@ fn make_response(id: Value, result: Value) -> String = {
 
 fn make_error_response(id: Value, code: Int, message: String) -> String = {
   let resp = value.object([
-    ("jsonrpc", value.str("2.0")),
+    ("jsonrpc", value.string("2.0")),
     ("id", id),
     ("error", value.object([
       ("code", value.int(code)),
-      ("message", value.str(message)),
+      ("message", value.string(message)),
     ])),
   ])
   json.stringify(resp)
@@ -39,15 +39,15 @@ effect fn write_message(msg: String) -> Result[Unit, String] = {
 }
 
 effect fn read_message() -> Result[Option[JsonRpcRequest], String] = {
-  let line = io.read_line()
+  let line = io.read_line() ?? ""
   if string.len(line) == 0 then ok(none)
   else parse_and_wrap(line)
 }
 
 effect fn parse_and_wrap(body: String) -> Result[Option[JsonRpcRequest], String] = {
   let parsed = json.parse(body)!
-  let id = value.field(parsed, "id") ?? value.null()
-  let method = json.get_string(parsed, "method") ?? ""
-  let params = value.field(parsed, "params") ?? value.object([])
+  let id = value.get(parsed, "id") ?? value.null()
+  let method = value.get_string(parsed, "method") ?? ""
+  let params = value.get(parsed, "params") ?? value.object([])
   ok(some({id: id, method: method, params: params}))
 }

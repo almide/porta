@@ -12,7 +12,7 @@ fn version() -> String = "0.6.17"
 // --- Int parsing ---
 
 fn parse_int(s: String) -> Int =
-  parse_int_acc(string.to_bytes(s), 0, 0)
+  parse_int_acc(bytes.to_list(bytes.from_string(s)), 0, 0)
 
 fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
   if idx >= list.len(bytes) then acc
@@ -25,15 +25,15 @@ fn parse_int_acc(bytes: List[Int], idx: Int, acc: Int) -> Int =
 // --- String splitting ---
 
 fn split_at_eq(s: String) -> Option[dispatch.EnvVar] =
-  find_eq_pos(string.to_bytes(s), 0)
+  find_eq_pos(bytes.to_list(bytes.from_string(s)), 0)
 
 fn find_eq_pos(bytes: List[Int], idx: Int) -> Option[dispatch.EnvVar] =
   if idx >= list.len(bytes) then none
   else {
     let b = list.get(bytes, idx) ?? 0
     if b == 61 then {
-      let key = string.from_bytes(list.take(bytes, idx))
-      let val = string.from_bytes(list.drop(bytes, idx + 1))
+      let key = bytes.to_string_lossy(bytes.from_list(list.take(bytes, idx)))
+      let val = bytes.to_string_lossy(bytes.from_list(list.drop(bytes, idx + 1)))
       some({key: key, val: val})
     }
     else find_eq_pos(bytes, idx + 1)
@@ -41,12 +41,12 @@ fn find_eq_pos(bytes: List[Int], idx: Int) -> Option[dispatch.EnvVar] =
 
 fn split_lines(bytes: List[Int], start: Int, idx: Int, acc: List[String]) -> List[String] =
   if idx >= list.len(bytes) then {
-    if idx > start then acc + [string.from_bytes(list.slice(bytes, start, idx))]
+    if idx > start then acc + [bytes.to_string_lossy(bytes.from_list(list.slice(bytes, start, idx)))]
     else acc
   }
   else {
     let b = list.get(bytes, idx) ?? 0
-    if b == 10 then split_lines(bytes, idx + 1, idx + 1, acc + [string.from_bytes(list.slice(bytes, start, idx))])
+    if b == 10 then split_lines(bytes, idx + 1, idx + 1, acc + [bytes.to_string_lossy(bytes.from_list(list.slice(bytes, start, idx)))])
     else split_lines(bytes, start, idx + 1, acc)
   }
 
@@ -80,4 +80,4 @@ fn toml_quote(s: String) -> String =
   "\"" + string.replace(string.replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
 
 fn toml_strings(items: List[String]) -> String =
-  "[" + string.join(items |> list.map(toml_quote), ", ") + "]"
+  "[" + list.join(items |> list.map(toml_quote), ", ") + "]"

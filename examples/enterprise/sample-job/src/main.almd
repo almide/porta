@@ -31,7 +31,7 @@ effect fn report() -> Result[Unit, String] = {
     lines = lines + 1
   }
   let summary = value.object([("orders", value.int(lines)), ("total_cents", value.int(total))])
-  fs.write("/output/report.json", json.stringify(summary))!
+  fs.write_text("/output/report.json", json.stringify(summary))!
   println("report: ${int.to_string(lines)} orders, total ${int.to_string(total)} cents")
   ok(())
 }
@@ -45,7 +45,7 @@ effect fn attempt(name: String, outcome: Result[String, String]) -> Bool = {
 }
 
 effect fn write_attempt(name: String, path: String) -> Bool = {
-  let allowed = match fs.write(path, "x") { ok(_) => true, err(_) => false }
+  let allowed = match fs.write_text(path, "x") { ok(_) => true, err(_) => false }
   println("${name}: ${if allowed then "ALLOWED" else "denied"}")
   allowed
 }

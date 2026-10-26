@@ -1,7 +1,6 @@
 import value
 // Instance lifecycle: daemon management, ps, stop, kill, logs, rm
 
-import process
 import fs
 import json
 import self.cli
@@ -33,12 +32,12 @@ effect fn register_instance(id: String, wasm_path: String, pid: Int) -> Result[U
   let dir = instance_dir(id)
   fs.mkdir_p(dir)!
   let info = json.stringify(value.object([
-    ("id", value.str(id)),
-    ("wasm", value.str(wasm_path)),
+    ("id", value.string(id)),
+    ("wasm", value.string(wasm_path)),
     ("pid", value.int(pid)),
-    ("status", value.str("running")),
+    ("status", value.string("running")),
   ]))
-  fs.write(dir + "/instance.json", info)!
+  fs.write_text(dir + "/instance.json", info)!
   ok(())
 }
 
@@ -65,9 +64,11 @@ fn serialize_opts(opts: cli.Options) -> List[String] = {
 effect fn run_detached(opts: cli.Options) -> Result[Unit, String] = {
   let id = generate_id()
   ensure_porta_dir()!
-  let self_path = list.get(process.args(), 0) ?? "porta"
+  // argv[0] is no longer readable (epoch 15: env.args() leaves it out), so the
+  // daemon is re-spawned through PATH.
+  let self_path = "porta"
   let child_args = ["run", "--_daemon", id, opts.path] + serialize_opts(opts)
-  let args_json = json.stringify(value.array(child_args |> list.map(value.str)))
+  let args_json = json.stringify(value.array(child_args |> list.map(value.string)))
   let pid = wasm_rt.wt_spawn(self_path, args_json)!
   if pid < 0 then err("failed to spawn daemon")
   else {
@@ -85,17 +86,17 @@ effect fn run_as_daemon(opts: cli.Options) -> Result[Unit, String] = {
   let config = cli.build_config(opts.path, opts, caps, env)
   let result = dispatch.run_instance(config)!
   // Write logs
-  if string.len(result.stdout) > 0 then fs.write(dir + "/stdout.log", result.stdout)! else ()
-  if string.len(result.stderr) > 0 then fs.write(dir + "/stderr.log", result.stderr)! else ()
+  if string.len(result.stdout) > 0 then fs.write_text(dir + "/stdout.log", result.stdout)! else ()
+  if string.len(result.stderr) > 0 then fs.write_text(dir + "/stderr.log", result.stderr)! else ()
   // Update status
   let info = json.stringify(value.object([
-    ("id", value.str(id)),
-    ("wasm", value.str(opts.path)),
+    ("id", value.string(id)),
+    ("wasm", value.string(opts.path)),
     ("pid", value.int(wasm_rt.wt_getpid())),
-    ("status", value.str("exited")),
+    ("status", value.string("exited")),
     ("exit_code", value.int(result.exit_code)),
   ]))
-  fs.write(dir + "/instance.json", info)!
+  fs.write_text(dir + "/instance.json", info)!
   ok(())
 }
 
@@ -110,9 +111,9 @@ effect fn list_instances() -> Result[Unit, String] = {
     if fs.exists(info_path) then {
       let content = fs.read_text(info_path)!
       let v = json.parse(content)!
-      let id = json.get_string(v, "id") ?? d
-      let status = json.get_string(v, "status") ?? "unknown"
-      let wasm = json.get_string(v, "wasm") ?? ""
+      let id = value.get_string(v, "id") ?? d
+      let status = value.get_string(v, "status") ?? "unknown"
+      let wasm = value.get_string(v, "wasm") ?? ""
       println(id + "\t" + status + "\t" + wasm)
     }
     else ()
@@ -129,7 +130,7 @@ effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
   else {
     let content = fs.read_text(info_path)!
     let v = json.parse(content)!
-    let pid = json.get_int(v, "pid") ?? 0
+    let pid = value.get_int(v, "pid") ?? 0
     if pid == 0 then { println("no PID for instance: " + id); ok(()) }
     else {
       let result = wasm_rt.wt_kill(pid, signal)!
@@ -137,12 +138,12 @@ effect fn signal_instance(id: String, signal: Int) -> Result[Unit, String] = {
         println(if signal == 9 then "killed: " + id else "stopped: " + id)
         // Update status
         let updated = json.stringify(value.object([
-          ("id", value.str(id)),
-          ("wasm", value.str(json.get_string(v, "wasm") ?? "")),
+          ("id", value.string(id)),
+          ("wasm", value.string(value.get_string(v, "wasm") ?? "")),
           ("pid", value.int(pid)),
-          ("status", value.str("stopped")),
+          ("status", value.string("stopped")),
         ]))
-        fs.write(info_path, updated)!
+        fs.write_text(info_path, updated)!
         ok(())
       }
       else { println("failed to signal process " + int.to_string(pid)); ok(()) }

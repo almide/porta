@@ -9,7 +9,7 @@ test "wt_http_request: invalid URL" {
   let parsed = json.parse(resp)
   match parsed {
     ok(v) => {
-      let error = json.get_string(v, "error") ?? ""
+      let error = value.get_string(v, "error") ?? ""
       assert(string.len(error) > 0)
     },
     err(_) => assert(false),
@@ -19,10 +19,10 @@ test "wt_http_request: invalid URL" {
 test "wt_http_request: unsupported method is valid JSON" {
   // Rejected before a request is sent, even when the method contains JSON
   // delimiters, control characters or Unicode.
-  let method = "BAD" + string.from_bytes([34, 92, 10, 13, 9, 0, 1, 8, 12, 31]) + "日"
+  let method = "BAD" + bytes.to_string_lossy(bytes.from_list([34, 92, 10, 13, 9, 0, 1, 8, 12, 31])) + "日"
   let resp = wasm_rt.wt_http_request(method, "http://127.0.0.1", "{}", "")!
   let parsed = json.parse(resp)!
-  assert_eq(json.get_string(parsed, "error") ?? "", "unsupported method: " + method)
+  assert_eq(value.get_string(parsed, "error") ?? "", "unsupported method: " + method)
 }
 
 // --- wt_exec_command ---
@@ -32,9 +32,9 @@ test "wt_exec_command: echo" {
   let parsed = json.parse(resp)
   match parsed {
     ok(v) => {
-      let exit_code = json.get_int(v, "exit_code") ?? -1
+      let exit_code = value.get_int(v, "exit_code") ?? -1
       assert_eq(exit_code, 0)
-      let stdout = json.get_string(v, "stdout") ?? ""
+      let stdout = value.get_string(v, "stdout") ?? ""
       assert(string.len(stdout) > 0)
     },
     err(_) => assert(false),
@@ -46,7 +46,7 @@ test "wt_exec_command: invalid command" {
   let parsed = json.parse(resp)
   match parsed {
     ok(v) => {
-      let error = json.get_string(v, "error") ?? ""
+      let error = value.get_string(v, "error") ?? ""
       assert(string.len(error) > 0)
     },
     err(_) => assert(false),
@@ -60,11 +60,11 @@ test "wt_inspect: demo agent or missing" {
   let parsed = json.parse(resp)
   match parsed {
     ok(v) => {
-      let error = json.get_string(v, "error") ?? ""
+      let error = value.get_string(v, "error") ?? ""
       if error != "" then assert(true) // file not found in CI — ok
       else {
-        let imports = json.get_array(v, "imports") ?? []
-        let exports = json.get_array(v, "exports") ?? []
+        let imports = value.get_array(v, "imports") ?? []
+        let exports = value.get_array(v, "exports") ?? []
         assert(list.len(imports) > 0)
         assert(list.len(exports) > 0)
       }
@@ -78,7 +78,7 @@ test "wt_inspect: invalid path" {
   let parsed = json.parse(resp)
   match parsed {
     ok(v) => {
-      let error = json.get_string(v, "error") ?? ""
+      let error = value.get_string(v, "error") ?? ""
       assert(string.len(error) > 0)
     },
     err(_) => assert(false),
@@ -244,9 +244,9 @@ test "the profile builder confines reads only for the strict policy" {
 
 test "TOML parser preserves nested tables and rejects malformed config" {
   let parsed = json.parse(wasm_rt.wt_parse_toml("[sandbox]\nmounts = []\n[proxy]\nallow = [\"api.example.com\"]"))!
-  let config = value.field(parsed, "value")!
+  let config = (value.as_object(parsed) |> result.flat_map((_) => option.to_result(value.get(parsed, "value"), "missing field 'value'")))!
   let empty: List[Value] = []
-  assert_eq(json.get_array(value.field(config, "sandbox")!, "mounts"), some(empty))
+  assert_eq(value.get_array((value.as_object(config) |> result.flat_map((_) => option.to_result(value.get(config, "sandbox"), "missing field 'sandbox'")))!, "mounts"), some(empty))
   let invalid = json.parse(wasm_rt.wt_parse_toml("[broken"))!
-  assert((json.get_string(invalid, "error") ?? "") != "")
+  assert((value.get_string(invalid, "error") ?? "") != "")
 }
