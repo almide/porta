@@ -156,7 +156,14 @@ effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
 
 effect fn wt_spawn(cmd: String, args_json: String) -> Result[Int, String] = {
   let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
-  match process.start(process.ProcessCommand { cmd: cmd, args: args }) { ok(c) => ok(process.child_pid(c)!), err(_) => ok(-1) }
+  // A process.start child is stopped when porta exits (C-437), so the daemon is
+  // detached through sh: nohup + `&`, and sh prints the background pid. The command
+  // and its arguments travel as sh's positional parameters, so nothing is re-quoted.
+  let script = "nohup \"$0\" \"$@\" >/dev/null 2>&1 & printf %s $!"
+  match process.exec("sh", ["-c", script, cmd] + args) {
+    ok(out) => ok(int.parse(string.trim(out)) ?? -1),
+    err(_) => ok(-1),
+  }
 }
 
 @extern(rs, "wasmtime_bridge", "wt_parse_toml")
