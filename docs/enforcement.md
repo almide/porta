@@ -140,7 +140,7 @@ capability set before execution.
 |------------|----------|
 | `io` | stdin/stdout/stderr |
 | `fs` | File read (path_open, stat, readdir) |
-| `fs.write_text` | File write (create, rename, delete) |
+| `fs.write` | File write (create, rename, delete) |
 | `process` | Process lifecycle, args |
 | `env` | Environment variables |
 | `clock` | Time/clock |
@@ -156,7 +156,7 @@ that targets `wasi:cli/command`) runs under the same check. Its imports are
 interfaces rather than functions, and each maps to the capabilities above:
 `wasi:cli/std*` and `wasi:io/*` to `io`, `wasi:cli/exit` to `process`,
 `wasi:cli/environment` to `process` and `env`, `wasi:clocks/*` to `clock`,
-`wasi:random/*` to `random`, `wasi:filesystem/*` to `fs` and `fs.write_text` (one
+`wasi:random/*` to `random`, `wasi:filesystem/*` to `fs` and `fs.write` (one
 interface carries both), `wasi:sockets/*` and `wasi:http/*` to `net`. An
 interface not in that list is refused. Fuel, memory and preopens apply as to a
 module; the entry is `wasi:cli/run`, so `--entry` does not apply.
@@ -165,7 +165,7 @@ A WASI 0.3 component (Almide: `ALMIDE_COMPONENT_P3=1` with `--component`) is
 recognised by its `@0.3` imports and run through the async linker and the
 store's concurrent executor, under the same check and budgets. Its world
 imports the filesystem interfaces whether or not the program touches a file,
-so it needs `fs` and `fs.write_text` — the `full` profile, or a manifest that
+so it needs `fs` and `fs.write` — the `full` profile, or a manifest that
 grants them. wasmtime's 0.3 support is marked experimental upstream, and
 porta says the same of it.
 Direct `porta.exec_command` / `porta.http_request` WASM imports are rejected;
