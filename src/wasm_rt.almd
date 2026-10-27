@@ -116,19 +116,6 @@ effect fn wt_http_request(method: String, url: String, headers_json: String, bod
 @extern(rs, "wasmtime_bridge", "wt_is_host_allowed")
 fn wt_is_host_allowed(url: String, allowed_json: String) -> Bool
 
-// --- exec (pure Almide) ---
-
-effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result[String, String] = {
-  let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
-  // Through sh with the command as $0, so the only command porta names is the literal
-  // `sh` its [permissions] proc list allows; nothing is re-quoted.
-  let result = process.exec("sh", ["-c", "exec \"$0\" \"$@\"", cmd] + args)
-  match result {
-    ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(value.string(stdout)) + ",\"stderr\":\"\"}"),
-    err(e) => ok("{\"error\":" + json.stringify(value.string(e)) + "}"),
-  }
-}
-
 // --- Sandboxed exec (pure Almide) ---
 
 @extern(rs, "wasmtime_bridge", "wt_exec_sandboxed")
@@ -156,13 +143,14 @@ effect fn wt_getpid() -> Int = process.pid()
 effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
   match process.kill(pid, signal) { ok(_) => ok(0), err(e) => ok(-1) }
 
-effect fn wt_spawn(cmd: String, args_json: String) -> Result[Int, String] = {
+// The only child porta starts itself: a detached copy of porta (the daemon of `run -d`).
+// A process.start child is stopped when porta exits (C-437), so it is detached through sh:
+// nohup + `&`, and sh prints the background pid. sh only ever runs `porta` here, and the
+// arguments travel as sh's positional parameters, so nothing is re-quoted.
+effect fn wt_spawn_self(args_json: String) -> Result[Int, String] = {
   let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
-  // A process.start child is stopped when porta exits (C-437), so the daemon is
-  // detached through sh: nohup + `&`, and sh prints the background pid. The command
-  // and its arguments travel as sh's positional parameters, so nothing is re-quoted.
-  let script = "nohup \"$0\" \"$@\" >/dev/null 2>&1 & printf %s $!"
-  match process.exec("sh", ["-c", script, cmd] + args) {
+  let script = "nohup porta \"$@\" >/dev/null 2>&1 & printf %s $!"
+  match process.exec("sh", ["-c", script, "sh"] + args) {
     ok(out) => ok(int.parse(string.trim(out)) ?? -1),
     err(_) => ok(-1),
   }

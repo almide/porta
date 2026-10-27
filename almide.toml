@@ -4,8 +4,9 @@ version = "0.7.0"
 
 [permissions]
 allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net", "Abort", "Proc", "Fan", "Rand"]
-# Every child starts through sh (wt_exec_command, wt_spawn), process.kill runs kill; porta re-executing itself goes
-# through the native wasmtime bridge, not the process family.
+# The only children: `sh` detaching the porta daemon (wasm_rt.wt_spawn_self; sh runs nothing
+# but `porta`) and `kill` (process.kill in wasm_rt.wt_kill). Tool commands from MCP clients run
+# in the native sandbox (wt_exec_sandboxed), outside the process family.
 proc = ["sh", "kill"]
 
 [native-deps]

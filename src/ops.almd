@@ -65,11 +65,10 @@ effect fn run_detached(opts: cli.Options) -> Result[Unit, String] = {
   let id = generate_id()!
   ensure_porta_dir()!
   // argv[0] is no longer readable (epoch 15: env.args() leaves it out), so the
-  // daemon is re-spawned through PATH.
-  let self_path = "porta"
+  // daemon is re-spawned as `porta` through PATH (wasm_rt.wt_spawn_self).
   let child_args = ["run", "--_daemon", id, opts.path] + serialize_opts(opts)
   let args_json = json.stringify(value.array(child_args |> list.map(value.string)))
-  let pid = wasm_rt.wt_spawn(self_path, args_json)!
+  let pid = wasm_rt.wt_spawn_self(args_json)!
   if pid < 0 then err("failed to spawn daemon")
   else {
     register_instance(id, opts.path, pid)!

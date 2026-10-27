@@ -25,34 +25,6 @@ test "wt_http_request: unsupported method is valid JSON" {
   assert_eq(value.get_string(parsed, "error") ?? "", "unsupported method: " + method)
 }
 
-// --- wt_exec_command ---
-
-test "wt_exec_command: echo" {
-  let resp = wasm_rt.wt_exec_command("echo", "[\"hello\"]", ".")!
-  let parsed = json.parse(resp)
-  match parsed {
-    ok(v) => {
-      let exit_code = value.get_int(v, "exit_code") ?? -1
-      assert_eq(exit_code, 0)
-      let stdout = value.get_string(v, "stdout") ?? ""
-      assert(string.len(stdout) > 0)
-    },
-    err(_) => assert(false),
-  }
-}
-
-test "wt_exec_command: invalid command" {
-  let resp = wasm_rt.wt_exec_command("nonexistent_command_xyz", "[]", ".")!
-  let parsed = json.parse(resp)
-  match parsed {
-    ok(v) => {
-      let error = value.get_string(v, "error") ?? ""
-      assert(string.len(error) > 0)
-    },
-    err(_) => assert(false),
-  }
-}
-
 // --- wt_inspect ---
 
 test "wt_inspect: demo agent or missing" {
