@@ -8,10 +8,10 @@ import fs
 
 effect fn main() -> Result[Unit, String] = {
   // Read 4-byte length prefix (little-endian)
-  let b0 = bytes.get_or(io.read(io.stdin()!, 1)!, 0, -1)
-  let b1 = bytes.get_or(io.read(io.stdin()!, 1)!, 0, -1)
-  let b2 = bytes.get_or(io.read(io.stdin()!, 1)!, 0, -1)
-  let b3 = bytes.get_or(io.read(io.stdin()!, 1)!, 0, -1)
+  let b0 = bytes.get(io.read(io.stdin()!, 1)!, 0) ?? -1
+  let b1 = bytes.get(io.read(io.stdin()!, 1)!, 0) ?? -1
+  let b2 = bytes.get(io.read(io.stdin()!, 1)!, 0) ?? -1
+  let b3 = bytes.get(io.read(io.stdin()!, 1)!, 0) ?? -1
   let len = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
 
   // Read JSON payload
