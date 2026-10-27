@@ -3,7 +3,7 @@ name = "porta"
 version = "0.7.0"
 
 [permissions]
-allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net"]
+allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net", "Abort"]
 
 [native-deps]
 wasmtime = "47.0.3"

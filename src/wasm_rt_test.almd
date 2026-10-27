@@ -174,14 +174,14 @@ test "build_sandbox_profile: credential stores denied, ordinary documents not" {
 // --- wt_getpid ---
 
 test "wt_getpid: returns positive" {
-  let pid = wasm_rt.wt_getpid()
+  let pid = wasm_rt.wt_getpid()!
   assert(pid > 0)
 }
 
 // --- wt_home_dir ---
 
 test "wt_home_dir: returns non-empty" {
-  let home = wasm_rt.wt_home_dir()
+  let home = wasm_rt.wt_home_dir()!
   assert(string.len(home) > 0)
 }
 

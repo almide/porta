@@ -147,9 +147,9 @@ fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String], 
 
 // --- Process management (pure Almide) ---
 
-fn wt_home_dir() -> String = env.get("HOME") ?? "/tmp"
+effect fn wt_home_dir() -> String = env.get("HOME") ?? "/tmp"
 
-fn wt_getpid() -> Int = process.pid()
+effect fn wt_getpid() -> Int = process.pid()
 
 effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
   match process.kill(pid, signal) { ok(_) => ok(0), err(e) => ok(-1) }
