@@ -4,9 +4,9 @@ version = "0.7.0"
 
 [permissions]
 allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net", "Abort", "Proc", "Fan", "Rand"]
-# Every child starts through sh (wt_exec_command, wt_spawn); porta re-executing itself goes
+# Every child starts through sh (wt_exec_command, wt_spawn), process.kill runs kill; porta re-executing itself goes
 # through the native wasmtime bridge, not the process family.
-proc = ["sh"]
+proc = ["sh", "kill"]
 
 [native-deps]
 wasmtime = "47.0.3"
