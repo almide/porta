@@ -120,7 +120,9 @@ fn wt_is_host_allowed(url: String, allowed_json: String) -> Bool
 
 effect fn wt_exec_command(cmd: String, args_json: String, cwd: String) -> Result[String, String] = {
   let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
-  let result = process.exec(cmd, args)
+  // Through sh with the command as $0, so the only command porta names is the literal
+  // `sh` its [permissions] proc list allows; nothing is re-quoted.
+  let result = process.exec("sh", ["-c", "exec \"$0\" \"$@\"", cmd] + args)
   match result {
     ok(stdout) => ok("{\"exit_code\":0,\"stdout\":" + json.stringify(value.string(stdout)) + ",\"stderr\":\"\"}"),
     err(e) => ok("{\"error\":" + json.stringify(value.string(e)) + "}"),
