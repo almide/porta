@@ -1,9 +1,13 @@
 [package]
 name = "porta"
-version = "0.6.17"
+version = "0.7.0"
 
 [permissions]
-allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net"]
+allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net", "Abort", "Proc", "Fan", "Rand"]
+# The only children: `sh` detaching the porta daemon (wasm_rt.wt_spawn_self; sh runs nothing
+# but `porta`) and `kill` (process.kill in wasm_rt.wt_kill). Tool commands from MCP clients run
+# in the native sandbox (wt_exec_sandboxed), outside the process family.
+proc = ["sh", "kill"]
 
 [native-deps]
 wasmtime = "47.0.3"

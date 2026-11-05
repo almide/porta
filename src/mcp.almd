@@ -61,10 +61,10 @@ effect fn handle_request(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Resu
 
 effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
   let result = value.object([
-    ("protocolVersion", value.str("2025-03-26")),
+    ("protocolVersion", value.string("2025-03-26")),
     ("serverInfo", value.object([
-      ("name", value.str("porta/${server.manifest.name}")),
-      ("version", value.str(server.manifest.version)),
+      ("name", value.string("porta/${server.manifest.name}")),
+      ("version", value.string(server.manifest.version)),
     ])),
     ("capabilities", value.object([
       ("tools", value.object([("listChanged", value.bool(false))])),
@@ -78,8 +78,8 @@ effect fn handle_initialize(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
   let module_tools = server.manifest.tools |> list.map((tool) =>
     value.object([
-      ("name", value.str(tool.name)),
-      ("description", value.str(tool.description)),
+      ("name", value.string(tool.name)),
+      ("description", value.string(tool.description)),
       ("inputSchema", tool.input_schema),
     ])
   )
@@ -90,8 +90,8 @@ effect fn handle_tools_list(server: McpServer, req: jsonrpc.JsonRpcRequest) -> R
 // --- Tool calls ---
 
 effect fn handle_tools_call(server: McpServer, req: jsonrpc.JsonRpcRequest) -> Result[Reply, String] = {
-  let tool_name = json.get_string(req.params, "name") ?? ""
-  let arguments = value.field(req.params, "arguments") ?? value.object([])
+  let tool_name = value.get_string(req.params, "name") ?? ""
+  let arguments = value.get(req.params, "arguments") ?? value.object([])
   match mcp_builtins.builtin(tool_name, server.config) {
     some(tool) => call_builtin(server, req, tool, arguments),
     none => call_module_tool(server, req, tool_name, arguments),
@@ -112,7 +112,7 @@ effect fn call_builtin(server: McpServer, req: jsonrpc.JsonRpcRequest, tool: mcp
 effect fn call_module_tool(server: McpServer, req: jsonrpc.JsonRpcRequest, tool_name: String, arguments: Value) -> Result[Reply, String] =
   match server.manifest.tools |> list.find((t) => t.name == tool_name) {
     none => {
-      let available = server.manifest.tools |> list.map((t) => t.name) |> string.join(", ")
+      let available = server.manifest.tools |> list.map((t) => t.name) |> list.join(", ")
       refuse(server, req, -32602, "Unknown tool: '${tool_name}'. Available tools: ${available}")
     },
     some(_t) => {
@@ -135,16 +135,16 @@ fn tool_response(output: String, success: Bool) -> Value = {
   }
   value.object([
     ("content", value.array([value.object([
-      ("type", value.str("text")), ("text", value.str(rendered.text)),
+      ("type", value.string("text")), ("text", value.string(rendered.text)),
     ])])),
     ("isError", value.bool(rendered.failed)),
   ])
 }
 
 fn rendered_envelope(v: Value, output: String, success: Bool) -> {text: String, failed: Bool} = {
-  let ok_value = value.field(v, "ok")
-  let err_value = value.field(v, "err")
-  if list.len(value.keys(v)) != 1 then {
+  let ok_value = value.as_object(v) |> result.flat_map((_) => option.to_result(value.get(v, "ok"), "missing field 'ok'"))
+  let err_value = value.as_object(v) |> result.flat_map((_) => option.to_result(value.get(v, "err"), "missing field 'err'"))
+  if list.len(list.map(value.as_object(v) ?? [], (kv) => kv.0)) != 1 then {
     let status_failed = json.stringify(ok_value ?? value.null()) == "false"
     let has_error = match err_value { ok(_) => true, err(_) => false }
     {text: output, failed: not success or status_failed or has_error}

@@ -6,6 +6,7 @@ import self.sandbox
 import self.manifest
 import self.proxy
 import self.util
+import env
 type Options = {
   path: String,
   entry: String,
@@ -193,7 +194,7 @@ fn with_secret(opts: Options, text: String) -> Options =
 
 effect fn load_env_file(path: String) -> Result[List[dispatch.EnvVar], String] = {
   let content = fs.read_text(path)!
-  let lines = util.split_lines(string.to_bytes(content), 0, 0, [])
+  let lines = util.split_lines(bytes.to_list(bytes.from_string(content)), 0, 0, [])
   ok(lines
     |> list.filter((line) => string.len(string.trim(line)) > 0 and not string.starts_with(string.trim(line), "#"))
     |> list.filter_map((line) => util.split_at_eq(string.trim(line))))
@@ -205,7 +206,7 @@ effect fn resolve_env(opts: Options) -> Result[List[dispatch.EnvVar], String] = 
   // --env-pass copies a host variable by name; one the host does not have
   // adds nothing rather than an empty value.
   let passed = opts.env_pass |> list.filter_map((name) =>
-    match process.env(name) {
+    match env.get(name) {
       some(val) => some({key: name, val: val}),
       none => none,
     })
@@ -293,5 +294,5 @@ fn policy_toml(opts: Options) -> String = {
     + line_when(opts.proxy_audit != "", "audit = " + util.toml_quote(opts.proxy_audit))
     + proxy.toml_tables(opts.credentials)
     + line_when(has_env, "\n# -e values and secrets were not saved; add [env] and [secrets] yourself")
-  string.join(lines, "\n") + "\n"
+  list.join(lines, "\n") + "\n"
 }

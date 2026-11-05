@@ -1,6 +1,7 @@
 // Porta — WASM agent MCP bridge
 
 import process
+import env
 import self.cli
 import self.help
 import self.engine
@@ -57,7 +58,7 @@ effect fn instance_id(args: List[String], command: String) -> Option[String] = {
 }
 
 effect fn main() -> Result[Unit, String] = {
-  let args = process.args()
+  let args = ["porta"] + env.args()
   let cmd = list.get(args, 1) ?? "help"
 
   match cmd {

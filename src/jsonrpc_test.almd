@@ -3,11 +3,11 @@ import json
 import value
 
 test "MCP output is newline delimited and preserves Unicode" {
-  let response = jsonrpc.make_response(value.int(1), value.str("日本語\nhello"))
+  let response = jsonrpc.make_response(value.int(1), value.string("日本語\nhello"))
   let wire = jsonrpc.encode_message(response)
   assert(string.ends_with(wire, "\n"))
   assert(not string.starts_with(wire, "Content-Length:"))
   assert_eq(list.len(string.split(wire, "\n")), 2)
   let decoded = json.parse(response)!
-  assert_eq(value.as_string(value.field(decoded, "result")!)!, "日本語\nhello")
+  assert_eq(value.as_string((value.as_object(decoded) |> result.flat_map((_) => option.to_result(value.get(decoded, "result"), "missing field 'result'")))!)!, "日本語\nhello")
 }

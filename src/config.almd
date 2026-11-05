@@ -7,6 +7,7 @@ import process
 import self.wasm_rt
 import self.dispatch
 import self.proxy
+import env
 
 type PortaConfig = {
   runtime_type: String,
@@ -76,44 +77,44 @@ fn default_porta_config() -> PortaConfig = {
 
 effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
   let parsed = json.parse(wasm_rt.wt_parse_toml(fs.read_text(path)!))!
-  let error = json.get_string(parsed, "error") ?? ""
+  let error = value.get_string(parsed, "error") ?? ""
   if error != "" then err(error)
   else {
-    let v = value.field(parsed, "value")!
-    let rt = value.field(v, "runtime") ?? value.object([])
-    let sb = value.field(v, "sandbox") ?? value.object([])
-    let px = value.field(v, "proxy") ?? value.object([])
+    let v = (value.as_object(parsed) |> result.flat_map((_) => option.to_result(value.get(parsed, "value"), "missing field 'value'")))!
+    let rt = value.get(v, "runtime") ?? value.object([])
+    let sb = value.get(v, "sandbox") ?? value.object([])
+    let px = value.get(v, "proxy") ?? value.object([])
     ok({
-      runtime_type: json.get_string(rt, "type") ?? "wasm",
-      command: json.get_string(rt, "command") ?? "",
-      wasm_path: json.get_string(rt, "wasm") ?? "",
-      entry: json.get_string(rt, "entry") ?? "_start",
+      runtime_type: value.get_string(rt, "type") ?? "wasm",
+      command: value.get_string(rt, "command") ?? "",
+      wasm_path: value.get_string(rt, "wasm") ?? "",
+      entry: value.get_string(rt, "entry") ?? "_start",
       mounts: strings_at(sb, "mounts", ["."]),
       network: strings_at(sb, "network", []),
-      profile: json.get_string(sb, "profile") ?? "",
-      step_limit: json.get_int(sb, "step-limit") ?? 0,
-      max_memory: json.get_int(sb, "max-memory") ?? 0,
-      restart: json.get_string(sb, "restart") ?? "no",
+      profile: value.get_string(sb, "profile") ?? "",
+      step_limit: value.get_int(sb, "step-limit") ?? 0,
+      max_memory: value.get_int(sb, "max-memory") ?? 0,
+      restart: value.get_string(sb, "restart") ?? "no",
       env_vars: env_table(v),
       secrets: secret_table(v)!,
       args: strings_at(v, "args", []),
       proxy_allow: strings_at(px, "allow", []),
       proxy_deny: strings_at(px, "deny", []),
-      proxy_audit: json.get_string(px, "audit") ?? "",
+      proxy_audit: value.get_string(px, "audit") ?? "",
       credentials: credential_tables(v),
       env_pass: strings_at(sb, "env-pass", []),
       allow_unix: strings_at(sb, "unix", []),
       allow_bind: strings_at(sb, "bind", []),
-      no_net: json.get_bool(sb, "no-net") ?? false,
-      preset: json.get_string(sb, "preset") ?? "",
+      no_net: value.get_bool(sb, "no-net") ?? false,
+      preset: value.get_string(sb, "preset") ?? "",
       deny_read: strings_at(sb, "deny-read", []),
       protect: strings_at(sb, "protect", []),
       deny_unix: strings_at(sb, "deny-unix", []),
-      timeout: json.get_int(sb, "timeout") ?? 0,
-      max_cpu: json.get_int(sb, "max-cpu") ?? 0,
-      max_procs: json.get_int(sb, "max-procs") ?? 0,
-      max_file_size: json.get_int(sb, "max-file-size") ?? 0,
-      max_memory_mb: json.get_int(sb, "max-memory-mb") ?? 0,
+      timeout: value.get_int(sb, "timeout") ?? 0,
+      max_cpu: value.get_int(sb, "max-cpu") ?? 0,
+      max_procs: value.get_int(sb, "max-procs") ?? 0,
+      max_file_size: value.get_int(sb, "max-file-size") ?? 0,
+      max_memory_mb: value.get_int(sb, "max-memory-mb") ?? 0,
     })
   }
 }
@@ -121,7 +122,7 @@ effect fn load_porta_config(path: String) -> Result[PortaConfig, String] = {
 // A TOML array of strings, or the default when the key is absent. Entries that
 // are not strings are dropped rather than failing the whole configuration.
 fn strings_at(table: Value, key: String, fallback: List[String]) -> List[String] =
-  match json.get_array(table, key) {
+  match value.get_array(table, key) {
     none => fallback,
     some(items) => items |> list.filter_map((item) => match value.as_string(item) { ok(s) => some(s), err(_) => none }),
   }
@@ -129,17 +130,17 @@ fn strings_at(table: Value, key: String, fallback: List[String]) -> List[String]
 // [[credentials]] — name, from = { env = "VAR" } (default: the name itself),
 // hosts = ["host[:443][/path]", ...]. A table without a name is left out.
 fn credential_tables(v: Value) -> List[proxy.Credential] =
-  (json.get_array(v, "credentials") ?? []) |> list.filter_map((t) => {
-    let name = json.get_string(t, "name") ?? ""
-    let from = json.get_string(value.field(t, "from") ?? value.object([]), "env") ?? name
+  (value.get_array(v, "credentials") ?? []) |> list.filter_map((t) => {
+    let name = value.get_string(t, "name") ?? ""
+    let from = value.get_string(value.get(t, "from") ?? value.object([]), "env") ?? name
     if name == "" then none else some({name: name, from_env: from, hosts: strings_at(t, "hosts", [])})
   })
 
 // [env] — a plain key=value table.
 fn env_table(v: Value) -> List[dispatch.EnvVar] = {
-  let env_obj = value.field(v, "env") ?? value.object([])
-  value.keys(env_obj) |> list.map((k) => {
-    let e: dispatch.EnvVar = {key: k, val: json.get_string(env_obj, k) ?? ""}
+  let env_obj = value.get(v, "env") ?? value.object([])
+  list.map(value.as_object(env_obj) ?? [], (kv) => kv.0) |> list.map((k) => {
+    let e: dispatch.EnvVar = {key: k, val: value.get_string(env_obj, k) ?? ""}
     e
   })
 }
@@ -147,13 +148,13 @@ fn env_table(v: Value) -> List[dispatch.EnvVar] = {
 // [secrets] — key="literal", or key={from-env = true} to read the host's
 // environment. A key that is neither is left out rather than becoming empty.
 effect fn secret_table(v: Value) -> Result[List[dispatch.EnvVar], String] = {
-  let sec_obj = value.field(v, "secrets") ?? value.object([])
-  ok(value.keys(sec_obj) |> list.filter_map((k) =>
-    match json.get_string(sec_obj, k) {
+  let sec_obj = value.get(v, "secrets") ?? value.object([])
+  ok(list.map(value.as_object(sec_obj) ?? [], (kv) => kv.0) |> list.filter_map((k) =>
+    match value.get_string(sec_obj, k) {
       some(literal) => some({key: k, val: literal}),
       none =>
-        if json.get_bool(value.field(sec_obj, k) ?? value.null(), "from-env") ?? false
-        then some({key: k, val: process.env(k) ?? ""})
+        if value.get_bool(value.get(sec_obj, k) ?? value.null(), "from-env") ?? false
+        then some({key: k, val: env.get(k) ?? ""})
         else none,
     }))
 }

@@ -112,9 +112,9 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
 // run was refused before it began.
 fn supervised_exit(reply_json: String) -> Result[Int, String] = {
   let reply = json.parse(reply_json)!
-  let error = json.get_string(reply, "error") ?? ""
+  let error = value.get_string(reply, "error") ?? ""
   if error != "" then err(error)
-  else ok(json.get_int(reply, "exit_code") ?? 1)
+  else ok(value.get_int(reply, "exit_code") ?? 1)
 }
 
 // The policy in words, without running anything. Proxy mode is described
@@ -123,7 +123,7 @@ effect fn explain_native(opts: cli.Options) -> Result[Unit, String] = {
   let proxied = proxy.is_enabled(proxy_config(opts))
   let net = if proxied then ["127.0.0.1:1"] else opts.allow_net
   if opts.save_path != "" then {
-    fs.write(opts.save_path, cli.policy_toml(opts))!
+    fs.write_text(opts.save_path, cli.policy_toml(opts))!
     println("saved this policy to ${opts.save_path}; commit it and re-run with 'porta up'")
     ok(())
   }
@@ -181,13 +181,13 @@ effect fn validate(opts: cli.Options) -> Result[Unit, String] = {
 
   println("  WASI imports: ${int.to_string(list.len(wasi_imports))}")
   for imp in wasi_imports {
-    let name = json.get_string(imp, "name") ?? ""
+    let name = value.get_string(imp, "name") ?? ""
     println("    ${name}${import_status(caps, name)}")
   }
 
-  let denied = wasi_imports |> list.filter((imp) => is_denied(caps, json.get_string(imp, "name") ?? ""))
+  let denied = wasi_imports |> list.filter((imp) => is_denied(caps, value.get_string(imp, "name") ?? ""))
   if list.len(denied) > 0 then {
-    let first_name = json.get_string(list.get(denied, 0) ?? value.object([]), "name") ?? ""
+    let first_name = value.get_string(list.get(denied, 0) ?? value.object([]), "name") ?? ""
     println("  Result: FAIL — capability denied for '${first_name}'")
   }
   else println("  Result: PASS")
@@ -224,11 +224,11 @@ fn named_profile(name: String) -> sandbox.CapabilitySet =
 // will run it, never through a second parser that could disagree with it.
 effect fn exported_functions(path: String) -> Result[List[String], String] = {
   let info = json.parse(wasm_rt.wt_inspect(path))!
-  let error = json.get_string(info, "error") ?? ""
+  let error = value.get_string(info, "error") ?? ""
   if error != "" then err(error)
-  else ok(json.get_array(info, "exports") ?? []
-    |> list.filter((exp) => json.get_string(exp, "kind") ?? "" == "func")
-    |> list.filter_map((exp) => match json.get_string(exp, "name") {
+  else ok(value.get_array(info, "exports") ?? []
+    |> list.filter((exp) => value.get_string(exp, "kind") ?? "" == "func")
+    |> list.filter_map((exp) => match value.get_string(exp, "name") {
       some(name) => if name == "_start" or name == "__alloc" or name == "memory" then none else some(name),
       none => none,
     }))
@@ -237,8 +237,8 @@ effect fn exported_functions(path: String) -> Result[List[String], String] = {
 // Imports are read from the module without instantiating it.
 effect fn wasi_imports_of(path: String) -> Result[List[Value], String] = {
   let info = json.parse(wasm_rt.wt_inspect(path))!
-  let all_imports = json.get_array(info, "imports") ?? []
-  ok(all_imports |> list.filter((imp) => json.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1"))
+  let all_imports = value.get_array(info, "imports") ?? []
+  ok(all_imports |> list.filter((imp) => value.get_string(imp, "module") ?? "" == "wasi_snapshot_preview1"))
 }
 
 fn is_denied(caps: sandbox.CapabilitySet, name: String) -> Bool =
@@ -260,15 +260,15 @@ fn import_status(caps: sandbox.CapabilitySet, name: String) -> String =
 effect fn inspect(path: String) -> Result[Unit, String] = {
   let info_json = wasm_rt.wt_inspect(path)
   let info = json.parse(info_json)!
-  let error = json.get_string(info, "error") ?? ""
+  let error = value.get_string(info, "error") ?? ""
   if error != "" then err(error)
   else {
-    let imports = json.get_array(info, "imports") ?? []
-    let exports = json.get_array(info, "exports") ?? []
-    let memories = json.get_array(info, "memories") ?? []
+    let imports = value.get_array(info, "imports") ?? []
+    let exports = value.get_array(info, "exports") ?? []
+    let memories = value.get_array(info, "memories") ?? []
 
-    let component = json.get_bool(info, "component") ?? false
-    let wasi = json.get_string(info, "wasi") ?? "0.2"
+    let component = value.get_bool(info, "component") ?? false
+    let wasi = value.get_string(info, "wasi") ?? "0.2"
     println((if component then "Component (WASI ${wasi}): " else "Module: ") + path)
     println("  Imports:   ${int.to_string(list.len(imports))}")
     println("  Exports:   ${int.to_string(list.len(exports))}")
@@ -278,9 +278,9 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
     println("Imports:")
     for entry in list.enumerate(imports) {
       let (idx, imp) = entry
-      let mod_name = json.get_string(imp, "module") ?? ""
-      let name = json.get_string(imp, "name") ?? ""
-      let kind = json.get_string(imp, "kind") ?? ""
+      let mod_name = value.get_string(imp, "module") ?? ""
+      let name = value.get_string(imp, "name") ?? ""
+      let kind = value.get_string(imp, "kind") ?? ""
       // A component's import is a whole interface: no function name follows.
       let shown = if name == "" then mod_name else "${mod_name}.${name}"
       println("  [${int.to_string(idx)}] ${shown} (${kind})")
@@ -289,8 +289,8 @@ effect fn inspect(path: String) -> Result[Unit, String] = {
     println("")
     println("Exports:")
     for exp in exports {
-      let name = json.get_string(exp, "name") ?? ""
-      let kind = json.get_string(exp, "kind") ?? ""
+      let name = value.get_string(exp, "name") ?? ""
+      let kind = value.get_string(exp, "kind") ?? ""
       println("  ${name} (${kind})")
     }
 

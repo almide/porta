@@ -59,26 +59,26 @@ type ExecRequest = {
   max_memory_mb: Int,
 }
 
-fn env_pair(e: EnvVar) -> Value = value.array([value.str(e.key), value.str(e.val)])
+fn env_pair(e: EnvVar) -> Value = value.array([value.string(e.key), value.string(e.val)])
 
-fn strings(items: List[String]) -> Value = value.array(items |> list.map(value.str))
+fn strings(items: List[String]) -> Value = value.array(items |> list.map(value.string))
 
 fn exec_request_json(req: ExecRequest) -> String =
   json.stringify(value.object([
-    ("cmd", value.str(req.cmd)),
+    ("cmd", value.string(req.cmd)),
     ("args", strings(req.args)),
     ("dirs", strings(req.dirs)),
     ("net", strings(req.net)),
     ("env", value.array(req.env |> list.map(env_pair))),
-    ("cwd", value.str(req.cwd)),
-    ("read_policy", value.str(req.read_policy)),
+    ("cwd", value.string(req.cwd)),
+    ("read_policy", value.string(req.read_policy)),
     ("proxy", value.bool(req.proxy)),
     ("allow_root", value.bool(req.allow_root)),
     ("bind", strings(req.bind)),
     ("no_net", value.bool(req.no_net)),
     ("why", value.bool(req.why)),
     ("snapshot", value.bool(req.snapshot)),
-    ("preset", value.str(req.preset)),
+    ("preset", value.string(req.preset)),
     ("deny_read", strings(req.deny_read)),
     ("protect", strings(req.protect)),
     ("deny_unix", strings(req.deny_unix)),
@@ -186,7 +186,7 @@ fn setup_dirs(handle: Int, dirs: List[String], idx: Int) -> Unit =
 
 fn setup_args(handle: Int, wasm_path: String, args: List[String]) -> Unit = {
   let full_args = [wasm_path] + args
-  let args_json = json.stringify(value.array(full_args |> list.map(value.str)))
+  let args_json = json.stringify(value.array(full_args |> list.map(value.string)))
   let _ = wasm_rt.wt_set_args(handle, args_json)
   ()
 }
@@ -196,17 +196,17 @@ effect fn validate_wasm_imports(config: InstanceConfig) -> Result[Unit, String] 
   let info = json.parse(info_json)!
   // A module the engine could not read has no import list to check. That is
   // a refusal, not an empty list: an unreadable module ran unchecked once.
-  let error = json.get_string(info, "error") ?? ""
+  let error = value.get_string(info, "error") ?? ""
   if error != "" then err("cannot read the module's imports, so nothing can be granted: ${error}")
   else validate_import_list(info, config)
 }
 
 effect fn validate_import_list(info: Value, config: InstanceConfig) -> Result[Unit, String] = {
-  let all_imports = json.get_array(info, "imports") ?? []
+  let all_imports = value.get_array(info, "imports") ?? []
   let imports = all_imports |> list.map((imp) => {
     let i: wasm_imports.Import = {
-      mod_name: json.get_string(imp, "module") ?? "",
-      name: json.get_string(imp, "name") ?? "",
+      mod_name: value.get_string(imp, "module") ?? "",
+      name: value.get_string(imp, "name") ?? "",
       desc: wasm_imports.ImportFunc(0),
     }
     i

@@ -65,7 +65,7 @@ fn wants_help(args: List[String]) -> Bool =
 // A reply carrying `error` is a refusal by porta itself, before any job.
 effect fn print_reply(reply: String) -> Result[Unit, String] = {
   let parsed = json.parse(reply)!
-  let error = json.get_string(parsed, "error") ?? ""
+  let error = value.get_string(parsed, "error") ?? ""
   if error != "" then err(error) else { println(reply); ok(()) }
 }
 
@@ -75,7 +75,7 @@ effect fn check_command(args: List[String]) -> Result[Unit, String] =
     let parsed = parse(args)!
     let reply = check(parsed.policy, list.get(parsed.rest, 0) ?? "")
     print_reply(reply)!
-    let accepted = json.get_bool(json.parse(reply)!, "accepted") ?? true
+    let accepted = value.get_bool(json.parse(reply)!, "accepted") ?? true
     if not accepted then process.exit(2) else ()
     ok(())
   }
@@ -88,7 +88,7 @@ effect fn run_command(args: List[String]) -> Result[Unit, String] =
     else {
       let reply = run_one(util.version(), parsed.policy, list.get(parsed.rest, 0) ?? "")
       print_reply(reply)!
-      let outcome = json.get_string(json.parse(reply)!, "outcome") ?? ""
+      let outcome = value.get_string(json.parse(reply)!, "outcome") ?? ""
       if outcome == "refused" then process.exit(2)
       else if outcome != "succeeded" then process.exit(1)
       else ()

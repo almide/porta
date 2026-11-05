@@ -49,31 +49,31 @@ test "split_at_eq: empty string" {
 // --- split_lines ---
 
 test "split_lines: multiple lines" {
-  let bytes = string.to_bytes("line1\nline2\nline3")
+  let bytes = bytes.to_list(bytes.from_string("line1\nline2\nline3"))
   let lines = util.split_lines(bytes, 0, 0, [])
   assert_eq(lines, ["line1", "line2", "line3"])
 }
 
 test "split_lines: trailing newline" {
-  let bytes = string.to_bytes("a\nb\n")
+  let bytes = bytes.to_list(bytes.from_string("a\nb\n"))
   let lines = util.split_lines(bytes, 0, 0, [])
   assert_eq(lines, ["a", "b"])
 }
 
 test "split_lines: single line no newline" {
-  let bytes = string.to_bytes("hello")
+  let bytes = bytes.to_list(bytes.from_string("hello"))
   let lines = util.split_lines(bytes, 0, 0, [])
   assert_eq(lines, ["hello"])
 }
 
 test "split_lines: empty string" {
-  let bytes = string.to_bytes("")
+  let bytes = bytes.to_list(bytes.from_string(""))
   let lines = util.split_lines(bytes, 0, 0, [])
   assert_eq(lines, [])
 }
 
 test "split_lines: empty lines preserved" {
-  let bytes = string.to_bytes("a\n\nb")
+  let bytes = bytes.to_list(bytes.from_string("a\n\nb"))
   let lines = util.split_lines(bytes, 0, 0, [])
   assert_eq(lines, ["a", "", "b"])
 }
