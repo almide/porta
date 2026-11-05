@@ -1,0 +1,12 @@
+// Built with `--target wasm --component` and ALMIDE_COMPONENT_P3=1: a WASI 0.3
+// component that touches the filesystem, so it really imports the
+// wasi:filesystem interfaces. The compiler imports only the interfaces a
+// program uses, so component_hello no longer carries them; the integration
+// suite runs this one under `porta run --profile worker` to prove a filesystem
+// interface the profile does not grant is refused by name.
+import fs
+
+effect fn main() -> Unit = {
+  let root = fs.exists("/")
+  if root then println("filesystem read") else println("no root directory")
+}
