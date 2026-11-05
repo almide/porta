@@ -436,7 +436,18 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         assert component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the fixture is not a component'
         result = run('run', str(component), '--profile', 'worker')
         assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
-        result = run('run', str(component), '--profile', 'ai-agent')
+        # A component that really reads the wall clock imports
+        # wasi:clocks/wall-clock (component_hello no longer does: the compiler
+        # imports only what a program uses). ai-agent grants no clock, so it is
+        # refused and the refusal names the clock. This build takes the adapter
+        # route and imports wasi:filesystem too, so the clock need not be the
+        # first denied interface: it must be named among the denied ones.
+        clock_component = root / 'component-clock.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_clock.almd', '--target', 'wasm',
+                                '--component', '-o', str(clock_component)], text=True, capture_output=True, timeout=600)
+        assert built.returncode == 0 and clock_component.is_file(), built
+        assert clock_component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the clock fixture is not a component'
+        result = run('run', str(clock_component), '--profile', 'ai-agent')
         assert result.returncode != 0 and 'wasi:clocks/wall-clock' in result.stderr and "'clock'" in result.stderr, result
         result = run('run', str(component), '--profile', 'worker', '--step-limit', '10')
         assert result.returncode != 0 and 'hello' not in result.stdout, result
