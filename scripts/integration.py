@@ -466,15 +466,20 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
         # A WASI 0.3 component that touches the filesystem imports the
         # wasi:filesystem interfaces (component_hello no longer does: the
-        # compiler imports only what a program uses), so `worker` refuses it
-        # by name.
+        # compiler imports only what a program uses), so `worker` refuses it.
+        # This build takes the adapter route, which also imports
+        # wasi:cli/environment, and porta names the first denied interface
+        # only: the filesystem import is checked through inspect, and the
+        # refusal must be a capability denial.
         p3_fs = root / 'component-fs-p3.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_fs.almd', '--target', 'wasm',
                                 '--component', '-o', str(p3_fs)], text=True, capture_output=True, timeout=600,
                                env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
         assert built.returncode == 0 and p3_fs.is_file(), built
+        result = run('inspect', str(p3_fs))
+        assert result.returncode == 0 and 'wasi:filesystem' in result.stdout, result
         result = run('run', str(p3_fs), '--profile', 'worker')
-        assert result.returncode != 0 and 'wasi:filesystem' in result.stderr, result
+        assert result.returncode != 0 and 'capability denied' in result.stderr and 'filesystem' not in result.stdout, result
         result = run('run', str(p3), '--profile', 'full', '--step-limit', '10')
         assert result.returncode != 0 and 'hello' not in result.stdout, result
         result = run('inspect', str(p3))
