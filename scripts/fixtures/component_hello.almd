@@ -2,5 +2,10 @@
 // are interfaces (wasi:cli/stdout, wasi:clocks/wall-clock, ...) rather than
 // preview 1 functions. The integration suite runs it under `porta run` to
 // prove a component gets the same capability check, preopens and budgets as
-// a core module.
-fn main() -> Unit = println("hello from a component")
+// a core module. It reads the wall clock so the component imports
+// wasi:clocks/wall-clock: the compiler imports only the interfaces a program
+// uses, and the `ai-agent` profile must refuse that one by name.
+effect fn main() -> Unit = {
+  let started = datetime.now()
+  if started < 0 then println("the wall clock reads before 1970") else println("hello from a component")
+}
