@@ -436,7 +436,18 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         assert component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the fixture is not a component'
         result = run('run', str(component), '--profile', 'worker')
         assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
-        result = run('run', str(component), '--profile', 'ai-agent')
+        # A component that really reads the wall clock imports
+        # wasi:clocks/wall-clock (component_hello no longer does: the compiler
+        # imports only what a program uses). ai-agent grants no clock, so it is
+        # refused and the refusal names the clock. This build takes the adapter
+        # route and imports wasi:filesystem too, so the clock need not be the
+        # first denied interface: it must be named among the denied ones.
+        clock_component = root / 'component-clock.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_clock.almd', '--target', 'wasm',
+                                '--component', '-o', str(clock_component)], text=True, capture_output=True, timeout=600)
+        assert built.returncode == 0 and clock_component.is_file(), built
+        assert clock_component.read_bytes()[4:8] == b'\x0d\x00\x01\x00', 'the clock fixture is not a component'
+        result = run('run', str(clock_component), '--profile', 'ai-agent')
         assert result.returncode != 0 and 'wasi:clocks/wall-clock' in result.stderr and "'clock'" in result.stderr, result
         result = run('run', str(component), '--profile', 'worker', '--step-limit', '10')
         assert result.returncode != 0 and 'hello' not in result.stdout, result
@@ -445,17 +456,30 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         print('PASS: a WASI 0.2 component runs, is capability-checked by interface, is bounded by fuel, and inspects as one')
         # The same program as a WASI 0.3 component: async-lifted run, stdio
         # over component-model streams. Almide emits it with
-        # ALMIDE_COMPONENT_P3=1; its world imports the filesystem interfaces
-        # even when unused, so `worker` refuses it by name and `full` runs it.
+        # ALMIDE_COMPONENT_P3=1, honoured from the environment only with
+        # `--allow-switch ALMIDE_COMPONENT_P3`, and `full` runs it.
         p3 = root / 'component-hello-p3.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
-                                '--component', '-o', str(p3)], text=True, capture_output=True, timeout=600,
+                                '--component', '--allow-switch', 'ALMIDE_COMPONENT_P3', '-o', str(p3)], text=True, capture_output=True, timeout=600,
                                env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
         assert built.returncode == 0 and p3.is_file(), built
         result = run('run', str(p3), '--profile', 'full')
         assert result.returncode == 0 and result.stdout.strip() == 'hello from a component', result
-        result = run('run', str(p3), '--profile', 'worker')
-        assert result.returncode != 0 and 'wasi:filesystem' in result.stderr, result
+        # A WASI 0.3 component that touches the filesystem imports the
+        # wasi:filesystem interfaces (component_hello no longer does: the
+        # compiler imports only what a program uses), so `worker` refuses it.
+        # It may import wasi:cli/environment too, and porta names the first
+        # denied interface only: the filesystem import is checked through
+        # inspect, and the refusal must be a capability denial.
+        p3_fs = root / 'component-fs-p3.wasm'
+        built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_fs.almd', '--target', 'wasm',
+                                '--component', '--allow-switch', 'ALMIDE_COMPONENT_P3', '-o', str(p3_fs)], text=True, capture_output=True, timeout=600,
+                               env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
+        assert built.returncode == 0 and p3_fs.is_file(), built
+        result = run('inspect', str(p3_fs))
+        assert result.returncode == 0 and 'wasi:filesystem' in result.stdout, result
+        result = run('run', str(p3_fs), '--profile', 'worker')
+        assert result.returncode != 0 and 'capability denied' in result.stderr and 'filesystem' not in result.stdout, result
         result = run('run', str(p3), '--profile', 'full', '--step-limit', '10')
         assert result.returncode != 0 and 'hello' not in result.stdout, result
         result = run('inspect', str(p3))

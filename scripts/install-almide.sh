@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Exact published tag; override to v0.63.0 once the final release is available.
-tag="${ALMIDE_RELEASE_TAG:-v0.63.0-rc1}"
+# Exact published tag (v0.69.0 = almide 39f128a2d6af0cfc327d27913453e7af99c143fc).
+tag="${ALMIDE_RELEASE_TAG:-v0.69.0}"
 case "$(uname -s)" in Darwin) os=macos ;; Linux) os=linux ;; *) exit 1 ;; esac
 case "$(uname -m)" in arm64|aarch64) arch=aarch64 ;; x86_64) arch=x86_64 ;; *) exit 1 ;; esac
 asset="almide-${os}-${arch}.tar.gz"

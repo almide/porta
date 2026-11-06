@@ -1,6 +1,6 @@
 # Porta
 
-Porta is an Almide 0.63.0 WASM agent and team runtime, with MCP interoperability.
+Porta is an Almide 0.69.0 WASM agent and team runtime, with MCP interoperability.
 Almide owns CLI, manifests, capability checks and MCP. `examples/chat-agent` is
 the actual reasoning/control loop compiled to WASM.
 
@@ -82,8 +82,7 @@ otherwise builds it natively; the native path rebuilds every test binary and
 costs about an hour on a cold cache. Six of the nine files take the wasmtime
 path; `mcp_test`, `sandbox_test` and `wasm_rt_test` always build natively.
 
-The published 0.63.0 artifact is currently v0.63.0-rc1. Keep CI pinned to the
-verified artifact until the final release is published. JSON constructors and
+CI is pinned to the published v0.69.0 release artifact. JSON constructors and
 accessors use `value.*`; serialization and typed key lookups use `json.*`.
 
 ## Security invariants
