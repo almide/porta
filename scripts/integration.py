@@ -456,10 +456,11 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         print('PASS: a WASI 0.2 component runs, is capability-checked by interface, is bounded by fuel, and inspects as one')
         # The same program as a WASI 0.3 component: async-lifted run, stdio
         # over component-model streams. Almide emits it with
-        # ALMIDE_COMPONENT_P3=1, and `full` runs it.
+        # ALMIDE_COMPONENT_P3=1, honoured from the environment only with
+        # `--allow-switch ALMIDE_COMPONENT_P3`, and `full` runs it.
         p3 = root / 'component-hello-p3.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_hello.almd', '--target', 'wasm',
-                                '--component', '-o', str(p3)], text=True, capture_output=True, timeout=600,
+                                '--component', '--allow-switch', 'ALMIDE_COMPONENT_P3', '-o', str(p3)], text=True, capture_output=True, timeout=600,
                                env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
         assert built.returncode == 0 and p3.is_file(), built
         result = run('run', str(p3), '--profile', 'full')
@@ -467,13 +468,12 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         # A WASI 0.3 component that touches the filesystem imports the
         # wasi:filesystem interfaces (component_hello no longer does: the
         # compiler imports only what a program uses), so `worker` refuses it.
-        # This build takes the adapter route, which also imports
-        # wasi:cli/environment, and porta names the first denied interface
-        # only: the filesystem import is checked through inspect, and the
-        # refusal must be a capability denial.
+        # It may import wasi:cli/environment too, and porta names the first
+        # denied interface only: the filesystem import is checked through
+        # inspect, and the refusal must be a capability denial.
         p3_fs = root / 'component-fs-p3.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_fs.almd', '--target', 'wasm',
-                                '--component', '-o', str(p3_fs)], text=True, capture_output=True, timeout=600,
+                                '--component', '--allow-switch', 'ALMIDE_COMPONENT_P3', '-o', str(p3_fs)], text=True, capture_output=True, timeout=600,
                                env={**os.environ, 'ALMIDE_COMPONENT_P3': '1'})
         assert built.returncode == 0 and p3_fs.is_file(), built
         result = run('inspect', str(p3_fs))
