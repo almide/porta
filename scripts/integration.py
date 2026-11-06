@@ -440,8 +440,8 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         # wasi:clocks/wall-clock (component_hello no longer does: the compiler
         # imports only what a program uses). ai-agent grants no clock, so it is
         # refused and the refusal names the clock. This build takes the adapter
-        # route and imports wasi:filesystem too, so the clock need not be the
-        # first denied interface: it must be named among the denied ones.
+        # route and imports wasi:filesystem too; porta names every denied
+        # interface, so the clock is named wherever it falls in the list.
         clock_component = root / 'component-clock.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_clock.almd', '--target', 'wasm',
                                 '--component', '-o', str(clock_component)], text=True, capture_output=True, timeout=600)
@@ -468,9 +468,9 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         # A WASI 0.3 component that touches the filesystem imports the
         # wasi:filesystem interfaces (component_hello no longer does: the
         # compiler imports only what a program uses), so `worker` refuses it.
-        # It may import wasi:cli/environment too, and porta names the first
-        # denied interface only: the filesystem import is checked through
-        # inspect, and the refusal must be a capability denial.
+        # It may import wasi:cli/environment too; porta names every denied
+        # interface, so the refusal names the filesystem and 'fs' wherever it
+        # falls in the list.
         p3_fs = root / 'component-fs-p3.wasm'
         built = subprocess.run([str(almide), 'build', 'scripts/fixtures/component_fs.almd', '--target', 'wasm',
                                 '--component', '--allow-switch', 'ALMIDE_COMPONENT_P3', '-o', str(p3_fs)], text=True, capture_output=True, timeout=600,
@@ -479,7 +479,7 @@ print('unbound-host', get('https://other.example.test/v1/models', cafile=sys.arg
         result = run('inspect', str(p3_fs))
         assert result.returncode == 0 and 'wasi:filesystem' in result.stdout, result
         result = run('run', str(p3_fs), '--profile', 'worker')
-        assert result.returncode != 0 and 'capability denied' in result.stderr and 'filesystem' not in result.stdout, result
+        assert result.returncode != 0 and 'wasi:filesystem' in result.stderr and "'fs'" in result.stderr, result
         result = run('run', str(p3), '--profile', 'full', '--step-limit', '10')
         assert result.returncode != 0 and 'hello' not in result.stdout, result
         result = run('inspect', str(p3))

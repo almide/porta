@@ -158,27 +158,30 @@ fn check_wasi_call(set: CapabilitySet, wasi_name: String) -> Result[Unit, String
   }
 
 // --- Import validation (module load time) ---
+//
+// Every import is checked, and every refusal is reported: one line per denied
+// import, each in the same shape, in import order. A module or component that
+// lacks several capabilities is named in full in one run rather than one
+// capability per attempt; the first line is what a single refusal says.
 
 fn validate_imports(imports: List[wasm_imports.Import], set: CapabilitySet) -> Result[Unit, String] =
-  validate_imports_acc(imports, set, 0)
-
-fn validate_imports_acc(imports: List[wasm_imports.Import], set: CapabilitySet, idx: Int) -> Result[Unit, String] =
-  if idx >= list.len(imports) then ok(())
-  else match list.get(imports, idx) {
-    none => ok(()),
-    some(imp) =>
-      if imp.mod_name == "wasi_snapshot_preview1" then
-        match check_wasi_call(set, imp.name) {
-          ok(_) => validate_imports_acc(imports, set, idx + 1),
-          err(msg) => err("import validation failed: ${imp.name} — ${msg}"),
-        }
-      else if string.starts_with(imp.mod_name, "wasi:") then
-        match check_interface(set, imp.mod_name) {
-          ok(_) => validate_imports_acc(imports, set, idx + 1),
-          err(msg) => err(msg),
-        }
-      else err("unsupported host import: ${imp.mod_name}.${imp.name}; use MCP tools"),
+  match imports |> list.filter_map((imp) => import_problem(set, imp)) {
+    [] => ok(()),
+    problems => err(list.join(problems, "\n")),
   }
+
+fn import_problem(set: CapabilitySet, imp: wasm_imports.Import) -> Option[String] =
+  if imp.mod_name == "wasi_snapshot_preview1" then
+    match check_wasi_call(set, imp.name) {
+      ok(_) => none,
+      err(msg) => some("import validation failed: ${imp.name} — ${msg}"),
+    }
+  else if string.starts_with(imp.mod_name, "wasi:") then
+    match check_interface(set, imp.mod_name) {
+      ok(_) => none,
+      err(msg) => some(msg),
+    }
+  else some("unsupported host import: ${imp.mod_name}.${imp.name}; use MCP tools")
 
 // --- Built-in profiles ---
 
