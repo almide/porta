@@ -148,7 +148,7 @@ effect fn wt_kill(pid: Int, signal: Int) -> Result[Int, String] =
 // nohup + `&`, and sh prints the background pid. sh only ever runs `porta` here, and the
 // arguments travel as sh's positional parameters, so nothing is re-quoted.
 effect fn wt_spawn_self(args_json: String) -> Result[Int, String] = {
-  let args = value.as_array(json.parse(args_json) ?? value.array([])) ?? [] |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
+  let args = (value.as_array(json.parse(args_json) ?? value.array([])) ?? []) |> list.filter_map((v) => match value.as_string(v) { ok(s) => some(s), err(_) => none })
   let script = "nohup porta \"$@\" >/dev/null 2>&1 & printf %s $!"
   match process.exec("sh", ["-c", script, "sh"] + args) {
     ok(out) => ok(int.parse(string.trim(out)) ?? -1),

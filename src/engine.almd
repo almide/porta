@@ -226,7 +226,7 @@ effect fn exported_functions(path: String) -> Result[List[String], String] = {
   let info = json.parse(wasm_rt.wt_inspect(path))!
   let error = value.get_string(info, "error") ?? ""
   if error != "" then err(error)
-  else ok(value.get_array(info, "exports") ?? []
+  else ok((value.get_array(info, "exports") ?? [])
     |> list.filter((exp) => value.get_string(exp, "kind") ?? "" == "func")
     |> list.filter_map((exp) => match value.get_string(exp, "name") {
       some(name) => if name == "_start" or name == "__alloc" or name == "memory" then none else some(name),
