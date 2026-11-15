@@ -12,6 +12,7 @@ import self.wasm_rt
 import self.manifest
 import self.mcp
 import self.proxy
+import porta_sandbox
 // --- Serve ---
 effect fn serve(opts: cli.Options) -> Result[Unit, String] = {
   let manifest_path = if opts.manifest_path != "" then opts.manifest_path
@@ -108,15 +109,6 @@ effect fn native_request(opts: cli.Options, net: List[String], proxy_env: List[d
   ok(request)
 }
 
-// What a supervised run reported: the command's exit code, or the reason the
-// run was refused before it began.
-fn supervised_exit(reply_json: String) -> Result[Int, String] = {
-  let reply = json.parse(reply_json)!
-  let error = value.get_string(reply, "error") ?? ""
-  if error != "" then err(error)
-  else ok(value.get_int(reply, "exit_code") ?? 1)
-}
-
 // The policy in words, without running anything. Proxy mode is described
 // with a placeholder endpoint: the proxy is not started for an explanation.
 effect fn explain_native(opts: cli.Options) -> Result[Unit, String] = {
@@ -137,39 +129,18 @@ effect fn explain_native(opts: cli.Options) -> Result[Unit, String] = {
 
 // porta stays as the parent rather than becoming the command: it is then
 // still there when the command exits to say what the sandbox refused.
-effect fn run_native_direct(opts: cli.Options) -> Result[Int, String] = {
-  let request = native_request(opts, opts.allow_net, [], false)!
-  supervised_exit(wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request)))
-}
+effect fn run_native_direct(opts: cli.Options) -> Result[Int, String] =
+  porta_sandbox.run(native_request(opts, opts.allow_net, [], false)!, porta_sandbox.no_proxy(), "porta")
 
-// Proxy mode: start CONNECT proxy, constrain net to the proxy port only,
-// inject HTTP(S)_PROXY, run supervised so the proxy thread stays alive.
-// Any user-supplied --allow-net is intentionally ignored in this mode:
-// the proxy is the only permitted egress.
+// Proxy mode: the package starts the CONNECT proxy, holds the run's network
+// to the proxy port alone, puts HTTP(S)_PROXY in its environment and stops
+// the proxy after. Any --allow-net is ignored in this mode: the proxy is the
+// only permitted egress.
 effect fn run_native_proxied(opts: cli.Options, proxy_cfg: proxy.ProxyConfig) -> Result[Int, String] = {
   if list.len(opts.allow_net) > 0 then
     eprintln("[porta] --allow-net is ignored when --proxy-allow/--proxy-deny is set; proxy is the only egress")
   else ()
-
-  let h = proxy.start(proxy_cfg)!
-  eprintln("[porta] proxy listening on 127.0.0.1:${int.to_string(h.port)}")
-
-  // Env: inject HTTP(S)_PROXY so well-behaved clients route through the proxy.
-  // Raw sockets bypassing HTTPS_PROXY will be blocked by the sandbox net policy.
-  let endpoint = proxy.endpoint(h)
-  // Node's fetch ignores the proxy variables unless told to honour them.
-  let proxy_env: List[dispatch.EnvVar] = [
-    {key: "HTTP_PROXY", val: endpoint},
-    {key: "HTTPS_PROXY", val: endpoint},
-    {key: "http_proxy", val: endpoint},
-    {key: "https_proxy", val: endpoint},
-    {key: "NODE_USE_ENV_PROXY", val: "1"},
-  ] + h.env
-  // Net: strictly the proxy port. Anything else must be blocked at the OS level.
-  let request = native_request(opts, [proxy.sandbox_net_rule(h)], proxy_env, true)!
-  let reply = wasm_rt.wt_exec_supervised(dispatch.exec_request_json(request))
-  proxy.stop(h)!
-  supervised_exit(reply)
+  porta_sandbox.run(native_request(opts, [], [], true)!, proxy_cfg, "porta")
 }
 
 // --- Validate ---
@@ -226,7 +197,7 @@ effect fn exported_functions(path: String) -> Result[List[String], String] = {
   let info = json.parse(wasm_rt.wt_inspect(path))!
   let error = value.get_string(info, "error") ?? ""
   if error != "" then err(error)
-  else ok(value.get_array(info, "exports") ?? []
+  else ok((value.get_array(info, "exports") ?? [])
     |> list.filter((exp) => value.get_string(exp, "kind") ?? "" == "func")
     |> list.filter_map((exp) => match value.get_string(exp, "name") {
       some(name) => if name == "_start" or name == "__alloc" or name == "memory" then none else some(name),

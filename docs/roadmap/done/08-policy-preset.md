@@ -14,7 +14,7 @@ under strict reads.
 
 ## What
 
-- `native/presets/default.toml`, built into the binary: `[read] deny`,
+- `sandbox/native/presets/default.toml`, built into the binary: `[read] deny`,
   `[write] protect`, `[unix] deny`. The core holds only the mechanisms.
 - `--deny-read`, `--protect`, `--deny-unix` add to it; `--preset none` drops
   it; `--preset <file>` replaces it. The same keys work in `porta.toml`.

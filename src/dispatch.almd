@@ -6,99 +6,21 @@ import self.wasm_imports
 import self.wasm_rt
 import self.sandbox
 import self.observability
+import porta_sandbox
 
 // --- Types ---
 
-type EnvVar = { key: String, val: String }
+// The sandbox request and its parts are the package's (sandbox/src/mod.almd);
+// the names porta's own code uses for them stay here.
+type EnvVar = porta_sandbox.EnvVar
 
-// One sandboxed execution request. The native side reads exactly these fields,
-// so the command and its whole policy travel together instead of as six
-// positional strings a caller could transpose.
-type ExecRequest = {
-  cmd: String,
-  args: List[String],
-  dirs: List[String],
-  net: List[String],
-  env: List[EnvVar],
-  cwd: String,
-  read_policy: String,
-  // Whether the loopback endpoint in `net` is this run's only permitted
-  // egress. The native side cannot infer it from `net`, and it decides
-  // whether the channels a TCP rule cannot reach are closed too.
-  proxy: Bool,
-  // Whether the caller said running as root is what they meant. porta refuses
-  // otherwise: for root, the file permissions this policy leans on separate
-  // nothing.
-  allow_root: Bool,
-  // TCP ports the command may listen on once `net` closes the network.
-  bind: List[String],
-  // No network at all. The native side refuses it beside any grant.
-  no_net: Bool,
-  // Say afterwards what the sandbox refused (strace on Linux).
-  why: Bool,
-  // Copy the writable mounts first, for `porta rollback`.
-  snapshot: Bool,
-  // The preset this run starts from and what the caller adds to it: reads
-  // denied, names protected inside mounts, sockets refused.
-  preset: String,
-  deny_read: List[String],
-  protect: List[String],
-  deny_unix: List[String],
-  // Unix sockets the command may connect to although they hold a credential
-  // agent.
-  unix: List[String],
-  // Seconds before porta kills the command and everything it started. 0 means
-  // no limit.
-  timeout: Int,
-  // Per-process ceilings, set with setrlimit before exec: CPU seconds,
-  // processes of this user, file size in MiB. 0 leaves one unset.
-  max_cpu: Int,
-  max_procs: Int,
-  max_file_size: Int,
-  // Resident memory in MiB for the whole run (cgroup v2, Linux). 0 = unset.
-  max_memory_mb: Int,
-}
+type ExecRequest = porta_sandbox.Request
 
-fn env_pair(e: EnvVar) -> Value = value.array([value.string(e.key), value.string(e.val)])
+fn exec_request_json(req: ExecRequest) -> String = porta_sandbox.request_json(req)
 
-fn strings(items: List[String]) -> Value = value.array(items |> list.map(value.string))
+fn first_mount(dirs: List[String]) -> String = porta_sandbox.first_mount(dirs)
 
-fn exec_request_json(req: ExecRequest) -> String =
-  json.stringify(value.object([
-    ("cmd", value.string(req.cmd)),
-    ("args", strings(req.args)),
-    ("dirs", strings(req.dirs)),
-    ("net", strings(req.net)),
-    ("env", value.array(req.env |> list.map(env_pair))),
-    ("cwd", value.string(req.cwd)),
-    ("read_policy", value.string(req.read_policy)),
-    ("proxy", value.bool(req.proxy)),
-    ("allow_root", value.bool(req.allow_root)),
-    ("bind", strings(req.bind)),
-    ("no_net", value.bool(req.no_net)),
-    ("why", value.bool(req.why)),
-    ("snapshot", value.bool(req.snapshot)),
-    ("preset", value.string(req.preset)),
-    ("deny_read", strings(req.deny_read)),
-    ("protect", strings(req.protect)),
-    ("deny_unix", strings(req.deny_unix)),
-    ("unix", strings(req.unix)),
-    ("timeout", value.int(req.timeout)),
-    ("max_cpu", value.int(req.max_cpu)),
-    ("max_procs", value.int(req.max_procs)),
-    ("max_file_size", value.int(req.max_file_size)),
-    ("max_memory_mb", value.int(req.max_memory_mb)),
-  ]))
-
-// The working directory a run starts in: the first granted mount, without the
-// read-only marker, or the current directory when nothing was granted.
-fn first_mount(dirs: List[String]) -> String =
-  read_only_stripped(list.get(dirs, 0) ?? ".")
-
-// A mount without its read-only marker: one ":ro", at the end. Removing every
-// ":ro" turned a directory named "a:rob" into "ab", which does not exist.
-fn read_only_stripped(dir: String) -> String =
-  if string.ends_with(dir, ":ro") then string.drop_end(dir, 3) else dir
+fn read_only_stripped(dir: String) -> String = porta_sandbox.read_only_stripped(dir)
 
 type InstanceState =
   | Created

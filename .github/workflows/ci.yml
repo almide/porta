@@ -19,7 +19,10 @@ jobs:
           python-version: "3.12"
       - name: Job HTTP harness tests
         run: python3 -m unittest discover -s scripts -p 'test_job_server_checks.py'
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned: with Rust 1.100.0 the standard library on wasm32-wasip1 imports
+      # clock_time_get, so examples/compute — which is granted no clock, on
+      # purpose — is refused at load. 1.99.1 is the last release without it.
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-wasip1
       - uses: actions/cache@v4

@@ -72,7 +72,7 @@ line, never dropped.
 | `--snapshot` | Copy the writable mounts before the run (a clone on APFS, a reflink or copy on Linux) and say afterwards what the run changed; `porta rollback` puts them back |
 | `--why` | Say afterwards what the sandbox refused and which flag would allow it, even when the run succeeded. On Linux the run is traced with `strace` |
 | `--no-net` | No network at all: no TCP or UDP to anywhere, and not the host's loopback either. On Linux the command gets a network namespace of its own holding only a loopback interface it can use itself; where the host refuses one, Landlock closes every TCP port and seccomp every other socket family, and a kernel that can do neither refuses the run. Refused beside `--allow-net`, `--allow-bind` or a proxy |
-| `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `native/presets/default.toml`), `none`, or a TOML file of the same shape |
+| `--preset <name\|file>` | What a run closes beyond its grants: `default` (credential stores, trusted names inside mounts, credential sockets; `sandbox/native/presets/default.toml`), `none`, or a TOML file of the same shape |
 | `--deny-read <path>` | Close this path to reads on top of the preset; absolute or `~/…` (repeatable) |
 | `--protect <name>` | Keep this name, relative to each writable mount, unwritable and unrenamable (repeatable) |
 | `--deny-unix <regex>` | Refuse Unix sockets whose path matches, on top of the preset (repeatable). On Linux, the sockets bound when the run starts |

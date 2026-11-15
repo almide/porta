@@ -88,7 +88,7 @@ porta run ./installer -v ./sandbox --allow-net '*:443' --timeout 120 --max-procs
 | **资源** | `--timeout`、`--max-cpu`、`--max-procs`、`--max-file-size`、`--max-memory-mb` | 相同（内存通过 cgroup v2） |
 | **环境变量** | 从空开始；只传递 `PATH`、`HOME`、区域设置和终端，其余仅限 `-e` / `--env-pass` 指定的 | 相同 |
 
-关闭哪些内容由预设决定——[`native/presets/default.toml`](native/presets/default.toml)，
+关闭哪些内容由预设决定——[`sandbox/native/presets/default.toml`](sandbox/native/presets/default.toml)，
 可用 `porta explain` 查看——而不是写死在代码里：`--deny-read`、`--protect`、
 `--deny-unix` 在其上追加，`--preset <file>` 整体替换。附带理由的完整表格见
 [enforcement](docs/enforcement.md)。

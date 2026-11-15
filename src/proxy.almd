@@ -7,111 +7,29 @@ import process
 import self.wasm_rt
 import self.dispatch
 import self.util
-import env
+import porta_sandbox
 
-// A credential handed in as a placeholder (#37): the name the command sees it
-// under, the host variable its real value is read from, and the hosts it may
-// be put on for (`host[:443][/path]`). The command never holds the value; the
-// proxy puts it on requests to those hosts and refuses the placeholder
-// anywhere else it opens.
-type Credential = {
-  name: String,
-  from_env: String,
-  hosts: List[String],
-}
+// The proxy's types and lifecycle are the sandbox package's
+// (sandbox/src/mod.almd); the names porta's own code uses for them stay here.
+type Credential = porta_sandbox.Credential
 
-type ProxyConfig = {
-  allow: List[String],
-  deny: List[String],
-  audit_path: String,
-  credentials: List[Credential],
-}
+type ProxyConfig = porta_sandbox.ProxyConfig
 
-type ProxyHandle = {
-  handle: Int,
-  port: Int,
-  // This run's proxy credential. The proxy is on loopback, which every
-  // process of the same user can reach; only a client presenting the token
-  // is served, so the proxy is not an open relay carrying this run's policy.
-  token: String,
-  // What the command's environment gains with credentials: each placeholder
-  // under its credential's name, and the variables that make TLS clients
-  // trust the run's CA. Empty without credentials.
-  env: List[dispatch.EnvVar],
-}
+type ProxyHandle = porta_sandbox.ProxyHandle
 
-fn empty_config() -> ProxyConfig = {
-  allow: [],
-  deny: [],
-  audit_path: "",
-  credentials: [],
-}
+fn empty_config() -> ProxyConfig = porta_sandbox.no_proxy()
 
-// A credential needs the proxy even with no list: it is where the real value
-// is put on.
-fn is_enabled(c: ProxyConfig) -> Bool =
-  list.len(c.allow) > 0 or list.len(c.deny) > 0 or list.len(c.credentials) > 0
+fn is_enabled(c: ProxyConfig) -> Bool = porta_sandbox.proxy_enabled(c)
 
-// Mutually exclusive: returns an error message when both allow and deny are set.
-fn validate(c: ProxyConfig) -> Result[Unit, String] =
-  if list.len(c.allow) > 0 and list.len(c.deny) > 0 then
-    err("--proxy-allow and --proxy-deny are mutually exclusive")
-  else ok(())
+fn validate(c: ProxyConfig) -> Result[Unit, String] = porta_sandbox.proxy_valid(c)
 
-effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = {
-  validate(c)!
-  let allow_json = json.stringify(value.array(c.allow |> list.map(value.string)))
-  let deny_json = json.stringify(value.array(c.deny |> list.map(value.string)))
-  let credentials_json = json.stringify(value.array(credential_values(c.credentials)!))
-  let result_json = wasm_rt.wt_proxy_start(allow_json, deny_json, c.audit_path, credentials_json)
-  let parsed = json.parse(result_json)!
-  let error = value.get_string(parsed, "error") ?? ""
-  if error != "" then err(error)
-  else {
-    let handle = value.get_int(parsed, "handle") ?? -1
-    let port = value.get_int(parsed, "port") ?? 0
-    let token = value.get_string(parsed, "token") ?? ""
-    if handle < 0 or port == 0 or token == "" then err("proxy start returned invalid handle, port or token")
-    else ok({handle: handle, port: port, token: token, env: env_pairs(parsed)})
-  }
-}
+effect fn start(c: ProxyConfig) -> Result[ProxyHandle, String] = porta_sandbox.proxy_open(c)
 
-// The credentials as the proxy takes them, each with its real value read from
-// porta's own environment now. A variable the host does not have is an error
-// here, before anything runs, rather than a key handed in empty.
-effect fn credential_values(credentials: List[Credential]) -> Result[List[Value], String] = {
-  var out: List[Value] = []
-  var missing = ""
-  for c in credentials {
-    let found = env.get(c.from_env) ?? ""
-    if found == "" and missing == "" then missing = "credential ${c.name}: ${c.from_env} is not set in porta's environment, so there is nothing to hand in"
-    out = out + [value.object([("name", value.string(c.name)), ("value", value.string(found)),
-      ("hosts", value.array(c.hosts |> list.map(value.string)))])]
-  }
-  if missing != "" then err(missing) else ok(out)
-}
+effect fn stop(h: ProxyHandle) -> Result[Unit, String] = porta_sandbox.proxy_close(h)
 
-fn env_pairs(parsed: Value) -> List[dispatch.EnvVar] =
-  (value.get_array(parsed, "env") ?? []) |> list.filter_map((pair) => {
-    let items = value.as_array(pair) ?? []
-    match (list.get(items, 0), list.get(items, 1)) {
-      (some(k), some(v)) => some({key: value.as_string(k) ?? "", val: value.as_string(v) ?? ""}),
-      _ => none,
-    }
-  })
+fn endpoint(h: ProxyHandle) -> String = porta_sandbox.proxy_endpoint(h)
 
-effect fn stop(h: ProxyHandle) -> Result[Unit, String] = {
-  let rc = wasm_rt.wt_proxy_stop(h.handle)
-  if rc == 0 then ok(())
-  else err("proxy stop failed (handle=${int.to_string(h.handle)})")
-}
-
-// Endpoint string the sandboxed process should see as HTTP_PROXY / HTTPS_PROXY,
-// credential included: a client that honours the variable presents it.
-fn endpoint(h: ProxyHandle) -> String = "http://porta:${h.token}@127.0.0.1:${int.to_string(h.port)}"
-
-// sandbox-exec allow rule that restricts net to just the proxy port.
-fn sandbox_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"
+fn sandbox_net_rule(h: ProxyHandle) -> String = porta_sandbox.proxy_net_rule(h)
 
 // --credential NAME=HOST[,HOST...]: the host variable NAME, handed in as a
 // placeholder and put on for requests to these hosts (`host[:443][/path]`).

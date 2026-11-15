@@ -1,0 +1,305 @@
+import env
+import json
+import value
+
+// The native sandbox: one request document in, one reply out. The request is
+// the command, its arguments and its whole policy (`cmd`, `args`, `dirs`,
+// `net`, `env`, `cwd`, `read_policy`, `no_net`, `preset`, `timeout`, …; see
+// `SandboxRequest` in native/sandbox_exec.rs). A field the host cannot
+// enforce refuses the run; nothing is narrowed silently.
+
+// Runs the command with the caller's stdio and waits. `{"exit_code":N}`, or
+// `{"error":"…"}` when the run was refused before it began.
+@extern(rust, "sandbox_exec", "wt_exec_supervised")
+fn supervised(request_json: String) -> String
+
+// Runs the command and collects what it wrote:
+// `{"stdout":"…","stderr":"…","exit_code":N}` or `{"error":"…"}`.
+@extern(rust, "sandbox_exec", "wt_exec_sandboxed")
+fn captured(request_json: String) -> String
+
+// Becomes the command: returns only the reason it could not.
+@extern(rust, "sandbox_exec", "wt_exec_replace")
+fn replace(request_json: String) -> String
+
+// Applies the request to this process and becomes the command. It is what the
+// traced copy `why` starts on Linux runs; the host gives it a hidden entry.
+@extern(rust, "sandbox_exec", "wt_exec_inner")
+fn in_place(request_json: String) -> String
+
+// The policy a request would apply, in words, without applying it.
+@extern(rust, "sandbox_exec", "wt_sandbox_explain")
+fn explain(request_json: String) -> String
+
+// The same policy as one JSON object.
+@extern(rust, "sandbox_exec", "wt_sandbox_explain_json")
+fn explain_json(request_json: String) -> String
+
+// What this host can enforce, and what will be refused here.
+@extern(rust, "sandbox_check", "wt_sandbox_check")
+fn check() -> String
+
+@extern(rust, "sandbox_check", "wt_sandbox_check_json")
+fn check_json() -> String
+
+// What changed since a snapshot run (the latest when id is ""), and with
+// apply, each mount put back.
+@extern(rust, "snapshot", "wt_rollback")
+fn rollback(id: String, apply: Bool) -> String
+
+// The loopback proxy a run's egress is confined to. Returns its address and
+// handle as JSON; `credentials_json` binds placeholders to hosts.
+@extern(rust, "http_proxy", "wt_proxy_start")
+fn proxy_start(allow_json: String, deny_json: String, audit_path: String, credentials_json: String) -> String
+
+@extern(rust, "http_proxy", "wt_proxy_stop")
+fn proxy_stop(handle: Int) -> Int
+
+@extern(rust, "proxy_egress", "wt_is_host_allowed")
+fn is_host_allowed(url: String, allowed_json: String) -> Bool
+
+// The macOS profile text for a set of mounts and destinations, for a caller
+// that shows it; the entry points above build their own.
+@extern(rust, "sandbox_profile", "wt_sandbox_profile")
+fn profile(dirs_json: String, net_json: String, read_policy: String) -> String
+
+// --- The request, typed ---
+
+type EnvVar = { key: String, val: String }
+
+// One sandboxed execution request. The native side reads exactly these fields,
+// so the command and its whole policy travel together instead of as positional
+// strings a caller could transpose.
+type Request = {
+  cmd: String,
+  args: List[String],
+  dirs: List[String],
+  net: List[String],
+  env: List[EnvVar],
+  cwd: String,
+  read_policy: String,
+  // Whether the loopback endpoint in `net` is this run's only permitted
+  // egress. The native side cannot infer it from `net`, and it decides
+  // whether the channels a TCP rule cannot reach are closed too.
+  proxy: Bool,
+  // Whether the caller said running as root is what they meant. The run is
+  // refused otherwise: for root, the file permissions this policy leans on
+  // separate nothing.
+  allow_root: Bool,
+  // TCP ports the command may listen on once `net` closes the network.
+  bind: List[String],
+  // No network at all. The native side refuses it beside any grant.
+  no_net: Bool,
+  // Say afterwards what the sandbox refused (strace on Linux).
+  why: Bool,
+  // Copy the writable mounts first, for a rollback.
+  snapshot: Bool,
+  // The preset this run starts from and what the caller adds to it: reads
+  // denied, names protected inside mounts, sockets refused.
+  preset: String,
+  deny_read: List[String],
+  protect: List[String],
+  deny_unix: List[String],
+  // Unix sockets the command may connect to although they hold a credential
+  // agent.
+  unix: List[String],
+  // Seconds before the command and everything it started are killed. 0 means
+  // no limit.
+  timeout: Int,
+  // Per-process ceilings, set with setrlimit before exec: CPU seconds,
+  // processes of this user, file size in MiB. 0 leaves one unset.
+  max_cpu: Int,
+  max_procs: Int,
+  max_file_size: Int,
+  // Resident memory in MiB for the whole run (cgroup v2, Linux). 0 = unset.
+  max_memory_mb: Int,
+}
+
+// A request that grants nothing: no mount, no network, no variable, strict
+// reads, the default preset. A caller spreads it and names what it gives.
+fn closed(cmd: String, args: List[String]) -> Request = {
+  cmd: cmd, args: args, dirs: [], net: [], env: [], cwd: ".", read_policy: "strict",
+  proxy: false, allow_root: false, bind: [], no_net: true, why: false, snapshot: false,
+  preset: "default", deny_read: [], protect: [], deny_unix: [], unix: [],
+  timeout: 0, max_cpu: 0, max_procs: 0, max_file_size: 0, max_memory_mb: 0,
+}
+
+local fn strings(items: List[String]) -> Value = value.array(items |> list.map(value.string))
+
+fn request_json(req: Request) -> String =
+  json.stringify(value.object([
+    ("cmd", value.string(req.cmd)),
+    ("args", strings(req.args)),
+    ("dirs", strings(req.dirs)),
+    ("net", strings(req.net)),
+    ("env", value.array(req.env |> list.map((e) => value.array([value.string(e.key), value.string(e.val)])))),
+    ("cwd", value.string(req.cwd)),
+    ("read_policy", value.string(req.read_policy)),
+    ("proxy", value.bool(req.proxy)),
+    ("allow_root", value.bool(req.allow_root)),
+    ("bind", strings(req.bind)),
+    ("no_net", value.bool(req.no_net)),
+    ("why", value.bool(req.why)),
+    ("snapshot", value.bool(req.snapshot)),
+    ("preset", value.string(req.preset)),
+    ("deny_read", strings(req.deny_read)),
+    ("protect", strings(req.protect)),
+    ("deny_unix", strings(req.deny_unix)),
+    ("unix", strings(req.unix)),
+    ("timeout", value.int(req.timeout)),
+    ("max_cpu", value.int(req.max_cpu)),
+    ("max_procs", value.int(req.max_procs)),
+    ("max_file_size", value.int(req.max_file_size)),
+    ("max_memory_mb", value.int(req.max_memory_mb)),
+  ]))
+
+// A mount without its read-only marker: one ":ro", at the end. Removing every
+// ":ro" turned a directory named "a:rob" into "ab", which does not exist.
+fn read_only_stripped(dir: String) -> String =
+  if string.ends_with(dir, ":ro") then string.drop_end(dir, 3) else dir
+
+// The working directory a run starts in: the first granted mount, without the
+// read-only marker, or the current directory when nothing was granted.
+fn first_mount(dirs: List[String]) -> String =
+  read_only_stripped(list.get(dirs, 0) ?? ".")
+
+// What a supervised run reported: the command's exit code, or the reason the
+// run was refused before it began.
+fn supervised_exit(reply_json: String) -> Result[Int, String] = {
+  let reply = json.parse(reply_json)!
+  let error = value.get_string(reply, "error") ?? ""
+  if error != "" then err(error)
+  else ok(value.get_int(reply, "exit_code") ?? 1)
+}
+
+// --- The proxy, typed ---
+
+// A credential handed in as a placeholder: the name the command sees it
+// under, the host variable its real value is read from, and the hosts it may
+// be put on for (`host[:443][/path]`). The command never holds the value; the
+// proxy puts it on requests to those hosts and refuses the placeholder
+// anywhere else it opens.
+type Credential = {
+  name: String,
+  from_env: String,
+  hosts: List[String],
+}
+
+type ProxyConfig = {
+  allow: List[String],
+  deny: List[String],
+  audit_path: String,
+  credentials: List[Credential],
+}
+
+type ProxyHandle = {
+  handle: Int,
+  port: Int,
+  // This run's proxy credential. The proxy is on loopback, which every
+  // process of the same user can reach; only a client presenting the token
+  // is served, so the proxy is not an open relay carrying this run's policy.
+  token: String,
+  // What the command's environment gains with credentials: each placeholder
+  // under its credential's name, and the variables that make TLS clients
+  // trust the run's CA. Empty without credentials.
+  env: List[EnvVar],
+}
+
+fn no_proxy() -> ProxyConfig = { allow: [], deny: [], audit_path: "", credentials: [] }
+
+// A credential needs the proxy even with no list: it is where the real value
+// is put on.
+fn proxy_enabled(c: ProxyConfig) -> Bool =
+  list.len(c.allow) > 0 or list.len(c.deny) > 0 or list.len(c.credentials) > 0
+
+// An allow list and a deny list together say two things about one host.
+fn proxy_valid(c: ProxyConfig) -> Result[Unit, String] =
+  if list.len(c.allow) > 0 and list.len(c.deny) > 0 then
+    err("--proxy-allow and --proxy-deny are mutually exclusive")
+  else ok(())
+
+// The credentials as the proxy takes them, each with its real value read from
+// this process's own environment now. A variable the host does not have is an
+// error here, before anything runs, rather than a key handed in empty.
+effect fn credential_values(credentials: List[Credential]) -> Result[List[Value], String] = {
+  var out: List[Value] = []
+  var missing = ""
+  for c in credentials {
+    let found = env.get(c.from_env) ?? ""
+    if found == "" and missing == "" then missing = "credential ${c.name}: ${c.from_env} is not set in the host's environment, so there is nothing to hand in"
+    out = out + [value.object([("name", value.string(c.name)), ("value", value.string(found)),
+      ("hosts", value.array(c.hosts |> list.map(value.string)))])]
+  }
+  if missing != "" then err(missing) else ok(out)
+}
+
+local fn env_pairs(parsed: Value) -> List[EnvVar] =
+  (value.get_array(parsed, "env") ?? []) |> list.filter_map((pair) => {
+    let items = value.as_array(pair) ?? []
+    match (list.get(items, 0), list.get(items, 1)) {
+      (some(k), some(v)) => some({key: value.as_string(k) ?? "", val: value.as_string(v) ?? ""}),
+      _ => none,
+    }
+  })
+
+effect fn proxy_open(c: ProxyConfig) -> Result[ProxyHandle, String] = {
+  proxy_valid(c)!
+  let allow_json = json.stringify(value.array(c.allow |> list.map(value.string)))
+  let deny_json = json.stringify(value.array(c.deny |> list.map(value.string)))
+  let credentials_json = json.stringify(value.array(credential_values(c.credentials)!))
+  let parsed = json.parse(proxy_start(allow_json, deny_json, c.audit_path, credentials_json))!
+  let error = value.get_string(parsed, "error") ?? ""
+  if error != "" then err(error)
+  else {
+    let handle = value.get_int(parsed, "handle") ?? -1
+    let port = value.get_int(parsed, "port") ?? 0
+    let token = value.get_string(parsed, "token") ?? ""
+    if handle < 0 or port == 0 or token == "" then err("proxy start returned invalid handle, port or token")
+    else ok({handle: handle, port: port, token: token, env: env_pairs(parsed)})
+  }
+}
+
+effect fn proxy_close(h: ProxyHandle) -> Result[Unit, String] =
+  if proxy_stop(h.handle) == 0 then ok(())
+  else err("proxy stop failed (handle=${int.to_string(h.handle)})")
+
+// What the command sees as HTTP_PROXY / HTTPS_PROXY, the run's credential
+// included: a client that honours the variable presents it.
+fn proxy_endpoint(h: ProxyHandle) -> String = "http://porta:${h.token}@127.0.0.1:${int.to_string(h.port)}"
+
+// The one destination a proxied run may reach: the proxy's own port.
+fn proxy_net_rule(h: ProxyHandle) -> String = "127.0.0.1:${int.to_string(h.port)}"
+
+// The variables that send a well-behaved client through the proxy. A raw
+// socket that ignores them is stopped by the run's network rule.
+fn proxy_env(h: ProxyHandle) -> List[EnvVar] = {
+  let endpoint = proxy_endpoint(h)
+  // Node's fetch ignores the proxy variables unless told to honour them.
+  [
+    {key: "HTTP_PROXY", val: endpoint},
+    {key: "HTTPS_PROXY", val: endpoint},
+    {key: "http_proxy", val: endpoint},
+    {key: "https_proxy", val: endpoint},
+    {key: "NODE_USE_ENV_PROXY", val: "1"},
+  ] + h.env
+}
+
+// --- A whole run ---
+
+// Runs the command with this process's stdio, waits, and returns its exit
+// code. With a proxy configured the proxy is the run's only egress: whatever
+// `net` the request names is replaced by the proxy's port, the proxy's
+// variables are added to its environment, and the proxy is stopped after.
+// `label` is the host's name for the one line that says where the proxy
+// listens; a host whose stderr is the command's own passes "" and gets none.
+effect fn run(request: Request, proxy: ProxyConfig, label: String) -> Result[Int, String] = {
+  if not proxy_enabled(proxy) then supervised_exit(supervised(request_json(request)))
+  else {
+    let h = proxy_open(proxy)!
+    if label != "" then eprintln("[${label}] proxy listening on 127.0.0.1:${int.to_string(h.port)}") else ()
+    let proxied = {...request, net: [proxy_net_rule(h)], env: request.env + proxy_env(h), proxy: true}
+    let reply = supervised(request_json(proxied))
+    proxy_close(h)!
+    supervised_exit(reply)
+  }
+}

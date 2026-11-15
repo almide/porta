@@ -92,7 +92,7 @@ Everything before `--` is porta's; everything after is the command's.
 | **Resources** | `--timeout`, `--max-cpu`, `--max-procs`, `--max-file-size`, `--max-memory-mb` | same (memory through cgroup v2) |
 | **Environment** | starts empty; `PATH`, `HOME`, locale and terminal cross, the rest only by `-e` / `--env-pass` | same |
 
-What is closed is a preset — [`native/presets/default.toml`](native/presets/default.toml),
+What is closed is a preset — [`sandbox/native/presets/default.toml`](sandbox/native/presets/default.toml),
 shown by `porta explain` — not a list in code: `--deny-read`, `--protect` and
 `--deny-unix` add to it, `--preset <file>` replaces it. The full table, with
 the reasons, is in [enforcement](docs/enforcement.md).

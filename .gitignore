@@ -8,3 +8,6 @@ porta
 .tools/
 __pycache__/
 .references/
+# A path dependency pins nothing; the entry the compiler writes for one names
+# this repository's own HEAD and is stale after every commit.
+almide.lock

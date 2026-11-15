@@ -9,7 +9,7 @@ in the unified log:
     kernel (Sandbox) Sandbox: echo(35707) deny(1) file-read-data /
 
 This probe drives that loop. The set it checks is read out of
-`native/sandbox_profile.rs`, not repeated here, so the probe cannot drift from
+`sandbox/native/sandbox_profile.rs`, not repeated here, so the probe cannot drift from
 what porta actually applies.
 
     python3 scripts/probes/macos_read_set.py verify     # does the shipped set work?
@@ -29,7 +29,7 @@ import sys
 import tempfile
 import time
 
-SOURCE = pathlib.Path(__file__).resolve().parents[2] / 'native' / 'sandbox_profile.rs'
+SOURCE = pathlib.Path(__file__).resolve().parents[2] / 'sandbox' / 'native' / 'sandbox_profile.rs'
 
 # A sample wide enough that the platform paths a command needs to start are
 # actually exercised: a shell, an interpreter, a TLS client, an archiver.
