@@ -9,7 +9,11 @@ clock functions. File writes remain separately granted tool operations.
 
 ## Build and run
 
-With a Rust toolchain containing `wasm32-wasip1`:
+With a Rust toolchain containing `wasm32-wasip1`, 1.99.1 or older: from Rust
+1.100.0 the module imports `clock_time_get` — not for anything it computes,
+but because registering a thread-local key in wasi-libc takes a lock whose
+timed wait reads the clock — and porta refuses to load it, since the manifest
+grants no clock. `porta validate` shows what a build imports.
 
 ```bash
 cargo test --locked --manifest-path examples/compute/Cargo.toml --target-dir target/compute

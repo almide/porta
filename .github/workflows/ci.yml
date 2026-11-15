@@ -19,9 +19,11 @@ jobs:
           python-version: "3.12"
       - name: Job HTTP harness tests
         run: python3 -m unittest discover -s scripts -p 'test_job_server_checks.py'
-      # Pinned: with Rust 1.100.0 the standard library on wasm32-wasip1 imports
-      # clock_time_get, so examples/compute — which is granted no clock, on
-      # purpose — is refused at load. 1.99.1 is the last release without it.
+      # Pinned: from Rust 1.100.0 a wasm32-wasip1 guest that registers a
+      # thread-local key imports clock_time_get (wasi-libc's pthread_key_create
+      # takes a lock whose timed wait reads the clock). examples/compute does,
+      # through rhai's once_cell, and is granted no clock on purpose, so it is
+      # refused at load. 1.99.1 is the last release without the import.
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-wasip1
@@ -182,6 +184,13 @@ jobs:
           cargo test --locked --manifest-path examples/compute/Cargo.toml --target-dir target/compute
           cargo build --locked --manifest-path examples/compute/Cargo.toml --target wasm32-wasip1 --release --target-dir target/compute
           cp target/compute/wasm32-wasip1/release/porta-compute.wasm examples/compute/compute.wasm
+      # What a guest imports is decided by its toolchain as much as by its
+      # source. Said here, one step after the build, rather than twenty minutes
+      # later as a capability denied inside an MCP session.
+      - name: The compute guest imports nothing its manifest does not grant
+        run: |
+          target/porta validate examples/compute/compute.wasm --manifest examples/compute/compute.manifest.json | tee "$RUNNER_TEMP/compute-imports.txt"
+          grep -q "Result: PASS" "$RUNNER_TEMP/compute-imports.txt"
       - name: WASM computation and exact JSON transport
         run: python3 scripts/compute_integration.py target/porta examples/chat-agent/agent.wasm examples/compute/compute.wasm examples/demo-agent/agent.wasm
       - name: WASM agents and teams
