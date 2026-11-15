@@ -29,7 +29,7 @@ if it breaks one of them. The short version:
   multicast addresses, and records every decision before acting on it.
 - The child's environment holds nothing of the caller's shell beyond `PATH`,
   `HOME`, the locale and the terminal unless `-e` or `--env-pass` named it.
-- What the preset (`native/presets/default.toml`, shown by `porta explain`)
+- What the preset (`sandbox/native/presets/default.toml`, shown by `porta explain`)
   closes stays closed: credential stores to reads in every mode, the credential
   agents' sockets to `connect`, and inside a writable mount the repository hooks
   and config and the trusted files at the root, which cannot be written or

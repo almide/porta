@@ -92,7 +92,7 @@ porta run ./installer -v ./sandbox --allow-net '*:443' --timeout 120 --max-procs
 | **環境変数** | 空から始まる。`PATH`、`HOME`、ロケール、端末だけが渡り、他は `-e` / `--env-pass` で指定したものだけ | 同じ |
 
 何を閉じるかはコードに書いたリストではなくプリセット —
-[`native/presets/default.toml`](native/presets/default.toml)、`porta explain` で表示 —
+[`sandbox/native/presets/default.toml`](sandbox/native/presets/default.toml)、`porta explain` で表示 —
 で、`--deny-read`、`--protect`、`--deny-unix` で足し、`--preset <file>` で置き換える。
 理由つきの全体表は [enforcement](docs/enforcement.md) に。
 

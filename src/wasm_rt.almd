@@ -4,6 +4,7 @@ import value
 import process
 import json
 import env
+import porta_sandbox
 
 // --- Wasmtime (must stay in Rust) ---
 
@@ -54,23 +55,19 @@ fn wt_inspect(wasm_path: String) -> String
 
 // The command, its arguments and its whole policy travel as one request
 // document; see dispatch.exec_request_json for the shape.
-@extern(rs, "wasmtime_bridge", "wt_exec_replace")
-fn wt_exec_replace(request_json: String) -> String
+fn wt_exec_replace(request_json: String) -> String = porta_sandbox.replace(request_json)
 
 // Runs the command with porta's own stdio and waits. Returns
 // {"exit_code":N}, or {"error":"…"} when the run was refused before it began.
-@extern(rs, "wasmtime_bridge", "wt_exec_supervised")
-fn wt_exec_supervised(request_json: String) -> String
+fn wt_exec_supervised(request_json: String) -> String = porta_sandbox.supervised(request_json)
 
 // The copy of porta `--why` starts under strace on Linux: applies the
 // request to itself and becomes the command; returns only why it could not.
-@extern(rs, "wasmtime_bridge", "wt_exec_inner")
-fn wt_exec_inner(request_json: String) -> String
+fn wt_exec_inner(request_json: String) -> String = porta_sandbox.in_place(request_json)
 
 // What changed since a --snapshot run (the latest when id is ""), and with
 // apply, each mount put back.
-@extern(rs, "wasmtime_bridge", "wt_rollback")
-fn wt_rollback(id: String, apply: Bool) -> String
+fn wt_rollback(id: String, apply: Bool) -> String = porta_sandbox.rollback(id, apply)
 
 // sudo porta setup: a root-owned copy at /usr/local/bin/porta and the AppArmor
 // profile that gives it user namespaces. mode is "", "dry-run" or "undo".
@@ -85,26 +82,20 @@ fn wt_recipe(name: String) -> String
 fn wt_recipe_names() -> String
 
 // The policy a request would apply, in words, without applying it.
-@extern(rs, "wasmtime_bridge", "wt_sandbox_explain")
-fn wt_sandbox_explain(request_json: String) -> String
+fn wt_sandbox_explain(request_json: String) -> String = porta_sandbox.explain(request_json)
 
 // The same policy as one JSON object, for tooling and CI.
-@extern(rs, "wasmtime_bridge", "wt_sandbox_explain_json")
-fn wt_sandbox_explain_json(request_json: String) -> String
+fn wt_sandbox_explain_json(request_json: String) -> String = porta_sandbox.explain_json(request_json)
 
 // What this host can enforce, and what porta will refuse here.
-@extern(rs, "wasmtime_bridge", "wt_sandbox_check")
-fn wt_sandbox_check() -> String
+fn wt_sandbox_check() -> String = porta_sandbox.check()
 
 // The same host report as one JSON object.
-@extern(rs, "wasmtime_bridge", "wt_sandbox_check_json")
-fn wt_sandbox_check_json() -> String
+fn wt_sandbox_check_json() -> String = porta_sandbox.check_json()
 
-@extern(rs, "wasmtime_bridge", "wt_proxy_start")
-fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String, credentials_json: String) -> String
+fn wt_proxy_start(allow_json: String, deny_json: String, audit_path: String, credentials_json: String) -> String = porta_sandbox.proxy_start(allow_json, deny_json, audit_path, credentials_json)
 
-@extern(rs, "wasmtime_bridge", "wt_proxy_stop")
-fn wt_proxy_stop(handle: Int) -> Int
+fn wt_proxy_stop(handle: Int) -> Int = porta_sandbox.proxy_stop(handle)
 
 // HTTP transport shares URL parsing with policy checks and never follows redirects.
 @extern(rs, "wasmtime_bridge", "wt_http_request")
@@ -113,20 +104,17 @@ fn native_http_request(method: String, url: String, headers_json: String, body: 
 effect fn wt_http_request(method: String, url: String, headers_json: String, body: String) -> Result[String, String] =
   ok(native_http_request(method, url, headers_json, body))
 
-@extern(rs, "wasmtime_bridge", "wt_is_host_allowed")
-fn wt_is_host_allowed(url: String, allowed_json: String) -> Bool
+fn wt_is_host_allowed(url: String, allowed_json: String) -> Bool = porta_sandbox.is_host_allowed(url, allowed_json)
 
 // --- Sandboxed exec (pure Almide) ---
 
-@extern(rs, "wasmtime_bridge", "wt_exec_sandboxed")
-fn native_exec_sandboxed(request_json: String) -> String
+fn native_exec_sandboxed(request_json: String) -> String = porta_sandbox.captured(request_json)
 
 effect fn wt_exec_sandboxed(request_json: String) -> Result[String, String] =
   ok(native_exec_sandboxed(request_json))
 
 // Keep MCP and native execution on the same policy implementation.
-@extern(rs, "wasmtime_bridge", "wt_sandbox_profile")
-fn native_sandbox_profile(dirs_json: String, net_json: String, read_policy: String) -> String
+fn native_sandbox_profile(dirs_json: String, net_json: String, read_policy: String) -> String = porta_sandbox.profile(dirs_json, net_json, read_policy)
 
 fn build_sandbox_profile(allowed_dirs: List[String], allowed_net: List[String], read_policy: String) -> String =
   native_sandbox_profile(

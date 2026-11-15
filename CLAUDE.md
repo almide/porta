@@ -8,10 +8,23 @@ A module is read through the engine that will run it — `wasm_rt.wt_inspect`,
 which is wasmtime. porta has no WASM parser of its own; `src/wasm_imports.almd`
 holds only the import shape the capability check matches against.
 
-`native/` is the host side. The Almide `@extern(rs, "<module>", …)` declarations
+`sandbox/` is the native sandbox as an Almide package, `porta_sandbox`: what
+confines a host command to its grants, the proxy and the credential broker.
+porta depends on it by path and reaches it through `sandbox/src/mod.almd`;
+another host (nautra) builds the same package in as a git dependency with
+`subdir = "sandbox"`. Its modules are compiled into the one crate beside
+`native/`, so `crate::` paths cross between the two and a module name must be
+unique across both directories. Nothing in `sandbox/` may use a module of
+`native/`: the package has to build without porta.
+
+`native/` is the rest of the host side. The Almide `@extern(rs, "<module>", …)` declarations
 resolve against `wasmtime_bridge` and `agent_runtime`, so those two files are
 the FFI surface and re-export the rest; a `pub use` satisfies the binding just
 as a definition does.
+
+In the table, the modules from `policy_preset.rs` to `snapshot.rs`, the proxy
+and broker rows and `json_text.rs`, `locking.rs` are in `sandbox/native/`; the
+others are in `native/`.
 
 | Module | Owns |
 |---|---|

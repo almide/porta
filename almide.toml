@@ -8,6 +8,12 @@ allow = ["FS.read", "FS.write", "IO", "Env", "Time", "Net", "Abort", "Proc", "Fa
 # but `porta`) and `kill` (process.kill in wasm_rt.wt_kill). Tool commands from MCP clients run
 # in the native sandbox (wt_exec_sandboxed), outside the process family.
 proc = ["sh", "kill"]
+# The native sandbox is a package in this repository (sandbox/), so that another
+# host can build it in; its native code is porta's own.
+native = ["porta_sandbox"]
+
+[dependencies]
+porta_sandbox = { path = "sandbox" }
 
 [native-deps]
 wasmtime = "47.0.3"
@@ -18,12 +24,4 @@ sha2 = "0.10"
 jsonschema = { version = "=0.56.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 libc = "0.2"
-regex = "1"
-
 toml = "0.8"
-# The credential broker (#37): TLS terminated for bound hosts with a CA made
-# per run, and re-opened to the real server. ring, the provider reqwest's
-# rustls already builds, so no second crypto library and no OpenSSL.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem"] }
-webpki-roots = "1"

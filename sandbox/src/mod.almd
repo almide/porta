@@ -1,0 +1,60 @@
+// The native sandbox: one request document in, one reply out. The request is
+// the command, its arguments and its whole policy (`cmd`, `args`, `dirs`,
+// `net`, `env`, `cwd`, `read_policy`, `no_net`, `preset`, `timeout`, …; see
+// `SandboxRequest` in native/sandbox_exec.rs). A field the host cannot
+// enforce refuses the run; nothing is narrowed silently.
+
+// Runs the command with the caller's stdio and waits. `{"exit_code":N}`, or
+// `{"error":"…"}` when the run was refused before it began.
+@extern(rust, "sandbox_exec", "wt_exec_supervised")
+fn supervised(request_json: String) -> String
+
+// Runs the command and collects what it wrote:
+// `{"stdout":"…","stderr":"…","exit_code":N}` or `{"error":"…"}`.
+@extern(rust, "sandbox_exec", "wt_exec_sandboxed")
+fn captured(request_json: String) -> String
+
+// Becomes the command: returns only the reason it could not.
+@extern(rust, "sandbox_exec", "wt_exec_replace")
+fn replace(request_json: String) -> String
+
+// Applies the request to this process and becomes the command. It is what the
+// traced copy `why` starts on Linux runs; the host gives it a hidden entry.
+@extern(rust, "sandbox_exec", "wt_exec_inner")
+fn in_place(request_json: String) -> String
+
+// The policy a request would apply, in words, without applying it.
+@extern(rust, "sandbox_exec", "wt_sandbox_explain")
+fn explain(request_json: String) -> String
+
+// The same policy as one JSON object.
+@extern(rust, "sandbox_exec", "wt_sandbox_explain_json")
+fn explain_json(request_json: String) -> String
+
+// What this host can enforce, and what will be refused here.
+@extern(rust, "sandbox_check", "wt_sandbox_check")
+fn check() -> String
+
+@extern(rust, "sandbox_check", "wt_sandbox_check_json")
+fn check_json() -> String
+
+// What changed since a snapshot run (the latest when id is ""), and with
+// apply, each mount put back.
+@extern(rust, "snapshot", "wt_rollback")
+fn rollback(id: String, apply: Bool) -> String
+
+// The loopback proxy a run's egress is confined to. Returns its address and
+// handle as JSON; `credentials_json` binds placeholders to hosts.
+@extern(rust, "http_proxy", "wt_proxy_start")
+fn proxy_start(allow_json: String, deny_json: String, audit_path: String, credentials_json: String) -> String
+
+@extern(rust, "http_proxy", "wt_proxy_stop")
+fn proxy_stop(handle: Int) -> Int
+
+@extern(rust, "proxy_egress", "wt_is_host_allowed")
+fn is_host_allowed(url: String, allowed_json: String) -> Bool
+
+// The macOS profile text for a set of mounts and destinations, for a caller
+// that shows it; the entry points above build their own.
+@extern(rust, "sandbox_profile", "wt_sandbox_profile")
+fn profile(dirs_json: String, net_json: String, read_policy: String) -> String

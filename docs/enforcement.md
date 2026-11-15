@@ -41,7 +41,7 @@ does not show you where.
 | **Network by host** | `--proxy-allow` only, never `--allow-net` | same |
 | **Proxy mode** | enforced by the profile | enforced by Landlock (the TCP port) plus seccomp (everything else) |
 
-What the table calls the preset is data, not code: `native/presets/default.toml`,
+What the table calls the preset is data, not code: `sandbox/native/presets/default.toml`,
 built into the binary. It lists the paths closed to reads, the names protected
 inside every writable mount and the Unix sockets refused, and `porta explain`
 prints what a run resolved it to. `--deny-read`, `--protect` and `--deny-unix`
